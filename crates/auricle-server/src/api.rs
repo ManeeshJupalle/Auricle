@@ -33,7 +33,13 @@ pub fn build_router(engine: Arc<Engine>, token: Option<String>) -> Router {
         .route("/api/v1/devices", get(devices))
         .route("/api/v1/providers", get(providers))
         .route("/api/v1/sessions", post(start_session).get(list_sessions))
-        .route("/api/v1/sessions/{id}", get(get_session))
+        .route(
+            "/api/v1/sessions/{id}",
+            get(get_session)
+                .patch(rename_session)
+                .delete(delete_session),
+        )
+        .route("/api/v1/sessions/{id}/audio/{channel}", get(session_audio))
         .route("/api/v1/sessions/{id}/stop", post(stop_session))
         .route("/api/v1/sessions/{id}/export", get(export_session))
         .route("/api/v1/sessions/{id}/summarize", post(summarize_session))
@@ -175,6 +181,9 @@ async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
         if let Some(m) = settings.get("ollama_model").and_then(|v| v.as_str()) {
             cfg.llm.ollama.model = m.to_string();
         }
+        if let Some(p) = settings.get("llm_provider").and_then(|v| v.as_str()) {
+            cfg.llm.provider = p.to_string();
+        }
     }
     let cfg = &cfg;
     let data_root = crate::default_data_root().unwrap_or_default();
@@ -223,10 +232,14 @@ async fn summarize_session(
 
     let store = state.engine.store();
     // Settings overlay (mirrors the STT model overlay): lets the UI point
-    // Ollama at a model the user actually has pulled.
+    // Ollama at a model the user actually has pulled, and pick the default
+    // LLM provider (also used for post-stop auto-titles).
     if let Ok(settings) = store.all_settings() {
         if let Some(m) = settings.get("ollama_model").and_then(|v| v.as_str()) {
             cfg.llm.ollama.model = m.to_string();
+        }
+        if let Some(p) = settings.get("llm_provider").and_then(|v| v.as_str()) {
+            cfg.llm.provider = p.to_string();
         }
     }
     let session = match store.get_session(&id) {
@@ -342,10 +355,113 @@ async fn stop_session(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
-async fn list_sessions(State(state): State<AppState>) -> Response {
-    match state.engine.store().list_sessions() {
+#[derive(serde::Deserialize)]
+struct ListQuery {
+    q: Option<String>,
+}
+
+async fn list_sessions(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Response {
+    match state.engine.store().list_sessions(q.q.as_deref()) {
         Ok(rows) => Json(json!({"sessions": rows})).into_response(),
         Err(e) => internal(e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameBody {
+    title: String,
+}
+
+async fn rename_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> Response {
+    let title = body.title.trim();
+    if title.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "title must not be empty"})),
+        )
+            .into_response();
+    }
+    let store = state.engine.store();
+    match store.rename_session(&id, title) {
+        Ok(true) => {
+            // A user-chosen name is permanent: clear the auto-title flag so
+            // the post-stop generator never overwrites it.
+            if let Ok(Some(session)) = store.get_session(&id) {
+                if session.meta["auto_title"] == serde_json::Value::Bool(true) {
+                    let mut meta = session.meta.clone();
+                    meta["auto_title"] = serde_json::json!(false);
+                    let _ = store.update_session_meta(&id, &meta);
+                }
+            }
+            Json(json!({"id": id, "title": title})).into_response()
+        }
+        Ok(false) => not_found(&id),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+async fn delete_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if state.engine.active_session().as_deref() == Some(id.as_str()) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "session is currently recording; stop it first"})),
+        )
+            .into_response();
+    }
+    // Retained audio (if any) lives outside the DB; remove it with the rows.
+    let audio_dir = crate::default_data_root()
+        .map(|r| r.join("sessions").join(&id))
+        .ok();
+    match state.engine.store().delete_session(&id) {
+        Ok(true) => {
+            if let Some(dir) = audio_dir {
+                let _ = std::fs::remove_dir_all(dir); // best-effort
+            }
+            Json(json!({"id": id, "deleted": true})).into_response()
+        }
+        Ok(false) => not_found(&id),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+/// Serve a retained per-channel WAV (`mic` | `loopback`). Sessions recorded
+/// without `retain_raw_audio` have no audio and return 404.
+// FUTURE: re-transcribe a stored session with a different provider from
+// these WAVs.
+async fn session_audio(
+    State(state): State<AppState>,
+    Path((id, channel)): Path<(String, String)>,
+) -> Response {
+    if channel != "mic" && channel != "loopback" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "channel must be \"mic\" or \"loopback\""})),
+        )
+            .into_response();
+    }
+    let session = match state.engine.store().get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return not_found(&id),
+        Err(e) => return internal(e.to_string()),
+    };
+    let Some(path) = session.meta["audio"][&channel].as_str() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no retained audio for this session/channel"})),
+        )
+            .into_response();
+    };
+    match tokio::fs::read(path).await {
+        Ok(bytes) => ([("content-type", "audio/wav")], bytes).into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "retained audio file is missing on disk"})),
+        )
+            .into_response(),
     }
 }
 

@@ -11,6 +11,8 @@ use auricle_server::{build_router, AudioSource, Engine, EngineOptions, StartPara
 use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------- fake provider: deterministic text per fed chunk ----------
 
@@ -87,8 +89,12 @@ fn temp_root(name: &str) -> std::path::PathBuf {
 }
 
 async fn spawn_server(name: &str) -> (String, Arc<Engine>) {
+    spawn_server_with(Config::default(), name).await
+}
+
+async fn spawn_server_with(cfg: Config, name: &str) -> (String, Arc<Engine>) {
     let engine = Engine::new(EngineOptions {
-        cfg: Config::default(),
+        cfg,
         data_root: temp_root(name),
         provider_override: Some(Arc::new(FakeProvider {
             chunks_seen: Arc::new(AtomicU64::new(0)),
@@ -104,7 +110,115 @@ async fn spawn_server(name: &str) -> (String, Arc<Engine>) {
     (format!("http://{addr}"), engine)
 }
 
-// ---------- the test ----------
+// ---------- the tests ----------
+
+#[tokio::test]
+async fn session_gets_auto_titled_after_stop() {
+    // Mock LLM plays "ollama" (the default [llm].provider).
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "c", "object": "chat.completion", "model": "m",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                "message": {"role": "assistant",
+                            "content": "\"Pipeline Latency Review.\"\n"}}]
+        })))
+        .mount(&llm)
+        .await;
+    let mut cfg = Config::default();
+    cfg.llm.ollama.base_url = llm.uri();
+
+    let (base, engine) = spawn_server_with(cfg, "autotitle").await;
+    let client = reqwest::Client::new();
+
+    // Watch for the session_updated event.
+    let ws_url = base.replace("http://", "ws://") + "/ws/live";
+    let (ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    let (_, mut ws_rx) = ws.split();
+    let titled: Arc<tokio::sync::Mutex<Option<(String, String)>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+    let titled_clone = titled.clone();
+    tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            if let tokio_tungstenite::tungstenite::Message::Text(t) = msg {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                if v["type"] == "session_updated" {
+                    *titled_clone.lock().await = Some((
+                        v["session"].as_str().unwrap().to_string(),
+                        v["title"].as_str().unwrap().to_string(),
+                    ));
+                }
+            }
+        }
+    });
+
+    // Start WITHOUT a title: placeholder + auto_title flag.
+    let id = engine
+        .start_session(StartParams {
+            title: None,
+            stt_provider: None,
+            mic_device: None,
+            loopback_device: None,
+            audio: Some(AudioSource::WavFile {
+                path: fixture_path(),
+                channel: ChannelId::Loopback,
+            }),
+        })
+        .await
+        .unwrap();
+    let detail: serde_json::Value = client
+        .get(format!("{base}/api/v1/sessions/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["title"], "Untitled session");
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    engine.stop_session(&id).unwrap();
+
+    // Wait for the auto-title (sanitized: quotes + trailing dot stripped).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some((session, title)) = titled.lock().await.clone() {
+            assert_eq!(session, id);
+            assert_eq!(title, "Pipeline Latency Review");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "no session_updated");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let detail: serde_json::Value = client
+        .get(format!("{base}/api/v1/sessions/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["title"], "Pipeline Latency Review");
+
+    // A user rename clears the flag, so future auto-titling never bites.
+    client
+        .patch(format!("{base}/api/v1/sessions/{id}"))
+        .json(&serde_json::json!({"title": "My name"}))
+        .send()
+        .await
+        .unwrap();
+    let detail: serde_json::Value = client
+        .get(format!("{base}/api/v1/sessions/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["title"], "My name");
+    assert_eq!(detail["meta"]["auto_title"], false);
+}
 
 #[tokio::test]
 async fn full_session_via_rest_and_ws() {

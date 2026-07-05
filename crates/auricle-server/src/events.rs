@@ -42,6 +42,12 @@ pub enum WsEvent {
     SessionStopped {
         session: String,
     },
+    /// Session metadata changed after the fact (currently: the auto-title
+    /// generated from the transcript once a session stops).
+    SessionUpdated {
+        session: String,
+        title: String,
+    },
     DeviceLost {
         session: String,
         channel: String,

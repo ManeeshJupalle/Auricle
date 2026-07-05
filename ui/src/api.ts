@@ -39,10 +39,25 @@ export const api = {
       body: JSON.stringify(body),
     }).then((r) => json<SummaryInfo & { session: string; provider: string }>(r)),
 
-  sessions: () =>
-    fetch('/api/v1/sessions')
+  sessions: (q?: string) =>
+    fetch(`/api/v1/sessions${q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`)
       .then((r) => json<{ sessions: SessionSummary[] }>(r))
       .then((b) => b.sessions),
+
+  renameSession: (id: string, title: string) =>
+    fetch(`/api/v1/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }).then((r) => json<{ id: string; title: string }>(r)),
+
+  deleteSession: (id: string) =>
+    fetch(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) =>
+      json<{ id: string; deleted: boolean }>(r),
+    ),
+
+  audioUrl: (id: string, channel: 'mic' | 'loopback') =>
+    `/api/v1/sessions/${encodeURIComponent(id)}/audio/${channel}`,
 
   session: (id: string) =>
     fetch(`/api/v1/sessions/${encodeURIComponent(id)}`).then((r) => json<SessionDetail>(r)),

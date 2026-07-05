@@ -12,6 +12,7 @@ mod events;
 mod export;
 mod lifecycle;
 mod store;
+mod title;
 mod ws;
 
 pub use api::{build_router, serve};

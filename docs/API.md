@@ -49,6 +49,13 @@ Start a recording session. Body fields (all optional): `title`,
 `stt_provider` (default: `[stt].provider` from config), `mic_device`,
 `loopback_device` (default: `[audio]` config; `"default"` = system default).
 
+**Auto-titling:** when `title` is omitted, the session starts as
+`"Untitled session"` and, once stopped, gets a 3–6 word title generated
+from its transcript (configured `[llm]` provider; falls back to the first
+words of the transcript when no LLM is reachable, so it works offline). A
+`session_updated` WS event announces the new title. Sessions renamed via
+PATCH are never auto-retitled (`meta.auto_title` is cleared).
+
 ```
 $ curl -i -X POST http://127.0.0.1:4820/api/v1/sessions \
     -H "Content-Type: application/json" \
@@ -86,6 +93,10 @@ returns to `idle`. Stopping a session that is not active returns `409`.
 
 ## GET /api/v1/sessions
 
+Optional `?q=` filters sessions whose **title or transcript text** contains
+the query (case-insensitive SQLite LIKE; `%`/`_` in the query are treated
+literally): `GET /api/v1/sessions?q=budget`.
+
 ```
 $ curl http://127.0.0.1:4820/api/v1/sessions
 {"sessions":[{"ended_at":1783233667,"id":"s19f31016d52","meta":{"audio":{"loopback":"C:\\Users\\manee\\AppData\\Local\\auricle\\sessions\\s19f31016d52\\loopback_16k.wav","mic":"C:\\Users\\manee\\AppData\\Local\\auricle\\sessions\\s19f31016d52\\mic_16k.wav"},"devices":{"loopback":"Speakers (Stealth 600P Gen 3)","mic":"Microphone (Stealth 600P Gen 3)"}},"started_at":1783233605,"stt_provider":"deepgram","title":"API walkthrough"}, …]}
@@ -108,6 +119,25 @@ $ curl http://127.0.0.1:4820/api/v1/sessions/s19f31016d52
 `channel`: 0 = mic ("You"), 1 = loopback ("Them"). `t_*_ms` are
 milliseconds from session start (gap-aware timeline; see the Phase 2
 report). Unknown ids return `404 {"error":"no session \"nope\""}`.
+
+## PATCH /api/v1/sessions/{id}
+
+Rename: body `{"title": "New name"}` → `200 {"id": …, "title": …}`.
+`400` empty title, `404` unknown id.
+
+## DELETE /api/v1/sessions/{id}
+
+Deletes the session row, transcript, summaries, and any retained audio
+files → `200 {"id": …, "deleted": true}`. `409` while that session is
+actively recording; `404` unknown id.
+
+## GET /api/v1/sessions/{id}/audio/{channel}
+
+Streams a retained per-channel 16 kHz WAV (`channel` = `mic` |
+`loopback`), content-type `audio/wav` (whole file — fine for in-browser
+playback/seeking at these sizes). Only exists for sessions recorded with
+`retain_raw_audio`; otherwise `404`. Same bearer middleware as every other
+route.
 
 ## GET /api/v1/sessions/{id}/export?format=md
 
@@ -175,7 +205,8 @@ config for *subsequent* session starts (request params still win):
 | `mic_device` | string | `[audio].mic_device` |
 | `loopback_device` | string | `[audio].loopback_device` |
 | `retain_raw_audio` | bool | `[audio].retain_raw_audio` |
-| `ollama_model` | string | `[llm.ollama].model` (summaries) |
+| `ollama_model` | string | `[llm.ollama].model` (summaries/titles) |
+| `llm_provider` | string | `[llm].provider` — default for summaries and post-stop auto-titles |
 
 Unrecognized keys are stored and returned but have no engine effect.
 
@@ -213,6 +244,7 @@ Event types:
 | `vu` | session, channel, rms | ~10 Hz per channel while capturing; rides the lossy lane (drives the UI meters) |
 | `session_started` | session, title, stt_provider | |
 | `session_stopped` | session | emitted after flush + persistence complete |
+| `session_updated` | session, title | post-stop auto-title landed (see POST /sessions) |
 | `device_lost` | session, channel, message | a capture device failed mid-session |
 | `error` | session, message | recoverable engine/provider errors |
 | `lag` | dropped_partials | sent to a slow consumer: partials were dropped for it (finals are never dropped) |

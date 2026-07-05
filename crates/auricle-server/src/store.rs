@@ -210,20 +210,81 @@ impl Store {
         Ok(())
     }
 
-    pub fn list_sessions(&self) -> Result<Vec<SessionRow>> {
+    /// List sessions, newest first. With `query`, only sessions whose title
+    /// OR transcript text contains it (case-insensitive SQLite LIKE).
+    pub fn list_sessions(&self, query: Option<&str>) -> Result<Vec<SessionRow>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, title, started_at, ended_at, stt_provider, meta
-                 FROM sessions ORDER BY started_at DESC",
+        let rows = match query.map(str::trim).filter(|q| !q.is_empty()) {
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, title, started_at, ended_at, stt_provider, meta
+                         FROM sessions ORDER BY started_at DESC",
+                    )
+                    .map_err(db_err)?;
+                let rows = stmt
+                    .query_map([], row_to_session)
+                    .map_err(db_err)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_err)?;
+                rows
+            }
+            Some(q) => {
+                let pattern = format!(
+                    "%{}%",
+                    q.replace('\\', "\\\\")
+                        .replace('%', "\\%")
+                        .replace('_', "\\_")
+                );
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, title, started_at, ended_at, stt_provider, meta
+                         FROM sessions
+                         WHERE title LIKE ?1 ESCAPE '\\'
+                            OR EXISTS (SELECT 1 FROM segments
+                                        WHERE segments.session_id = sessions.id
+                                          AND segments.text LIKE ?1 ESCAPE '\\')
+                         ORDER BY started_at DESC",
+                    )
+                    .map_err(db_err)?;
+                let rows = stmt
+                    .query_map([&pattern], row_to_session)
+                    .map_err(db_err)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_err)?;
+                rows
+            }
+        };
+        Ok(rows)
+    }
+
+    /// Rename a session. Returns false when the id does not exist.
+    pub fn rename_session(&self, id: &str, title: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "UPDATE sessions SET title = ?2 WHERE id = ?1",
+                rusqlite::params![id, title],
             )
             .map_err(db_err)?;
-        let rows = stmt
-            .query_map([], row_to_session)
-            .map_err(db_err)?
-            .collect::<std::result::Result<Vec<_>, _>>()
+        Ok(n > 0)
+    }
+
+    /// Delete a session and its segments/summaries. Returns false when the
+    /// id does not exist. (Retained audio files are the caller's job — the
+    /// store only owns database rows.)
+    pub fn delete_session(&self, id: &str) -> Result<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(db_err)?;
+        tx.execute("DELETE FROM segments WHERE session_id = ?1", [id])
             .map_err(db_err)?;
-        Ok(rows)
+        tx.execute("DELETE FROM summaries WHERE session_id = ?1", [id])
+            .map_err(db_err)?;
+        let n = tx
+            .execute("DELETE FROM sessions WHERE id = ?1", [id])
+            .map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
+        Ok(n > 0)
     }
 
     pub fn get_session(&self, id: &str) -> Result<Option<SessionRow>> {
@@ -378,7 +439,7 @@ mod tests {
         }
         // Second open must not re-run v1 (CREATE TABLE would fail).
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.list_sessions().unwrap().len(), 1);
+        assert_eq!(store.list_sessions(None).unwrap().len(), 1);
     }
 
     #[test]
@@ -456,6 +517,77 @@ mod tests {
         assert_eq!(s.meta["interrupted"], true);
         // Segments written before the crash are readable.
         assert_eq!(store.get_segments("dead").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_matches_title_and_transcript() {
+        let path = temp_db("search");
+        let store = Store::open(&path).unwrap();
+        store
+            .create_session("s1", "Weekly sync", 100, "deepgram", &serde_json::json!({}))
+            .unwrap();
+        store
+            .insert_segment("s1", ChannelId::Mic, "You", 0, 1000, "budget approved", "d")
+            .unwrap();
+        store
+            .create_session(
+                "s2",
+                "1:1 with Sam",
+                200,
+                "deepgram",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .insert_segment(
+                "s2",
+                ChannelId::Loopback,
+                "Them",
+                0,
+                1000,
+                "promotion cycle",
+                "d",
+            )
+            .unwrap();
+
+        // Title match, case-insensitive.
+        let hits = store.list_sessions(Some("weekly")).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "s1");
+        // Transcript-content match.
+        let hits = store.list_sessions(Some("promotion")).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "s2");
+        // No match; blank query = all, newest first.
+        assert!(store.list_sessions(Some("zzz")).unwrap().is_empty());
+        assert_eq!(store.list_sessions(Some("  ")).unwrap().len(), 2);
+        // LIKE wildcards in user input are literals, not wildcards.
+        assert!(store.list_sessions(Some("%")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rename_and_delete_sessions() {
+        let path = temp_db("rename-delete");
+        let store = Store::open(&path).unwrap();
+        store
+            .create_session("s1", "old name", 100, "deepgram", &serde_json::json!({}))
+            .unwrap();
+        store
+            .insert_segment("s1", ChannelId::Mic, "You", 0, 1000, "text", "d")
+            .unwrap();
+        store
+            .insert_summary("s1", "minutes", "m", "content", 1)
+            .unwrap();
+
+        assert!(store.rename_session("s1", "new name").unwrap());
+        assert_eq!(store.get_session("s1").unwrap().unwrap().title, "new name");
+        assert!(!store.rename_session("nope", "x").unwrap());
+
+        assert!(store.delete_session("s1").unwrap());
+        assert!(store.get_session("s1").unwrap().is_none());
+        assert!(store.get_segments("s1").unwrap().is_empty());
+        assert!(store.get_summaries("s1").unwrap().is_empty());
+        assert!(!store.delete_session("s1").unwrap());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { applyTheme, currentTheme, type Theme } from '../theme';
 import type { DeviceInfo, ProviderInfo, Settings as SettingsMap } from '../types';
 
 /**
@@ -42,9 +43,38 @@ export function Settings() {
   const mics = devices.filter((d) => d.kind === 'input');
   const loops = devices.filter((d) => d.kind === 'loopback');
 
+  const [theme, setTheme] = useState<Theme>(currentTheme());
+  const pickTheme = (t: Theme) => {
+    setTheme(t);
+    applyTheme(t);
+    save({ ui_theme: t });
+  };
+
   return (
     <div className="settings">
       {error && <div className="banner warn">{error}</div>}
+
+      <section className="panel">
+        <h2>Appearance</h2>
+        <label>
+          <span>Theme</span>
+          <div className="theme-toggle">
+            <button
+              className={`btn ${theme === 'dark' ? 'accent' : ''}`}
+              onClick={() => pickTheme('dark')}
+            >
+              Dark
+            </button>
+            <button
+              className={`btn ${theme === 'light' ? 'accent' : ''}`}
+              onClick={() => pickTheme('light')}
+            >
+              Light
+            </button>
+          </div>
+          {saved === 'ui_theme' && <span className="saved">saved</span>}
+        </label>
+      </section>
 
       <section className="panel">
         <h2>Audio devices</h2>
@@ -107,6 +137,18 @@ export function Settings() {
             <option value="small.en">small.en — more accurate; too slow for live on most laptops</option>
           </select>
           {saved === 'whisper_model' && <span className="saved">saved</span>}
+        </label>
+        <label>
+          <span>Summaries & titles LLM</span>
+          <select
+            value={str('llm_provider', 'ollama')}
+            onChange={(e) => save({ llm_provider: e.target.value })}
+          >
+            <option value="ollama">ollama — local, private</option>
+            <option value="groq">groq — cloud, fast</option>
+            <option value="openai-compat">openai-compat</option>
+          </select>
+          {saved === 'llm_provider' && <span className="saved">saved</span>}
         </label>
         <label>
           <span>Ollama model (summaries)</span>

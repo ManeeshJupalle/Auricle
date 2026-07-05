@@ -14,6 +14,7 @@ export type WsEvent =
   | { type: 'vu'; session: string; channel: string; rms: number }
   | { type: 'session_started'; session: string; title: string; stt_provider: string }
   | { type: 'session_stopped'; session: string }
+  | { type: 'session_updated'; session: string; title: string }
   | { type: 'device_lost'; session: string; channel: string; message: string }
   | { type: 'error'; session: string; message: string }
   | { type: 'lag'; dropped_partials: number };

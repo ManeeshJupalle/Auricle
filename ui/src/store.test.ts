@@ -140,6 +140,65 @@ describe('live vs session state', () => {
   });
 });
 
+describe('speaker-turn grouping', () => {
+  it('consecutive same-channel segments join one turn; channel change opens a new one', () => {
+    apply(finalEv('loopback', 0, 1000, 'first'));
+    apply(finalEv('loopback', 1500, 2500, 'second'));
+    apply(finalEv('mic', 3000, 3500, 'reply'));
+    apply(finalEv('loopback', 4000, 5000, 'back again'));
+    const s = useAuricle.getState();
+    expect(s.turnOrder).toHaveLength(3);
+    const t = s.turnOrder.map((id) => s.turns[id]);
+    expect(t[0].segIds).toHaveLength(2);
+    expect(t[0].speaker).toBe('Them');
+    expect(t[1].segIds).toHaveLength(1);
+    expect(t[1].speaker).toBe('You');
+    expect(t[2].segIds).toHaveLength(1);
+  });
+
+  it('a growing partial re-renders exactly one row: turn identities are untouched', () => {
+    apply(finalEv('loopback', 0, 1000, 'earlier'));
+    apply(partial('loopback', 1500, 2000, 'grow'));
+    const before = useAuricle.getState();
+    const beforeTurnOrder = before.turnOrder;
+    const beforeTurns = before.turns;
+    const partialId = before.partialRowByChannel['loopback']!;
+    const beforeOtherRow = before.rows[before.order[0]];
+
+    apply(partial('loopback', 1500, 3000, 'growing more'));
+
+    const after = useAuricle.getState();
+    // The turn layer the virtualizer renders is IDENTICAL by reference.
+    expect(after.turnOrder).toBe(beforeTurnOrder);
+    expect(after.turns).toBe(beforeTurns);
+    // Sibling rows keep identity; only the partial's row changed.
+    expect(after.rows[after.order[0]]).toBe(beforeOtherRow);
+    expect(after.rows[partialId].text).toBe('growing more');
+  });
+
+  it('a final flipping its partial keeps the turn layer identical too', () => {
+    apply(partial('mic', 0, 500, 'talking'));
+    const before = useAuricle.getState();
+    apply(finalEv('mic', 0, 900, 'Talking.'));
+    const after = useAuricle.getState();
+    expect(after.turnOrder).toBe(before.turnOrder);
+    expect(after.turns).toBe(before.turns);
+    expect(after.rows[after.turns[after.turnOrder[0]].segIds[0]].final).toBe(true);
+  });
+
+  it('loadFinals rebuilds turns from persisted segments', () => {
+    useAuricle.getState().loadFinals([
+      { channel: 1, speaker: 'Them', t_start_ms: 0, t_end_ms: 2000, text: 'a', provider: 'x' },
+      { channel: 1, speaker: 'Them', t_start_ms: 2100, t_end_ms: 3000, text: 'b', provider: 'x' },
+      { channel: 0, speaker: 'You', t_start_ms: 3500, t_end_ms: 4000, text: 'c', provider: 'x' },
+    ]);
+    const s = useAuricle.getState();
+    expect(s.turnOrder).toHaveLength(2);
+    expect(s.turns[s.turnOrder[0]].segIds).toHaveLength(2);
+    expect(s.turns[s.turnOrder[1]].speaker).toBe('You');
+  });
+});
+
 describe('meters and diagnostics', () => {
   it('vu events update per-channel levels', () => {
     apply({ type: 'vu', session: 's1', channel: 'mic', rms: 0.2 });
@@ -147,6 +206,16 @@ describe('meters and diagnostics', () => {
     const s = useAuricle.getState();
     expect(s.vu['mic']).toBeCloseTo(0.2);
     expect(s.vu['loopback']).toBeCloseTo(0.05);
+  });
+
+  it('lifecycle and retitle events bump sessionsVersion for the sidebar', () => {
+    const v0 = useAuricle.getState().sessionsVersion;
+    apply({ type: 'session_started', session: 's9', title: 'Untitled session', stt_provider: 'x' });
+    apply({ type: 'session_stopped', session: 's9' });
+    apply({ type: 'session_updated', session: 's9', title: 'Pipeline Latency Review' });
+    expect(useAuricle.getState().sessionsVersion).toBe(v0 + 3);
+    // The transcript itself is untouched by a retitle.
+    expect(useAuricle.getState().order).toHaveLength(0);
   });
 
   it('device_lost, error, and lag surface without touching the transcript', () => {

@@ -229,10 +229,14 @@ impl Engine {
             &pipe_cfg,
         );
 
+        // No explicit title: start as a placeholder and mark it auto-titled
+        // — once the session stops, a 3–6 word title is generated from the
+        // transcript (crate::title). User renames clear the flag.
+        let auto_title = params.title.is_none();
         let title = params
             .title
             .clone()
-            .unwrap_or_else(|| format!("Session {session_id}"));
+            .unwrap_or_else(|| crate::title::UNTITLED.to_string());
         let source = params.audio.clone().unwrap_or(AudioSource::Devices);
         let stop = Arc::new(AtomicBool::new(false));
         let handles = Arc::new(Mutex::new(Vec::new()));
@@ -241,6 +245,9 @@ impl Engine {
 
         // Raw-audio retention (privacy default: off).
         let mut meta = serde_json::json!({});
+        if auto_title {
+            meta["auto_title"] = serde_json::json!(true);
+        }
         let mut mic_wav = None;
         let mut loop_wav = None;
         if retain_raw_audio {
@@ -384,6 +391,14 @@ impl Engine {
             });
             engine.lifecycle.lock().unwrap().finish_stop(&session);
             *engine.active.lock().unwrap() = None;
+            // Post-stop: name the session from its transcript (async; the
+            // sidebar learns about it via a session_updated event).
+            tokio::spawn(crate::title::autotitle_session(
+                engine.store.clone(),
+                engine.cfg.clone(),
+                session,
+                engine.important_tx.clone(),
+            ));
         });
 
         Ok(())
