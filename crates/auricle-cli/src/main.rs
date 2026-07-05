@@ -6,6 +6,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+mod record;
+mod swap;
+
 use auricle_capture::{
     drain_into, enumerate, start_loopback, start_mic, CaptureConsumer, CaptureHandle, DeviceKind,
     MonoResampler,
@@ -44,6 +47,31 @@ enum Command {
         #[arg(long, default_value = "./captures")]
         out_dir: PathBuf,
     },
+    /// Live transcription of mic + system audio to the terminal
+    Record {
+        /// STT provider id (defaults to [stt].provider from config)
+        #[arg(long)]
+        stt: Option<String>,
+        /// Whisper model for whisper-local: base.en | small.en
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// List STT providers and their readiness (model/key present)
+    Providers,
+    /// Run the Auricle daemon (REST + WebSocket API)
+    Serve {
+        /// Listen address override (default: [server].bind from config)
+        #[arg(long)]
+        bind: Option<String>,
+    },
+    /// Export a stored session transcript
+    Export {
+        /// Session id (see GET /api/v1/sessions or the sessions table)
+        id: String,
+        /// Export as markdown (the only supported format)
+        #[arg(long)]
+        md: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -53,6 +81,14 @@ fn main() -> ExitCode {
         Command::Capture { seconds, out_dir } => {
             cmd_capture(cli.config.as_deref(), seconds, &out_dir)
         }
+        Command::Record { stt, model } => record::run(record::RecordArgs {
+            stt,
+            model,
+            config: cli.config,
+        }),
+        Command::Providers => cmd_providers(cli.config.as_deref()),
+        Command::Serve { bind } => cmd_serve(cli.config.as_deref(), bind),
+        Command::Export { id, md } => cmd_export(&id, md),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -109,6 +145,52 @@ fn cmd_devices() -> Result<()> {
         println!("  (none)");
     }
 
+    Ok(())
+}
+
+fn cmd_providers(config: Option<&Path>) -> Result<()> {
+    let cfg = load_config(config)?;
+    let data_dir = auricle_stt::default_data_dir()?;
+    let statuses = auricle_stt::provider_statuses(&cfg, &data_dir);
+
+    println!("stt providers (default: {}):", cfg.stt.provider);
+    for s in statuses {
+        println!(
+            "  {} {:<15} {:<16} {:<10} {}",
+            if s.id == cfg.stt.provider { "*" } else { " " },
+            s.id,
+            s.kind.to_string(),
+            if s.ready { "ready" } else { "not ready" },
+            s.detail
+        );
+    }
+    Ok(())
+}
+
+fn cmd_serve(config: Option<&Path>, bind: Option<String>) -> Result<()> {
+    let cfg = load_config(config)?;
+    let data_root = auricle_server::default_data_root()?;
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(auricle_server::serve(cfg, data_root, bind))
+}
+
+fn cmd_export(id: &str, md: bool) -> Result<()> {
+    if !md {
+        return Err(Error::Config(
+            "specify --md (markdown is the only supported export format)".to_string(),
+        ));
+    }
+    let data_root = auricle_server::default_data_root()?;
+    let store = auricle_server::Store::open(&data_root.join("auricle.db"))?;
+    let session = store
+        .get_session(id)?
+        .ok_or_else(|| Error::Config(format!("no session \"{id}\"")))?;
+    let segments = store.get_segments(id)?;
+    let summaries = store.get_summaries(id)?;
+    print!(
+        "{}",
+        auricle_server::render_markdown_full(&session, &segments, &summaries)
+    );
     Ok(())
 }
 

@@ -1,0 +1,18 @@
+[package]
+name = "auricle-llm"
+description = "LLM summarization for Auricle: OpenAI-compatible chat client, templates, map-reduce"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+auricle-core = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }

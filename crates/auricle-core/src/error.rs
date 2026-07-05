@@ -16,6 +16,12 @@ pub enum Error {
     Audio(String),
     /// Resampler construction or processing failed.
     Resample(String),
+    /// Voice activity detector construction or inference failed.
+    Vad(String),
+    /// STT provider/session failure.
+    Stt(String),
+    /// Model download or checksum verification failed.
+    Model(String),
     /// Configuration file could not be read or parsed.
     Config(String),
     Io(std::io::Error),
@@ -35,6 +41,9 @@ impl fmt::Display for Error {
             Error::NoDefaultDevice(dir) => write!(f, "no default {dir} device on this system"),
             Error::Audio(msg) => write!(f, "audio backend error: {msg}"),
             Error::Resample(msg) => write!(f, "resampler error: {msg}"),
+            Error::Vad(msg) => write!(f, "vad error: {msg}"),
+            Error::Stt(msg) => write!(f, "stt error: {msg}"),
+            Error::Model(msg) => write!(f, "model error: {msg}"),
             Error::Config(msg) => write!(f, "config error: {msg}"),
             Error::Io(e) => write!(f, "i/o error: {e}"),
         }

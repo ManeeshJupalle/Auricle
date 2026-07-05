@@ -1,9 +1,10 @@
-[package]
+﻿[package]
 name = "auricle-cli"
 description = "Auricle command-line interface"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "auricle"
@@ -12,5 +13,13 @@ path = "src/main.rs"
 [dependencies]
 auricle-core = { workspace = true }
 auricle-capture = { workspace = true }
+auricle-pipeline = { workspace = true }
+auricle-stt = { workspace = true }
+auricle-server = { workspace = true }
 clap = { workspace = true }
 hound = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+# Already in the tree via cpal; used only to enable ANSI (virtual terminal)
+# processing on legacy conhost so the live transcript colors render.
+windows = { version = "0.62", features = ["Win32_System_Console", "Win32_Foundation"] }

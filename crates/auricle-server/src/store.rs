@@ -1,0 +1,501 @@
+//! SQLite persistence (rusqlite, WAL) with embedded versioned migrations.
+//! Schema per architecture §4.7.
+
+use std::path::Path;
+use std::sync::Mutex;
+
+use auricle_core::{ChannelId, Error, Result};
+use rusqlite::Connection;
+use serde::Serialize;
+
+/// Versioned migrations; `PRAGMA user_version` tracks the applied count.
+/// Append-only — never edit an entry that has shipped.
+const MIGRATIONS: &[&str] = &[
+    // v1: initial schema (architecture §4.7)
+    "CREATE TABLE sessions(
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        started_at INT NOT NULL,
+        ended_at INT,
+        stt_provider TEXT NOT NULL,
+        llm_provider TEXT,
+        meta TEXT NOT NULL DEFAULT '{}'
+     );
+     CREATE TABLE segments(
+        id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        channel INT NOT NULL,
+        speaker TEXT NOT NULL,
+        t_start_ms INT NOT NULL,
+        t_end_ms INT NOT NULL,
+        text TEXT NOT NULL,
+        provider TEXT NOT NULL
+     );
+     CREATE INDEX idx_segments_session ON segments(session_id, t_start_ms);
+     CREATE TABLE summaries(
+        id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        template TEXT NOT NULL,
+        model TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at INT NOT NULL
+     );
+     CREATE TABLE settings(
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+     );",
+];
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionRow {
+    pub id: String,
+    pub title: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub stt_provider: String,
+    pub meta: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SummaryRow {
+    pub id: i64,
+    pub template: String,
+    pub model: String,
+    pub content: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SegmentRow {
+    pub channel: u8,
+    pub speaker: String,
+    pub t_start_ms: i64,
+    pub t_end_ms: i64,
+    pub text: String,
+    pub provider: String,
+}
+
+pub fn channel_code(channel: ChannelId) -> u8 {
+    match channel {
+        ChannelId::Mic => 0,
+        ChannelId::Loopback => 1,
+    }
+}
+
+pub struct Store {
+    conn: Mutex<Connection>,
+}
+
+fn db_err(e: rusqlite::Error) -> Error {
+    Error::Io(std::io::Error::other(format!("sqlite: {e}")))
+}
+
+impl Store {
+    /// Open (creating if needed) with WAL mode, apply pending migrations,
+    /// and mark any session left open by a crash as ended.
+    pub fn open(path: &Path) -> Result<Store> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let conn = Connection::open(path).map_err(db_err)?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(db_err)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(db_err)?;
+        let store = Store {
+            conn: Mutex::new(conn),
+        };
+        store.migrate()?;
+        store.recover_interrupted()?;
+        Ok(store)
+    }
+
+    fn migrate(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(db_err)?;
+        for (i, sql) in MIGRATIONS.iter().enumerate() {
+            if version <= i as i64 {
+                conn.execute_batch(sql).map_err(db_err)?;
+                conn.pragma_update(None, "user_version", (i + 1) as i64)
+                    .map_err(db_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Crash recovery: a session with no `ended_at` was interrupted (the
+    /// engine always sets it on clean stop). Close it at the time of its
+    /// last persisted segment (or its start) and flag it in meta.
+    fn recover_interrupted(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(
+            "UPDATE sessions SET
+                ended_at = COALESCE(
+                    (SELECT started_at + MAX(t_end_ms)/1000 FROM segments
+                      WHERE segments.session_id = sessions.id),
+                    started_at),
+                meta = json_set(meta, '$.interrupted', json('true'))
+             WHERE ended_at IS NULL;",
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn create_session(
+        &self,
+        id: &str,
+        title: &str,
+        started_at: i64,
+        stt_provider: &str,
+        meta: &serde_json::Value,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sessions(id, title, started_at, stt_provider, meta)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, title, started_at, stt_provider, meta.to_string()],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn end_session(&self, id: &str, ended_at: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET ended_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, ended_at],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn update_session_meta(&self, id: &str, meta: &serde_json::Value) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET meta = ?2 WHERE id = ?1",
+            rusqlite::params![id, meta.to_string()],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_segment(
+        &self,
+        session_id: &str,
+        channel: ChannelId,
+        speaker: &str,
+        t_start_ms: i64,
+        t_end_ms: i64,
+        text: &str,
+        provider: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO segments(session_id, channel, speaker, t_start_ms, t_end_ms, text, provider)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                session_id,
+                channel_code(channel),
+                speaker,
+                t_start_ms,
+                t_end_ms,
+                text,
+                provider
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn list_sessions(&self) -> Result<Vec<SessionRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, started_at, ended_at, stt_provider, meta
+                 FROM sessions ORDER BY started_at DESC",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], row_to_session)
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        Ok(rows)
+    }
+
+    pub fn get_session(&self, id: &str) -> Result<Option<SessionRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, started_at, ended_at, stt_provider, meta
+                 FROM sessions WHERE id = ?1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt
+            .query_map([id], row_to_session)
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        Ok(rows.pop())
+    }
+
+    pub fn get_segments(&self, session_id: &str) -> Result<Vec<SegmentRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT channel, speaker, t_start_ms, t_end_ms, text, provider
+                 FROM segments WHERE session_id = ?1 ORDER BY t_start_ms, id",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([session_id], |r| {
+                Ok(SegmentRow {
+                    channel: r.get(0)?,
+                    speaker: r.get(1)?,
+                    t_start_ms: r.get(2)?,
+                    t_end_ms: r.get(3)?,
+                    text: r.get(4)?,
+                    provider: r.get(5)?,
+                })
+            })
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        Ok(rows)
+    }
+
+    pub fn insert_summary(
+        &self,
+        session_id: &str,
+        template: &str,
+        model: &str,
+        content: &str,
+        created_at: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO summaries(session_id, template, model, content, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![session_id, template, model, content, created_at],
+        )
+        .map_err(db_err)?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_summaries(&self, session_id: &str) -> Result<Vec<SummaryRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, template, model, content, created_at
+                 FROM summaries WHERE session_id = ?1 ORDER BY created_at, id",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([session_id], |r| {
+                Ok(SummaryRow {
+                    id: r.get(0)?,
+                    template: r.get(1)?,
+                    model: r.get(2)?,
+                    content: r.get(3)?,
+                    created_at: r.get(4)?,
+                })
+            })
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        Ok(rows)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value.to_string()],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn all_settings(&self) -> Result<serde_json::Map<String, serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM settings ORDER BY key")
+            .map_err(db_err)?;
+        let mut out = serde_json::Map::new();
+        let rows = stmt
+            .query_map([], |r| {
+                let k: String = r.get(0)?;
+                let v: String = r.get(1)?;
+                Ok((k, v))
+            })
+            .map_err(db_err)?;
+        for row in rows {
+            let (k, v) = row.map_err(db_err)?;
+            let value = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v));
+            out.insert(k, value);
+        }
+        Ok(out)
+    }
+}
+
+fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
+    let meta_text: String = r.get(5)?;
+    Ok(SessionRow {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        started_at: r.get(2)?,
+        ended_at: r.get(3)?,
+        stt_provider: r.get(4)?,
+        meta: serde_json::from_str(&meta_text).unwrap_or(serde_json::json!({})),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("auricle-store-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn migrations_are_idempotent_across_reopens() {
+        let path = temp_db("migrate");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .create_session("s1", "t", 100, "whisper-local", &serde_json::json!({}))
+                .unwrap();
+            store.end_session("s1", 160).unwrap();
+        }
+        // Second open must not re-run v1 (CREATE TABLE would fail).
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.list_sessions().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn session_and_segment_crud_roundtrip() {
+        let path = temp_db("crud");
+        let store = Store::open(&path).unwrap();
+        store
+            .create_session(
+                "s1",
+                "standup",
+                1_700_000_000,
+                "deepgram",
+                &serde_json::json!({"devices": {"mic": "default"}}),
+            )
+            .unwrap();
+        store
+            .insert_segment("s1", ChannelId::Mic, "You", 1000, 2500, "hello", "deepgram")
+            .unwrap();
+        store
+            .insert_segment(
+                "s1",
+                ChannelId::Loopback,
+                "Them",
+                500,
+                900,
+                "hi there",
+                "deepgram",
+            )
+            .unwrap();
+        store.end_session("s1", 1_700_000_060).unwrap();
+
+        let s = store.get_session("s1").unwrap().unwrap();
+        assert_eq!(s.title, "standup");
+        assert_eq!(s.ended_at, Some(1_700_000_060));
+        assert_eq!(s.meta["devices"]["mic"], "default");
+
+        let segs = store.get_segments("s1").unwrap();
+        assert_eq!(segs.len(), 2);
+        // Ordered by t_start_ms across channels.
+        assert_eq!(segs[0].speaker, "Them");
+        assert_eq!(segs[0].channel, 1);
+        assert_eq!(segs[1].speaker, "You");
+        assert_eq!(segs[1].channel, 0);
+
+        assert!(store.get_session("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn crash_recovery_marks_open_sessions_ended() {
+        let path = temp_db("recover");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .create_session(
+                    "dead",
+                    "crashed",
+                    1000,
+                    "whisper-local",
+                    &serde_json::json!({}),
+                )
+                .unwrap();
+            store
+                .insert_segment("dead", ChannelId::Mic, "You", 0, 42_000, "last words", "w")
+                .unwrap();
+            // No end_session: simulates a hard kill mid-session.
+        }
+        // Reopen: WAL must be intact and the session closed.
+        let store = Store::open(&path).unwrap();
+        let s = store.get_session("dead").unwrap().unwrap();
+        assert_eq!(
+            s.ended_at,
+            Some(1000 + 42),
+            "ended at last segment's end time"
+        );
+        assert_eq!(s.meta["interrupted"], true);
+        // Segments written before the crash are readable.
+        assert_eq!(store.get_segments("dead").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn summaries_roundtrip_in_creation_order() {
+        let path = temp_db("summaries");
+        let store = Store::open(&path).unwrap();
+        store
+            .create_session("s1", "t", 100, "deepgram", &serde_json::json!({}))
+            .unwrap();
+        store
+            .insert_summary("s1", "minutes", "llama-3.3-70b", "## Minutes\n- a", 200)
+            .unwrap();
+        store
+            .insert_summary("s1", "action-items", "llama-3.3-70b", "- [ ] ship", 300)
+            .unwrap();
+
+        let rows = store.get_summaries("s1").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].template, "minutes");
+        assert_eq!(rows[1].template, "action-items");
+        assert!(rows[0].id > 0);
+        assert!(store.get_summaries("other").unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_upsert_and_read_back() {
+        let path = temp_db("settings");
+        let store = Store::open(&path).unwrap();
+        store
+            .set_setting("default_provider", &serde_json::json!("deepgram"))
+            .unwrap();
+        store
+            .set_setting("retain_raw_audio", &serde_json::json!(true))
+            .unwrap();
+        store
+            .set_setting("default_provider", &serde_json::json!("whisper-local"))
+            .unwrap();
+
+        let all = store.all_settings().unwrap();
+        assert_eq!(all["default_provider"], "whisper-local");
+        assert_eq!(all["retain_raw_audio"], true);
+    }
+}

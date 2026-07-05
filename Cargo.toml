@@ -1,15 +1,29 @@
 [workspace]
 resolver = "2"
-members = ["crates/auricle-core", "crates/auricle-capture", "crates/auricle-cli"]
+members = [
+    "crates/auricle-core",
+    "crates/auricle-capture",
+    "crates/auricle-pipeline",
+    "crates/auricle-stt",
+    "crates/auricle-llm",
+    "crates/auricle-server",
+    "crates/auricle-cli",
+    "benches/latency",
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/ManeeshJupalle/Auricle"
 
 [workspace.dependencies]
-auricle-core = { path = "crates/auricle-core" }
-auricle-capture = { path = "crates/auricle-capture" }
+auricle-core = { path = "crates/auricle-core", version = "0.1.0" }
+auricle-capture = { path = "crates/auricle-capture", version = "0.1.0" }
+auricle-pipeline = { path = "crates/auricle-pipeline", version = "0.1.0" }
+auricle-stt = { path = "crates/auricle-stt", version = "0.1.0" }
+auricle-llm = { path = "crates/auricle-llm", version = "0.1.0" }
+auricle-server = { path = "crates/auricle-server", version = "0.1.0" }
 cpal = "0.18.1"
 rtrb = "0.3"
 rubato = "0.16"
@@ -17,3 +31,28 @@ hound = "3.5"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time", "net"] }
+async-trait = "0.1"
+whisper-rs = "0.16"
+voice_activity_detector = "0.2.1"
+reqwest = { version = "0.12", features = ["multipart", "json"] }
+sha2 = "0.10"
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
+# Stream/Sink combinators for the tungstenite WebSocket (split/send/next).
+futures-util = "0.3"
+# Deepgram frames are JSON over WebSocket text frames; serde alone can't
+# parse free-standing JSON.
+serde_json = "1"
+# Named in the Phase 3 build spec for retry/backoff tests.
+wiremock = "0.6"
+axum = { version = "0.8", features = ["ws"] }
+# `bundled` compiles SQLite in: Windows ships no system sqlite3.
+rusqlite = { version = "0.37", features = ["bundled"] }
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+# Companion to rust-embed: content-type headers for the embedded UI files
+# (not named in the architecture doc, but rust-embed serves raw bytes only).
+mime_guess = "2"
+# whisper.cpp is compiled with optimizations even in dev builds; unoptimized
+# whisper inference is unusably slow for the live pipeline.
+[profile.dev.package.whisper-rs-sys]
+opt-level = 3

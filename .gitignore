@@ -1,3 +1,7 @@
 /target
 /captures
 AURICLE_BUILD_PROMPTS.md
+ui/node_modules
+# Built by `npm run build` in ui/; embedded into the binary at compile time.
+crates/auricle-server/ui-dist
+

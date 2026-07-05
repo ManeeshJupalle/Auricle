@@ -1,0 +1,32 @@
+﻿[package]
+name = "auricle-stt"
+description = "STT provider traits and implementations for Auricle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["cloud"]
+# Cloud providers: deepgram (streaming), groq-whisper / openai-compat (batch).
+# hound is needed to WAV-encode chunks for the batch upload endpoints.
+cloud = ["dep:tokio-tungstenite", "dep:futures-util", "dep:serde_json", "dep:hound"]
+
+[dependencies]
+auricle-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+whisper-rs = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+
+[dev-dependencies]
+hound = { workspace = true }
+auricle-pipeline = { workspace = true }
+wiremock = { workspace = true }
+serde_json = { workspace = true }

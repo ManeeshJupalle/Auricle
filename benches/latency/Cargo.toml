@@ -1,0 +1,18 @@
+[package]
+name = "auricle-latency-bench"
+description = "Latency benchmark harness for Auricle (not published)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "latency-bench"
+path = "src/main.rs"
+
+[dependencies]
+auricle-core = { workspace = true }
+auricle-pipeline = { workspace = true }
+auricle-stt = { workspace = true }
+hound = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,15 @@
+﻿[package]
+name = "auricle-pipeline"
+description = "VAD gate, chunker, and transcript assembler for Auricle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+auricle-core = { workspace = true }
+tokio = { workspace = true }
+voice_activity_detector = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }

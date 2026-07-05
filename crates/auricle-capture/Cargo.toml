@@ -1,9 +1,10 @@
-[package]
+﻿[package]
 name = "auricle-capture"
 description = "Windows audio capture (cpal/WASAPI), ring buffers, and resampling for Auricle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 auricle-core = { workspace = true }

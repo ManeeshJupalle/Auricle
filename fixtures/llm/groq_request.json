@@ -1,0 +1,1 @@
+{"model":"llama-3.3-70b-versatile","messages":[{"role":"system","content":"You summarize meeting transcripts into concise minutes."},{"role":"user","content":"Summarize: [00:00] Them: Welcome to the weekly sync. [00:05] You: Latency numbers look good. [00:12] Them: Ship it Friday."}],"temperature":0.3}

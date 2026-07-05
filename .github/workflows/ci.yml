@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # rust-embed snapshots crates/auricle-server/ui-dist at compile time,
+      # so the UI must build first.
+      - name: Build web UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: UI tests (vitest)
+        working-directory: ui
+        run: npm test
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # whisper-rs-sys needs CMake + libclang (see BUILDING.md). The repo's
+      # .cargo/config.toml pins developer-machine paths, but Cargo [env]
+      # does not override variables that are already set — so exporting the
+      # runner's own paths here wins.
+      - name: Point CMAKE and LIBCLANG_PATH at the runner's tools
+        shell: pwsh
+        run: |
+          "CMAKE=$((Get-Command cmake).Source)" | Out-File -Append $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: tests
+        run: cargo test
