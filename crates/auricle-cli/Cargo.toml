@@ -1,0 +1,16 @@
+[package]
+name = "auricle-cli"
+description = "Auricle command-line interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "auricle"
+path = "src/main.rs"
+
+[dependencies]
+auricle-core = { workspace = true }
+auricle-capture = { workspace = true }
+clap = { workspace = true }
+hound = { workspace = true }
