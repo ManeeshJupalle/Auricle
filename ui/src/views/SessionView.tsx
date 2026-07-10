@@ -21,6 +21,15 @@ function fmtDur(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(Math.floor(secs) % 60).padStart(2, '0')}`;
 }
 
+function ClockIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+
 function LiveTicker({ startedAtMs }: { startedAtMs: number | null }) {
   const [, force] = useState(0);
   useEffect(() => {
@@ -181,11 +190,18 @@ export function SessionView({
         <div className="session-meta-row">
           {isLive ? (
             <>
-              <LiveTicker startedAtMs={liveStartedAtMs} />
-              <span className="dim">· {sessionProvider}</span>
-              <span className="dim mono">
-                {latencyMs !== null ? `· latency ${(latencyMs / 1000).toFixed(1)}s` : ''}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <ClockIcon />
+                <LiveTicker startedAtMs={liveStartedAtMs} />
               </span>
+              <span style={{ opacity: 0.45 }}>·</span>
+              <span className="meta-chip">{sessionProvider}</span>
+              {latencyMs !== null && (
+                <>
+                  <span style={{ opacity: 0.45 }}>·</span>
+                  <span>latency {(latencyMs / 1000).toFixed(1)}s</span>
+                </>
+              )}
               <div className="header-meters">
                 <VuMeter channel="mic" label="You" />
                 <VuMeter channel="loopback" label="Them" />
@@ -195,18 +211,23 @@ export function SessionView({
             detail && (
               <>
                 <span>{fmtLongDate(detail.started_at)}</span>
-                <span className="dim">
-                  · {detail.ended_at ? fmtDur(detail.ended_at - detail.started_at) : 'in progress'}
+                <span style={{ opacity: 0.45 }}>·</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <ClockIcon />
+                  {detail.ended_at ? fmtDur(detail.ended_at - detail.started_at) : 'in progress'}
                 </span>
-                <span className="dim">· {detail.stt_provider}</span>
+                <span style={{ opacity: 0.45 }}>·</span>
+                <span className="meta-chip">{detail.stt_provider}</span>
                 {(detail.meta as Record<string, unknown>)['interrupted'] === true && (
                   <span className="tag warn">interrupted</span>
                 )}
+                <span style={{ opacity: 0.45 }}>·</span>
                 <a
                   className="header-export"
                   href={api.exportUrl(sessionId)}
                   download={`${sessionId}.md`}
                 >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                   Export .md
                 </a>
               </>
@@ -284,6 +305,7 @@ export function SessionView({
               onClick={summarize}
               disabled={summarizing || !llmProvider || !detail || detail.transcript.length === 0}
             >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3v4" /><path d="M19 17v4" /><path d="M3 5h4" /><path d="M17 19h4" /><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" /></svg>
               {summarizing ? 'Summarizing…' : 'Generate summary'}
             </button>
           </div>
@@ -297,7 +319,7 @@ export function SessionView({
               <div className="summary" key={s.id}>
                 <div className="summary-head">
                   <span className="summary-title">{s.template}</span>
-                  <span className="dim">{s.model}</span>
+                  <span className="summary-model">{s.model}</span>
                 </div>
                 <div className="summary-body">
                   <Markdown source={s.content} />

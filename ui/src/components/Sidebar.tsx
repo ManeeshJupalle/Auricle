@@ -132,7 +132,7 @@ export function Sidebar({
     return (
       <aside className="sidebar collapsed">
         <button className="icon-btn" onClick={onToggle} title="Expand sidebar">
-          ☰
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
         </button>
       </aside>
     );
@@ -147,19 +147,23 @@ export function Sidebar({
           auricle<span className="brand-dot">.</span>
         </span>
         <button className="icon-btn" onClick={onToggle} title="Collapse sidebar">
-          ⟨
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
         </button>
       </div>
 
-      <input
-        type="search"
-        className="sidebar-search"
-        placeholder="Search sessions & transcripts…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+      <div className="sidebar-search-wrap">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+        <input
+          type="search"
+          className="sidebar-search"
+          placeholder="Search sessions & transcripts…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
 
       <nav className="session-list">
+        <div className="side-label">Recent sessions</div>
         {sessions.length === 0 && (
           <p className="dim side-empty">
             {search ? 'No matches.' : 'No sessions yet — record your first below.'}
@@ -168,9 +172,7 @@ export function Sidebar({
         {sessions.map((s) => (
           <div
             key={s.id}
-            className={`side-item ${selectedId === s.id && activeNav === 'session' ? 'active' : ''} ${
-              activeSession === s.id ? 'recording' : ''
-            }`}
+            className={`side-item ${selectedId === s.id && activeNav === 'session' ? 'active' : ''}`}
           >
             {renaming === s.id ? (
               <input
@@ -191,12 +193,14 @@ export function Sidebar({
                     {activeSession === s.id && <span className="rec-dot" />} {s.title}
                   </span>
                   <span className="side-meta">
-                    {fmtDate(s.started_at)} · {fmtDuration(s)}
+                    <span>{fmtDate(s.started_at)}</span>
+                    <span style={{ opacity: 0.5 }}>·</span>
+                    <span>{fmtDuration(s)}</span>
                   </span>
                 </button>
                 <span className="side-actions">
                   <button className="icon-btn" title="Rename" onClick={() => setRenaming(s.id)}>
-                    ✎
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                   </button>
                   <button
                     className="icon-btn danger"
@@ -204,7 +208,7 @@ export function Sidebar({
                     disabled={activeSession === s.id}
                     onClick={() => remove(s.id, s.title)}
                   >
-                    🗑
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                   </button>
                 </span>
               </>
@@ -226,21 +230,26 @@ export function Sidebar({
           </button>
         ) : (
           <>
-            <select
-              className="provider-pick"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              title="STT provider for the next session"
-            >
-              {providers.map((p) => (
-                <option key={p.id} value={p.id} disabled={!p.ready}>
-                  {p.id}
-                  {p.ready ? '' : ' (not ready)'}
-                </option>
-              ))}
-            </select>
+            <div className="provider-pick-wrap">
+              <svg className="left" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></svg>
+              <select
+                className="provider-pick"
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                title="STT provider for the next session"
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id} disabled={!p.ready}>
+                    {p.id}
+                    {p.ready ? '' : ' (not ready)'}
+                  </option>
+                ))}
+              </select>
+              <svg className="right" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+            </div>
             <button className="record-btn" onClick={startRecording} disabled={busy || !provider}>
-              ● Start Recording
+              <span className="rec-pulse" />
+              Start Recording
             </button>
           </>
         )}
@@ -251,6 +260,7 @@ export function Sidebar({
           >
             Settings
           </button>
+          <span className="side-nav-divider" />
           <button
             className={`side-nav-btn ${activeNav === 'about' ? 'active' : ''}`}
             onClick={() => onNav('about')}

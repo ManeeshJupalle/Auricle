@@ -82,3 +82,20 @@ Round-2 screenshot loop was waived by the maintainer; fixes were verified
 by inspection and the standard gates (fmt, clippy `-D warnings`,
 cargo test incl. new store/endpoint/autotitle tests, vitest 26/26,
 `npm run build` embedded into the release exe).
+
+## Visual identity pass (Claude Design import)
+
+The maintainer supplied a Claude Design mock (`Auricle.dc.html`) which was
+implemented as the final visual identity: near-black radial-washed canvas,
+glassy gradient sidebar with an active-rail session list, red accent
+(#ef4444/#c0362f) with glow, Geist / Geist Mono typography, pill-style
+connection status, chip metadata, iconized controls, and a speaker-column
+transcript layout (speaker + timestamp stacked left, prose right — the
+timestamp remains the click-to-seek control). Structure and behavior were
+untouched: store, virtualizer, single-row partial re-renders, audio bar,
+live view, and the light theme (derived with adapted tones — the mock is
+dark-only) all carry over. One deliberate deviation: the mock loads Geist
+from Google Fonts; the implementation bundles the fonts via @fontsource so
+the single binary stays fully offline. Final screenshots:
+`docs/screenshots/redesign/dc_transcript_dark.png`,
+`dc_summary_dark.png`.

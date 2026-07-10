@@ -34,18 +34,18 @@ function TurnBlock({
 }) {
   return (
     <div className="turn">
-      <button
-        className="turn-time"
-        title={onSeek ? 'Play from here' : undefined}
-        disabled={!onSeek}
-        onClick={() => onSeek?.(turn.tStartMs)}
-      >
-        {fmtTs(turn.tStartMs)}
-      </button>
-      <div className="turn-body">
+      <div className="turn-side">
         <span className={`turn-speaker ${turn.channel}`}>{turn.speaker}</span>
-        <p className="turn-text">{children}</p>
+        <button
+          className="turn-time"
+          title={onSeek ? 'Play from here' : undefined}
+          disabled={!onSeek}
+          onClick={() => onSeek?.(turn.tStartMs)}
+        >
+          {fmtTs(turn.tStartMs)}
+        </button>
       </div>
+      <p className="turn-text">{children}</p>
     </div>
   );
 }
