@@ -12,7 +12,7 @@ use auricle_capture::{
 };
 use auricle_core::{ChannelId, ChunkKind, Config, Error, Result, SttEvent};
 use auricle_pipeline::{Assembler, ChannelPipeline, PipelineConfig, PipelineEvent, SileroDetector};
-use auricle_stt::{SessionCfg, SttProvider, SttSession};
+use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::events::WsEvent;
@@ -84,11 +84,19 @@ pub struct Engine {
     important_tx: broadcast::Sender<WsEvent>,
     partial_tx: broadcast::Sender<WsEvent>,
     provider_override: Option<Arc<dyn SttProvider>>,
+    /// Last constructed local provider, keyed by "provider-id|model".
+    /// Loading a whisper model reads 148–500 MB from disk; without this
+    /// every session start paid that again.
+    local_provider: Mutex<Option<(String, Arc<dyn SttProvider>)>>,
 }
 
 impl Engine {
     pub fn new(opts: EngineOptions) -> Result<Arc<Engine>> {
         let store = Arc::new(Store::open(&opts.data_root.join("auricle.db"))?);
+        // Crash recovery belongs to the lifecycle owner: only the engine may
+        // declare a still-open session dead (read-only openers like
+        // `auricle export` must not).
+        store.recover_interrupted()?;
         let (important_tx, _) = broadcast::channel(IMPORTANT_CAPACITY);
         let (partial_tx, _) = broadcast::channel(PARTIAL_CAPACITY);
         Ok(Arc::new(Engine {
@@ -100,6 +108,7 @@ impl Engine {
             important_tx,
             partial_tx,
             provider_override: opts.provider_override,
+            local_provider: Mutex::new(None),
         }))
     }
 
@@ -184,11 +193,34 @@ impl Engine {
             provider_cfg.stt.whisper_local.model = model;
         }
 
-        let provider: Arc<dyn SttProvider> = match &self.provider_override {
-            Some(p) => p.clone(),
-            None => {
+        let cache_key = format!("{provider_id}|{}", provider_cfg.stt.whisper_local.model);
+        let cached = match &*self.local_provider.lock().unwrap() {
+            Some((key, p)) if *key == cache_key => Some(p.clone()),
+            _ => None,
+        };
+        let provider: Arc<dyn SttProvider> = match (&self.provider_override, cached) {
+            (Some(p), _) => p.clone(),
+            (None, Some(p)) => p,
+            (None, None) => {
                 let models_dir = self.data_root.join("models");
-                auricle_stt::create_provider(&provider_id, &provider_cfg, &models_dir)
+                // First run of a local model blocks this request on a large
+                // download; tell WS clients so the UI isn't a silent hang.
+                if provider_id == "whisper-local" {
+                    let model_name = &provider_cfg.stt.whisper_local.model;
+                    if let Some(m) = auricle_stt::available_models()
+                        .iter()
+                        .find(|m| m.name == *model_name)
+                    {
+                        if !models_dir.join(m.file_name).exists() {
+                            let _ = self.important_tx.send(WsEvent::ModelDownloadStarted {
+                                session: session_id.to_string(),
+                                model: model_name.clone(),
+                                size_mb: m.size_bytes / 1_048_576,
+                            });
+                        }
+                    }
+                }
+                let p = auricle_stt::create_provider(&provider_id, &provider_cfg, &models_dir)
                     .await
                     .map_err(|e| match e {
                         Error::Stt(ref m) | Error::Model(ref m) if m.contains("unknown") => {
@@ -198,7 +230,13 @@ impl Engine {
                             StartError::Invalid(e.to_string())
                         }
                         _ => StartError::Internal(e),
-                    })?
+                    })?;
+                // Only local providers are worth caching (model load); cloud
+                // ones are cheap and re-read their key env on construction.
+                if p.kind() == SttKind::Local {
+                    *self.local_provider.lock().unwrap() = Some((cache_key, p.clone()));
+                }
+                p
             }
         };
 
@@ -450,15 +488,24 @@ fn unix_secs() -> i64 {
 
 type WavWriter = hound::WavWriter<std::io::BufWriter<std::fs::File>>;
 
+/// Retained audio is 16-bit PCM: half the disk of f32 for inaudible loss at
+/// 16 kHz, and the WAV codec browsers handle best (the playback bar streams
+/// these files straight into an `<audio>` element).
 fn open_wav(path: &std::path::Path) -> Result<WavWriter> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: TARGET_RATE_HZ,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
     };
     hound::WavWriter::create(path, spec)
         .map_err(|e| Error::Io(std::io::Error::other(format!("{}: {e}", path.display()))))
+}
+
+fn write_wav_samples(w: &mut WavWriter, samples: &[f32]) {
+    for s in samples {
+        let _ = w.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+    }
 }
 
 /// Broadcasts per-channel RMS at ~10 Hz on the lossy partial lane
@@ -522,9 +569,7 @@ fn spawn_drain(
                 }
                 if !out.is_empty() {
                     if let Some(w) = wav.as_mut() {
-                        for s in &out {
-                            let _ = w.write_sample(*s);
-                        }
+                        write_wav_samples(w, &out);
                     }
                     if tx
                         .send((out.clone(), clock.elapsed().as_millis() as u64))
@@ -538,9 +583,7 @@ fn spawn_drain(
                 let _ = resampler.finish(&mut out);
                 if !out.is_empty() {
                     if let Some(w) = wav.as_mut() {
-                        for s in &out {
-                            let _ = w.write_sample(*s);
-                        }
+                        write_wav_samples(w, &out);
                     }
                     let _ = tx.send((out.clone(), clock.elapsed().as_millis() as u64));
                 }
@@ -597,6 +640,14 @@ async fn feed_wav(
     }
 }
 
+/// Bound on a stopping session's `finish()`. Generous — a slow CPU may
+/// legitimately still be transcribing a full queue of finals — but finite:
+/// a wedged provider (e.g. a network stall mid-close) must not stick the
+/// lifecycle in `stopping` forever.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(120);
+/// Bound on draining trailing events after finish, for the same reason.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Per-channel driver: batches → VAD/chunker → STT session, with the
 /// Phase 2 interim backpressure. (No runtime swap here: the provider is a
 /// per-session setting in the API; the hotkey swap remains a CLI feature.)
@@ -608,61 +659,81 @@ async fn drive_channel(
     ev_tx: mpsc::UnboundedSender<(ChannelId, SttEvent)>,
 ) {
     let mut outstanding: i64 = 0;
-    let mut feeding_done = false;
-    let mut feed_failed = false;
-    'outer: while !feeding_done {
-        loop {
-            match batch_rx.try_recv() {
-                Ok((samples, wall_ms)) => {
-                    for chunk in pipeline.push_batch(&samples, wall_ms) {
-                        let should_feed = match chunk.kind {
-                            ChunkKind::Final => {
-                                outstanding += 1;
-                                true
-                            }
-                            ChunkKind::Interim => outstanding <= 1,
-                        };
-                        if should_feed && session.feed(chunk).await.is_err() {
-                            let _ = ev_tx.send((
-                                channel,
-                                SttEvent::Error("stt session rejected audio".to_string()),
-                            ));
-                            feed_failed = true;
-                            break 'outer;
+    'feed: loop {
+        // Wait for audio or an STT event, whichever is ready first — the
+        // old 50 ms poll here held arriving audio back for up to a poll
+        // interval, a real bite out of the capture→partial budget. The
+        // event arm never touches the session, so the `next_event` borrow
+        // ends with the select and feeding can proceed after it; every
+        // implementation's next_event is a cancel-safe mpsc recv.
+        let received = tokio::select! {
+            batch = batch_rx.recv() => batch,
+            ev = session.next_event() => {
+                match ev {
+                    Some(ev) => {
+                        if matches!(ev, SttEvent::Final(_)) {
+                            outstanding -= 1;
                         }
+                        let _ = ev_tx.send((channel, ev));
+                        continue 'feed;
                     }
+                    // Worker gone mid-session: stop feeding, settle below.
+                    None => break 'feed,
                 }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    for chunk in pipeline.flush() {
-                        if chunk.kind == ChunkKind::Final {
-                            let _ = session.feed(chunk).await;
-                        }
+            }
+        };
+        let Some(first) = received else {
+            break 'feed; // capture side closed: session is stopping
+        };
+        let mut batches = vec![first];
+        while let Ok(b) = batch_rx.try_recv() {
+            batches.push(b);
+        }
+        for (samples, wall_ms) in batches {
+            for chunk in pipeline.push_batch(&samples, wall_ms) {
+                let should_feed = match chunk.kind {
+                    ChunkKind::Final => {
+                        outstanding += 1;
+                        true
                     }
-                    feeding_done = true;
-                    break;
+                    ChunkKind::Interim => outstanding <= 1,
+                };
+                if should_feed && session.feed(chunk).await.is_err() {
+                    let _ = ev_tx.send((
+                        channel,
+                        SttEvent::Error("stt session rejected audio".to_string()),
+                    ));
+                    break 'feed;
                 }
             }
         }
-        if feeding_done {
-            break;
-        }
-        match tokio::time::timeout(Duration::from_millis(50), session.next_event()).await {
-            Ok(Some(ev)) => {
-                if matches!(ev, SttEvent::Final(_)) {
-                    outstanding -= 1;
-                }
-                let _ = ev_tx.send((channel, ev));
-            }
-            Ok(None) => break,
-            Err(_) => {}
+    }
+    // Close any open span; feeding a dead session is a harmless no-op.
+    for chunk in pipeline.flush() {
+        if chunk.kind == ChunkKind::Final {
+            let _ = session.feed(chunk).await;
         }
     }
-    let _ = feed_failed;
-    if let Err(e) = session.finish().await {
-        let _ = ev_tx.send((channel, SttEvent::Error(e.to_string())));
+    match tokio::time::timeout(FINISH_TIMEOUT, session.finish()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            let _ = ev_tx.send((channel, SttEvent::Error(e.to_string())));
+        }
+        Err(_) => {
+            // Abandon the wedged session so the stop can complete; its
+            // worker task dies with the process.
+            let _ = ev_tx.send((
+                channel,
+                SttEvent::Error(format!(
+                    "stt session did not finish within {}s; abandoning it",
+                    FINISH_TIMEOUT.as_secs()
+                )),
+            ));
+            return;
+        }
     }
-    while let Some(ev) = session.next_event().await {
+    let deadline = tokio::time::Instant::now() + DRAIN_TIMEOUT;
+    while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, session.next_event()).await {
         let _ = ev_tx.send((channel, ev));
     }
 }

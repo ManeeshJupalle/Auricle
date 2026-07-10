@@ -12,6 +12,7 @@ export type WsEvent =
       latency_ms?: number;
     }
   | { type: 'vu'; session: string; channel: string; rms: number }
+  | { type: 'model_download_started'; session: string; model: string; size_mb: number }
   | { type: 'session_started'; session: string; title: string; stt_provider: string }
   | { type: 'session_stopped'; session: string }
   | { type: 'session_updated'; session: string; title: string }

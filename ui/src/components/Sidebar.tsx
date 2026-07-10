@@ -91,6 +91,9 @@ export function Sidebar({
       setError(`start failed: ${(e as Error).message}`);
     } finally {
       setBusy(false);
+      // The start request has settled either way; a model-download notice
+      // must not outlive it (a failed download sends no WS event).
+      useAuricle.setState({ notice: null });
     }
   };
 

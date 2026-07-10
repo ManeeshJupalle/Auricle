@@ -218,6 +218,15 @@ describe('meters and diagnostics', () => {
     expect(useAuricle.getState().order).toHaveLength(0);
   });
 
+  it('model download notice appears and clears once the session starts', () => {
+    apply({ type: 'model_download_started', session: 's3', model: 'base.en', size_mb: 141 });
+    const notice = useAuricle.getState().notice;
+    expect(notice).toContain('base.en');
+    expect(notice).toContain('141');
+    apply({ type: 'session_started', session: 's3', title: 'T', stt_provider: 'whisper-local' });
+    expect(useAuricle.getState().notice).toBeNull();
+  });
+
   it('device_lost, error, and lag surface without touching the transcript', () => {
     apply(finalEv('mic', 0, 1000, 'kept'));
     apply({ type: 'device_lost', session: 's1', channel: 'mic', message: 'unplugged' });

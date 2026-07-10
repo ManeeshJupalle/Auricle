@@ -14,7 +14,7 @@ use auricle_core::{AudioChunk, ChunkKind, Error, Result, Segment, SttEvent};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::queue::{pop_next, SharedQueue};
+use crate::queue::{pop_next, SharedQueue, ShedReporter};
 use crate::{SessionCfg, SttKind, SttProvider, SttSession};
 
 const MAX_ATTEMPTS: u32 = 4;
@@ -165,7 +165,13 @@ async fn worker_loop(
     tx: mpsc::UnboundedSender<SttEvent>,
 ) {
     let mut rate_limited_until: Option<Instant> = None;
+    let mut shed = ShedReporter::new();
     loop {
+        // Live overload visibility: report shedding as it happens, not
+        // only in the end-of-session total.
+        if let Some(notice) = shed.poll(&shared) {
+            let _ = tx.send(notice);
+        }
         let chunk = pop_next(&mut shared.queue.lock().unwrap());
         let Some(chunk) = chunk else {
             if shared.closed.load(Ordering::Relaxed) {

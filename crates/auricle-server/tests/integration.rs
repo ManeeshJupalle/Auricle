@@ -113,6 +113,136 @@ async fn spawn_server_with(cfg: Config, name: &str) -> (String, Arc<Engine>) {
 // ---------- the tests ----------
 
 #[tokio::test]
+async fn retained_audio_is_16bit_and_served_with_ranges() {
+    let (base, engine) = spawn_server("audio").await;
+    let client = reqwest::Client::new();
+
+    // Opt into raw-audio retention via the settings overlay, like the UI.
+    client
+        .put(format!("{base}/api/v1/settings"))
+        .json(&serde_json::json!({"retain_raw_audio": true}))
+        .send()
+        .await
+        .unwrap();
+
+    let id = engine
+        .start_session(StartParams {
+            title: Some("audio run".into()),
+            stt_provider: None,
+            mic_device: None,
+            loopback_device: None,
+            audio: Some(AudioSource::WavFile {
+                path: fixture_path(),
+                channel: ChannelId::Loopback,
+            }),
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    engine.stop_session(&id).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while engine.active_session().is_some() {
+        assert!(std::time::Instant::now() < deadline, "stop did not finish");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Range request (what <audio> seeking issues): 206 with the WAV header
+    // slice, and the retained file is 16-bit PCM (offset 34 of the header).
+    let resp = client
+        .get(format!("{base}/api/v1/sessions/{id}/audio/loopback"))
+        .header("Range", "bytes=0-43")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 206, "range requests must be honored");
+    assert!(resp.headers().contains_key("content-range"));
+    let bytes = resp.bytes().await.unwrap();
+    assert_eq!(&bytes[..4], b"RIFF");
+    assert_eq!(
+        u16::from_le_bytes([bytes[34], bytes[35]]),
+        16,
+        "retained audio must be 16-bit PCM"
+    );
+
+    // Plain GET still works; unknown channel is still a 400.
+    let resp = client
+        .get(format!("{base}/api/v1/sessions/{id}/audio/mic"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v1/sessions/{id}/audio/nope"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+}
+
+#[tokio::test]
+async fn cross_origin_and_rebound_requests_are_rejected() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let (base, _engine) = spawn_server("secure").await;
+    let addr = base.strip_prefix("http://").unwrap().to_string();
+    let ws_url = base.replace("http://", "ws://") + "/ws/live";
+
+    // Cross-site WebSocket hijack: WS handshakes carry Origin and are
+    // exempt from CORS — a foreign page must not be able to subscribe to
+    // the live transcript.
+    let mut req = ws_url.clone().into_client_request().unwrap();
+    req.headers_mut()
+        .insert("Origin", "https://evil.example".parse().unwrap());
+    match tokio_tungstenite::connect_async(req).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status(), 403);
+        }
+        other => panic!("foreign-origin WS must be refused with 403, got {other:?}"),
+    }
+
+    // The bundled UI (same-origin) still connects.
+    let mut req = ws_url.clone().into_client_request().unwrap();
+    req.headers_mut()
+        .insert("Origin", format!("http://{addr}").parse().unwrap());
+    assert!(
+        tokio_tungstenite::connect_async(req).await.is_ok(),
+        "same-origin WS must connect"
+    );
+
+    // DNS rebinding: the TCP connection reaches 127.0.0.1 but Host names
+    // the attacker's domain. Raw socket — real HTTP clients won't forge
+    // Host for us.
+    let mut sock = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    sock.write_all(
+        b"GET /api/v1/health HTTP/1.1\r\nHost: evil.example:4820\r\nConnection: close\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let mut buf = String::new();
+    let _ = sock.read_to_string(&mut buf).await;
+    assert!(
+        buf.starts_with("HTTP/1.1 403"),
+        "rebound Host must 403: {buf}"
+    );
+
+    // A genuine localhost Host still answers.
+    let mut sock = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let request =
+        format!("GET /api/v1/health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    sock.write_all(request.as_bytes()).await.unwrap();
+    let mut buf = String::new();
+    let _ = sock.read_to_string(&mut buf).await;
+    assert!(
+        buf.starts_with("HTTP/1.1 200"),
+        "localhost Host must 200: {buf}"
+    );
+}
+
+#[tokio::test]
 async fn session_gets_auto_titled_after_stop() {
     // Mock LLM plays "ollama" (the default [llm].provider).
     let llm = MockServer::start().await;

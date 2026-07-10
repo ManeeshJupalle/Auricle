@@ -91,8 +91,12 @@ fn db_err(e: rusqlite::Error) -> Error {
 }
 
 impl Store {
-    /// Open (creating if needed) with WAL mode, apply pending migrations,
-    /// and mark any session left open by a crash as ended.
+    /// Open (creating if needed) with WAL mode and apply pending migrations.
+    ///
+    /// Deliberately does NOT run crash recovery: readers like `auricle
+    /// export` open this database while a daemon may be mid-recording, and
+    /// recovery would close the live session out from under it. The engine
+    /// calls [`recover_interrupted`](Self::recover_interrupted) itself.
     pub fn open(path: &Path) -> Result<Store> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -106,7 +110,6 @@ impl Store {
             conn: Mutex::new(conn),
         };
         store.migrate()?;
-        store.recover_interrupted()?;
         Ok(store)
     }
 
@@ -127,8 +130,10 @@ impl Store {
 
     /// Crash recovery: a session with no `ended_at` was interrupted (the
     /// engine always sets it on clean stop). Close it at the time of its
-    /// last persisted segment (or its start) and flag it in meta.
-    fn recover_interrupted(&self) -> Result<()> {
+    /// last persisted segment (or its start) and flag it in meta. Called by
+    /// the engine at startup — only the daemon owns the lifecycle, so only
+    /// it may declare an open session dead.
+    pub(crate) fn recover_interrupted(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
             "UPDATE sessions SET
@@ -506,8 +511,9 @@ mod tests {
                 .unwrap();
             // No end_session: simulates a hard kill mid-session.
         }
-        // Reopen: WAL must be intact and the session closed.
+        // Reopen as the engine does: recovery is explicit.
         let store = Store::open(&path).unwrap();
+        store.recover_interrupted().unwrap();
         let s = store.get_session("dead").unwrap().unwrap();
         assert_eq!(
             s.ended_at,
@@ -517,6 +523,28 @@ mod tests {
         assert_eq!(s.meta["interrupted"], true);
         // Segments written before the crash are readable.
         assert_eq!(store.get_segments("dead").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn read_only_open_never_touches_a_live_session() {
+        // `auricle export` opens the DB while a daemon may be recording; a
+        // plain open must not close or flag the open session.
+        let path = temp_db("readonly-open");
+        let daemon = Store::open(&path).unwrap();
+        daemon
+            .create_session(
+                "live",
+                "in progress",
+                1000,
+                "deepgram",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+
+        let reader = Store::open(&path).unwrap();
+        let s = reader.get_session("live").unwrap().unwrap();
+        assert_eq!(s.ended_at, None, "reader must not end the live session");
+        assert_eq!(s.meta.get("interrupted"), None, "no interrupted flag");
     }
 
     #[test]

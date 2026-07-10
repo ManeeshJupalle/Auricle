@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use auricle_core::{AudioChunk, ChunkKind, Segment, SttEvent};
 use tokio::sync::Notify;
@@ -59,6 +60,45 @@ impl SharedQueue {
         } else {
             None
         }
+    }
+}
+
+/// Minimum spacing between live shed notices from one worker.
+const SHED_NOTICE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Throttled live overload reporting for the worker loops: the end-of-session
+/// total (`shed_notice`) is too late to act on — this surfaces shedding while
+/// it is happening so the UI can warn during the meeting.
+pub(crate) struct ShedReporter {
+    reported: u64,
+    last: Option<Instant>,
+}
+
+impl ShedReporter {
+    pub fn new() -> Self {
+        ShedReporter {
+            reported: 0,
+            last: None,
+        }
+    }
+
+    /// Notice to emit now, if the shed count grew and the throttle allows.
+    pub fn poll(&mut self, shared: &SharedQueue) -> Option<SttEvent> {
+        let dropped = shared.dropped_chunks.load(Ordering::Relaxed);
+        if dropped <= self.reported {
+            return None;
+        }
+        if self
+            .last
+            .is_some_and(|t| t.elapsed() < SHED_NOTICE_INTERVAL)
+        {
+            return None;
+        }
+        self.reported = dropped;
+        self.last = Some(Instant::now());
+        Some(SttEvent::Error(format!(
+            "inference is falling behind: {dropped} chunk(s) shed so far"
+        )))
     }
 }
 
@@ -194,6 +234,24 @@ pub(crate) mod tests {
         assert!(!accepted && !evicted, "incoming partial dropped instead");
         assert!(q.iter().all(|c| c.kind == ChunkKind::Final));
         assert_eq!(q.len(), 3);
+    }
+
+    #[test]
+    fn shed_reporter_fires_on_first_drop_then_throttles() {
+        let shared = SharedQueue::new();
+        let mut reporter = ShedReporter::new();
+        // Nothing shed yet: silent.
+        assert!(reporter.poll(&shared).is_none());
+        // First shed reports immediately.
+        shared.dropped_chunks.store(3, Ordering::Relaxed);
+        let notice = reporter.poll(&shared).expect("first shed reports");
+        let SttEvent::Error(msg) = notice else {
+            panic!("expected error notice")
+        };
+        assert!(msg.contains("3 chunk(s)"), "{msg}");
+        // More sheds inside the throttle window stay quiet.
+        shared.dropped_chunks.store(9, Ordering::Relaxed);
+        assert!(reporter.poll(&shared).is_none(), "throttled");
     }
 
     #[test]

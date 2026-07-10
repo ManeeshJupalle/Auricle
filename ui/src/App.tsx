@@ -15,6 +15,7 @@ export function App() {
   const conn = useAuricle((s) => s.conn);
   const activeSession = useAuricle((s) => s.activeSession);
   const droppedPartials = useAuricle((s) => s.droppedPartials);
+  const notice = useAuricle((s) => s.notice);
 
   // A newly started session (from the sidebar or another client) takes focus.
   useEffect(() => {
@@ -43,6 +44,7 @@ export function App() {
       />
       <main className="main">
         <div className="main-status">
+          {notice && <span className="dim">{notice}</span>}
           {droppedPartials > 0 && (
             <span className="dim mono" title="partials shed for this consumer (finals unaffected)">
               ~{droppedPartials} partials shed

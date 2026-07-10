@@ -50,6 +50,8 @@ interface AuricleState {
   latencyMs: number | null;
   deviceLost: string | null;
   lastError: string | null;
+  /** Transient status line, e.g. a first-run model download blocking start. */
+  notice: string | null;
   droppedPartials: number;
   /** Bumped whenever the session list may have changed (start/stop/retitle). */
   sessionsVersion: number;
@@ -141,6 +143,7 @@ export const useAuricle = create<AuricleState>((set, get) => ({
   latencyMs: null,
   deviceLost: null,
   lastError: null,
+  notice: null,
   droppedPartials: 0,
   sessionsVersion: 0,
 
@@ -207,6 +210,13 @@ export const useAuricle = create<AuricleState>((set, get) => ({
       case 'vu':
         set({ vu: { ...get().vu, [ev.channel]: ev.rms } });
         break;
+      case 'model_download_started':
+        // The start request is blocked on a first-run model download;
+        // without this the Start button is a silent multi-minute hang.
+        set({
+          notice: `downloading ${ev.model} model (${ev.size_mb} MB) — first run only, recording starts when it finishes`,
+        });
+        break;
       case 'session_started':
         get().resetLive();
         set({
@@ -224,6 +234,7 @@ export const useAuricle = create<AuricleState>((set, get) => ({
           activeSession: null,
           vu: {},
           partialRowByChannel: {},
+          notice: null,
           sessionsVersion: get().sessionsVersion + 1,
         });
         break;
@@ -274,6 +285,7 @@ export const useAuricle = create<AuricleState>((set, get) => ({
       latencyMs: null,
       deviceLost: null,
       lastError: null,
+      notice: null,
       droppedPartials: 0,
       liveStartedAtMs: null,
     }),

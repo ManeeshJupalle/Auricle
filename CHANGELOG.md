@@ -2,6 +2,28 @@
 
 ## 0.1.0 (unreleased)
 
+Hardening pass (post-UI-redesign):
+
+- **Security:** same-origin enforcement for browser requests — foreign
+  pages can no longer open `/ws/live` and read transcripts (WebSocket
+  handshakes bypass CORS); tokenless loopback binds now also reject
+  non-localhost `Host` headers (DNS rebinding).
+- **Correctness:** crash recovery moved out of `Store::open` into the
+  engine — `auricle export` during a live recording no longer marks the
+  active session interrupted; `summarize` now honors the settings-store
+  default LLM provider.
+- **Robustness:** session stop is bounded (a wedged provider can't stick
+  the lifecycle in `stopping` forever); `auricle serve` stops the active
+  session cleanly on Ctrl+C instead of leaving it for crash recovery.
+- **Performance:** whisper-local models load once and are cached across
+  sessions (starts were re-reading 148–500 MB); the channel driver is
+  select-based, removing up to 50 ms of polling latency from the
+  capture→partial path; retained audio is 16-bit PCM (half the disk) and
+  served with HTTP Range support (streamed, seekable playback).
+- **Visibility:** first-run model downloads announce themselves over the
+  WebSocket (the UI shows progress instead of a silent hang); queue
+  shedding is reported live (throttled), not only at session end.
+
 Initial release: the engine, end to end.
 
 - **Capture (Windows):** simultaneous microphone + system-audio (WASAPI

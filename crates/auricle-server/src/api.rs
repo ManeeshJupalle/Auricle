@@ -13,6 +13,7 @@ use serde_json::json;
 
 use crate::engine::{Engine, EngineOptions, StartError, StartParams, StopError};
 use crate::export::render_markdown_full;
+use crate::store::Store;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -103,7 +104,7 @@ pub async fn serve(cfg: Config, data_root: PathBuf, bind_override: Option<String
         data_root: data_root.clone(),
         provider_override: None,
     })?;
-    let app = build_router(engine, token);
+    let app = build_router(engine.clone(), token);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -112,7 +113,35 @@ pub async fn serve(cfg: Config, data_root: PathBuf, bind_override: Option<String
         "auricle listening on http://{addr} (data: {})",
         data_root.display()
     );
-    axum::serve(listener, app).await.map_err(Error::Io)
+    // Run until Ctrl+C, then stop any active session cleanly before exiting
+    // — an intentional shutdown must not be recorded as an interrupted
+    // session. (No graceful connection drain: open WebSockets would hold
+    // the process forever; clients auto-reconnect.)
+    tokio::select! {
+        result = axum::serve(listener, app) => result.map_err(Error::Io),
+        _ = shutdown_on_ctrl_c(engine) => Ok(()),
+    }
+}
+
+async fn shutdown_on_ctrl_c(engine: Arc<Engine>) {
+    if tokio::signal::ctrl_c().await.is_err() {
+        // Can't install a handler: never resolve, run until killed.
+        std::future::pending::<()>().await;
+    }
+    if let Some(id) = engine.active_session() {
+        eprintln!("\nstopping active session {id} (Ctrl+C again to force quit) ...");
+        let _ = engine.stop_session(&id);
+        let stopped = async {
+            while engine.active_session().is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        };
+        tokio::select! {
+            _ = stopped => {}
+            _ = tokio::signal::ctrl_c() => eprintln!("force quit; session left for crash recovery"),
+        }
+    }
+    eprintln!("auricle stopped");
 }
 
 async fn auth_middleware(
@@ -120,6 +149,28 @@ async fn auth_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    // Browser-attached Origins must be same-origin (or another local page).
+    // CORS does not protect WebSocket handshakes: without this, any website
+    // could open ws://127.0.0.1:4820/ws/live and read meetings live.
+    let host = request
+        .headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    if let Some(origin) = request
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+    {
+        if !origin_allowed(origin, host.as_deref()) {
+            return forbidden("cross-origin requests are not allowed");
+        }
+    }
+    // Loopback binds run tokenless, so the request must actually address
+    // localhost — a DNS-rebound hostname resolving to 127.0.0.1 does not.
+    if state.token.is_none() && !host.as_deref().is_some_and(authority_is_loopback) {
+        return forbidden("requests must address the daemon as localhost");
+    }
     if let Some(expected) = &state.token {
         let ok = request
             .headers()
@@ -136,6 +187,40 @@ async fn auth_middleware(
         }
     }
     next.run(request).await
+}
+
+/// An Origin is acceptable when it is same-origin with the request's Host,
+/// or itself a local page (the Vite dev server on :5173 proxies here with
+/// its own origin; a local page is as trusted as any local process).
+fn origin_allowed(origin: &str, host: Option<&str>) -> bool {
+    let Some(authority) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false; // "null", file://, or malformed: no way to vouch
+    };
+    host.is_some_and(|h| authority.eq_ignore_ascii_case(h)) || authority_is_loopback(authority)
+}
+
+/// True when a `host[:port]` authority is localhost or a loopback IP
+/// (handles `127.0.0.1:4820`, `localhost`, `[::1]:4820`, raw `::1`).
+fn authority_is_loopback(authority: &str) -> bool {
+    let a = authority.trim();
+    let bare = if let Some(rest) = a.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else if a.matches(':').count() > 1 {
+        a // raw IPv6 literal: colons are part of the address, not a port
+    } else {
+        a.split(':').next().unwrap_or(a)
+    };
+    bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn forbidden(msg: &str) -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({"error": msg}))).into_response()
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -175,9 +260,12 @@ async fn devices() -> Response {
     }
 }
 
-async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let mut cfg = state.engine.config().clone();
-    if let Ok(settings) = state.engine.store().all_settings() {
+/// Overlay the DB settings that steer LLM use onto the TOML config
+/// (mirrors the engine's STT overlay; precedence: settings > config file).
+/// Shared by the providers/summarize endpoints and the post-stop
+/// auto-titler.
+pub(crate) fn overlay_llm_settings(cfg: &mut Config, store: &Store) {
+    if let Ok(settings) = store.all_settings() {
         if let Some(m) = settings.get("ollama_model").and_then(|v| v.as_str()) {
             cfg.llm.ollama.model = m.to_string();
         }
@@ -185,6 +273,11 @@ async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
             cfg.llm.provider = p.to_string();
         }
     }
+}
+
+async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let mut cfg = state.engine.config().clone();
+    overlay_llm_settings(&mut cfg, &state.engine.store());
     let cfg = &cfg;
     let data_root = crate::default_data_root().unwrap_or_default();
     let statuses: Vec<_> = auricle_stt::provider_statuses(cfg, &data_root.join("models"))
@@ -228,20 +321,10 @@ async fn summarize_session(
 ) -> Response {
     let mut cfg = state.engine.config().clone();
     let template_name = body.template.unwrap_or_else(|| "minutes".to_string());
-    let provider_id = body.provider.unwrap_or_else(|| cfg.llm.provider.clone());
-
     let store = state.engine.store();
-    // Settings overlay (mirrors the STT model overlay): lets the UI point
-    // Ollama at a model the user actually has pulled, and pick the default
-    // LLM provider (also used for post-stop auto-titles).
-    if let Ok(settings) = store.all_settings() {
-        if let Some(m) = settings.get("ollama_model").and_then(|v| v.as_str()) {
-            cfg.llm.ollama.model = m.to_string();
-        }
-        if let Some(p) = settings.get("llm_provider").and_then(|v| v.as_str()) {
-            cfg.llm.provider = p.to_string();
-        }
-    }
+    overlay_llm_settings(&mut cfg, &store);
+    // Precedence: request body > settings store > config file.
+    let provider_id = body.provider.unwrap_or_else(|| cfg.llm.provider.clone());
     let session = match store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return not_found(&id),
@@ -429,12 +512,16 @@ async fn delete_session(State(state): State<AppState>, Path(id): Path<String>) -
 }
 
 /// Serve a retained per-channel WAV (`mic` | `loopback`). Sessions recorded
-/// without `retain_raw_audio` have no audio and return 404.
+/// without `retain_raw_audio` have no audio and return 404. Delegates to
+/// tower-http's ServeFile: retained WAVs can be hours long, so they are
+/// streamed from disk with Range/206 support — which is also what lets the
+/// UI's click-timestamp-to-seek work without re-downloading the file.
 // FUTURE: re-transcribe a stored session with a different provider from
 // these WAVs.
 async fn session_audio(
     State(state): State<AppState>,
     Path((id, channel)): Path<(String, String)>,
+    request: axum::extract::Request,
 ) -> Response {
     if channel != "mic" && channel != "loopback" {
         return (
@@ -455,13 +542,16 @@ async fn session_audio(
         )
             .into_response();
     };
-    match tokio::fs::read(path).await {
-        Ok(bytes) => ([("content-type", "audio/wav")], bytes).into_response(),
-        Err(_) => (
+    if tokio::fs::metadata(path).await.is_err() {
+        return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "retained audio file is missing on disk"})),
         )
-            .into_response(),
+            .into_response();
+    }
+    match tower::ServiceExt::oneshot(tower_http::services::ServeFile::new(path), request).await {
+        Ok(resp) => resp.into_response(),
+        Err(infallible) => match infallible {},
     }
 }
 
@@ -565,4 +655,55 @@ fn internal(msg: String) -> Response {
         Json(json!({"error": msg})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_authorities_are_recognized() {
+        for ok in [
+            "127.0.0.1:4820",
+            "127.0.0.1",
+            "localhost:4820",
+            "LOCALHOST",
+            "[::1]:4820",
+            "::1",
+            "127.0.0.53",
+        ] {
+            assert!(authority_is_loopback(ok), "{ok} should be loopback");
+        }
+        for bad in [
+            "evil.com",
+            "evil.com:4820",
+            "192.168.1.10:4820",
+            "127.0.0.1.evil.com", // rebinding-style tricks
+            "[2001:db8::1]:4820",
+            "",
+        ] {
+            assert!(!authority_is_loopback(bad), "{bad} must not be loopback");
+        }
+    }
+
+    #[test]
+    fn origin_policy_same_origin_or_local() {
+        let host = Some("127.0.0.1:4820");
+        // Same-origin (the bundled UI) and local dev pages are fine.
+        assert!(origin_allowed("http://127.0.0.1:4820", host));
+        assert!(origin_allowed("http://localhost:5173", host)); // vite dev
+        assert!(origin_allowed("http://[::1]:4820", host));
+        // Cross-site pages are exactly what the check exists to stop.
+        assert!(!origin_allowed("https://evil.com", host));
+        assert!(!origin_allowed("http://evil.com:4820", host));
+        assert!(!origin_allowed("null", host));
+        assert!(!origin_allowed("file://evil", host));
+        // Non-loopback origin is accepted only when truly same-origin
+        // (token-protected remote binds serve the UI from their own host).
+        assert!(origin_allowed("http://myhost:9000", Some("myhost:9000")));
+        assert!(!origin_allowed(
+            "http://myhost:9000",
+            Some("otherhost:9000")
+        ));
+    }
 }

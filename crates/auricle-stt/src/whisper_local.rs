@@ -7,7 +7,7 @@ use auricle_core::{AudioChunk, ChunkKind, Error, Result, Segment, SttEvent};
 use tokio::sync::mpsc;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::queue::{pop_next, SharedQueue};
+use crate::queue::{pop_next, SharedQueue, ShedReporter};
 use crate::{SessionCfg, SttKind, SttProvider, SttSession};
 
 /// whisper.cpp skips inputs shorter than ~1 s; pad chunks up to this length.
@@ -124,7 +124,13 @@ async fn worker_loop(
         }
     };
 
+    let mut shed = ShedReporter::new();
     loop {
+        // Live overload visibility: report shedding as it happens, not
+        // only in the end-of-session total.
+        if let Some(notice) = shed.poll(&shared) {
+            let _ = tx.send(notice);
+        }
         let chunk = pop_next(&mut shared.queue.lock().unwrap());
         let Some(chunk) = chunk else {
             if shared.closed.load(Ordering::Relaxed) {

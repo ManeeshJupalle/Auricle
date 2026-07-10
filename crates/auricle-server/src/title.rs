@@ -104,14 +104,7 @@ pub async fn autotitle_session(
 
 async fn llm_title(cfg: &Config, store: &Store, segments: &[SegmentRow]) -> Option<String> {
     let mut cfg = cfg.clone();
-    if let Ok(settings) = store.all_settings() {
-        if let Some(m) = settings.get("ollama_model").and_then(|v| v.as_str()) {
-            cfg.llm.ollama.model = m.to_string();
-        }
-        if let Some(p) = settings.get("llm_provider").and_then(|v| v.as_str()) {
-            cfg.llm.provider = p.to_string();
-        }
-    }
+    crate::api::overlay_llm_settings(&mut cfg, store);
     let provider = auricle_llm::create_llm_provider(&cfg.llm.provider, &cfg).ok()?;
     let mut transcript = crate::export::render_transcript_text(segments);
     transcript.truncate(MAX_PROMPT_CHARS);

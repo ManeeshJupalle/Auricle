@@ -34,6 +34,14 @@ pub enum WsEvent {
         channel: String,
         rms: f32,
     },
+    /// A session start is blocked on a first-run model download (whisper
+    /// models are 148–500 MB; the start request completes when it's done).
+    /// Without this the UI's Start button just hangs silently for minutes.
+    ModelDownloadStarted {
+        session: String,
+        model: String,
+        size_mb: u64,
+    },
     SessionStarted {
         session: String,
         title: String,
@@ -119,6 +127,22 @@ mod tests {
         assert_eq!(v["type"], "vu");
         assert_eq!(v["channel"], "loopback");
         assert!((v["rms"].as_f64().unwrap() - 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn model_download_event_serializes() {
+        let v: serde_json::Value = serde_json::from_str(
+            &WsEvent::ModelDownloadStarted {
+                session: "s1".into(),
+                model: "base.en".into(),
+                size_mb: 141,
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(v["type"], "model_download_started");
+        assert_eq!(v["model"], "base.en");
+        assert_eq!(v["size_mb"], 141);
     }
 
     #[test]
