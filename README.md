@@ -39,11 +39,15 @@ auricle serve            # daemon + web UI on http://127.0.0.1:4820
 
 # or skip the server entirely:
 auricle record --stt whisper-local --model base.en   # live transcript in your terminal
+auricle peek             # OCR the window you're looking at (local, on-demand)
 ```
 
-Open `http://127.0.0.1:4820`, press **Start session**, play your meeting —
+Open `http://127.0.0.1:4820`, press **Start recording**, play your meeting —
 the system-audio side is labeled **Them**, your microphone is **You**.
-Stop, then export markdown or summarize with a local (Ollama) or cloud LLM.
+Sessions get LLM auto-titles after stop, full-text search in the sidebar,
+synchronized audio playback when raw-audio retention is on, and one-click
+summaries (minutes, action items, standup, 1:1) with a local (Ollama) or
+cloud LLM. Everything the UI does goes through the public API.
 
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
@@ -66,7 +70,29 @@ use.
   timestamps (WASAPI loopback delivers *nothing* while the system is
   silent — measured, not assumed).
 - Two-channel speaker labels come free from the capture topology.
+- The daemon defends its localhost boundary: browser requests are
+  same-origin enforced (WebSocket handshakes bypass CORS — a foreign page
+  cannot read your live transcript) and tokenless loopback binds reject
+  non-localhost `Host` headers (DNS rebinding).
 - Full API reference with real captured examples: [docs/API.md](docs/API.md).
+
+## Screen peek
+
+Auricle can also read your screen — deliberately, one frame at a time.
+`auricle peek` (or `POST /api/v1/peek`) captures the active window via
+Windows.Graphics.Capture, OCRs it with the OS-local Windows.Media.Ocr,
+and returns reading-order text with the window title and app name.
+Warm capture→text is 175–300 ms on 1080p windows (measured:
+[docs/PHASE7_VISION_REPORT.md](docs/PHASE7_VISION_REPORT.md)). This is
+the first piece of a screen-aware copilot layer, built under constraints
+that are design rules, not marketing:
+
+- **No concealment, ever.** No `SetWindowDisplayAffinity`, no
+  hide-from-screen-share tricks — anywhere in the codebase.
+- **No continuous surveillance.** Capture happens only on an explicit
+  command; there is no background screenshot loop and no keylogging.
+- **Nothing screen-derived is persisted.** OCR text lives in the response
+  and nowhere else.
 
 ## Performance
 
@@ -91,11 +117,15 @@ the production pipeline — full methodology and budget misses in
   whisper-local `small.en` cannot keep up with continuous speech on
   2019-class laptop CPUs (numbers in benches/RESULTS.md); `base.en` or a
   cloud provider are the realistic choices there.
+- **Screen-peek OCR is Windows' built-in engine.** Near-perfect on
+  article text, honest-but-imperfect on dense small fonts (`auricle` can
+  come back as `auride` in a file tree); per-window-type quality notes in
+  the phase report.
 - One recording session at a time, by design.
 
 ## Repo layout
 
-`crates/` — core, capture, pipeline, stt, llm, server, cli ·
+`crates/` — core, capture, pipeline, stt, llm, vision, server, cli ·
 `ui/` — Vite/React client (embedded into the binary) ·
 `fixtures/` — real captured API payloads driving the tests ·
 `benches/` — latency harness + results ·
