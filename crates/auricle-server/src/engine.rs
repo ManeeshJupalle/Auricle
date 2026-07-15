@@ -124,6 +124,12 @@ impl Engine {
         self.important_tx.subscribe()
     }
 
+    /// Publish on the important lane (ask answer mirroring). No receivers
+    /// is not an error — nobody may be watching the socket.
+    pub(crate) fn publish_important(&self, ev: WsEvent) {
+        let _ = self.important_tx.send(ev);
+    }
+
     pub fn subscribe_partials(&self) -> broadcast::Receiver<WsEvent> {
         self.partial_tx.subscribe()
     }
@@ -472,14 +478,14 @@ fn map_device_err(e: Error) -> StartError {
     }
 }
 
-fn unix_ms() -> u128 {
+pub(crate) fn unix_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
 }
 
-fn unix_secs() -> i64 {
+pub(crate) fn unix_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

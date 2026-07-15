@@ -76,23 +76,47 @@ use.
   non-localhost `Host` headers (DNS rebinding).
 - Full API reference with real captured examples: [docs/API.md](docs/API.md).
 
-## Screen peek
+## Screen peek + ask (the copilot service)
 
 Auricle can also read your screen — deliberately, one frame at a time.
 `auricle peek` (or `POST /api/v1/peek`) captures the active window via
 Windows.Graphics.Capture, OCRs it with the OS-local Windows.Media.Ocr,
 and returns reading-order text with the window title and app name.
 Warm capture→text is 175–300 ms on 1080p windows (measured:
-[docs/PHASE7_VISION_REPORT.md](docs/PHASE7_VISION_REPORT.md)). This is
-the first piece of a screen-aware copilot layer, built under constraints
-that are design rules, not marketing:
+[docs/PHASE7_VISION_REPORT.md](docs/PHASE7_VISION_REPORT.md)).
+
+On top of that sits the assistant service: `POST /api/v1/ask` combines
+your question, an on-demand screen capture, and the last few minutes of
+the live transcript (an in-memory rolling window — no database reads),
+and streams an LLM answer as SSE, mirrored as `answer_delta` events on
+the same WebSocket the UI already holds. Follow-up questions
+(`follow_up: true`) see your earlier asks from in-memory history.
+Ollama, Groq, or any OpenAI-compatible endpoint — same swappable
+provider story as everything else:
+
+```
+curl -N -X POST http://127.0.0.1:4820/api/v1/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"what was just being discussed and what is on my screen?",
+       "include_screen":true,"include_transcript":true}'
+```
+
+Measured time-to-first-token: **0.7 s with Groq** (budget < 1.5 s);
+local Ollama misses its 4 s budget on 2019-class hardware with the
+models tested — honest numbers and root causes (reasoning models think
+before they speak; 14B prompt evaluation is slow) in
+[docs/PHASE8_ASSISTANT_REPORT.md](docs/PHASE8_ASSISTANT_REPORT.md).
+
+The copilot layer is built under constraints that are design rules, not
+marketing:
 
 - **No concealment, ever.** No `SetWindowDisplayAffinity`, no
   hide-from-screen-share tricks — anywhere in the codebase.
 - **No continuous surveillance.** Capture happens only on an explicit
   command; there is no background screenshot loop and no keylogging.
-- **Nothing screen-derived is persisted.** OCR text lives in the response
-  and nowhere else.
+- **Nothing screen- or question-derived is persisted** unless you set
+  `copilot.retain_context = true` (default off — with it off, the
+  database schema never even grows the table).
 
 ## Performance
 

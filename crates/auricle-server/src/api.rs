@@ -20,8 +20,12 @@ pub struct AppState {
     pub engine: Arc<Engine>,
     /// Bearer token required on every request (None on localhost binds).
     pub token: Option<Arc<String>>,
-    /// On-demand screen capture + OCR for /peek (mocked in tests).
+    /// On-demand screen capture + OCR for /peek and /ask (mocked in tests).
     pub screen_reader: Arc<dyn auricle_vision::ScreenReader>,
+    /// Rolling in-memory window of final segments feeding /ask.
+    pub(crate) ring: Arc<crate::ring::TranscriptRing>,
+    /// In-memory follow-up memory for /ask.
+    pub(crate) ask_history: Arc<crate::ask::AskHistory>,
 }
 
 /// Build the router. Exposed for the integration tests, which bind an
@@ -34,16 +38,22 @@ pub fn build_router(engine: Arc<Engine>, token: Option<String>) -> Router {
     )
 }
 
-/// `build_router` with an injected `ScreenReader` (peek endpoint tests).
+/// `build_router` with an injected `ScreenReader` (peek/ask endpoint
+/// tests). Must run inside a tokio runtime: it spawns the transcript-ring
+/// feeder on the engine's broadcast channel.
 pub fn build_router_with_reader(
     engine: Arc<Engine>,
     token: Option<String>,
     screen_reader: Arc<dyn auricle_vision::ScreenReader>,
 ) -> Router {
+    let ring = crate::ring::TranscriptRing::new(engine.config().copilot.transcript_window_min);
+    ring.spawn_feeder(engine.subscribe_important());
     let state = AppState {
         engine,
         token: token.map(Arc::new),
         screen_reader,
+        ring,
+        ask_history: Arc::new(crate::ask::AskHistory::default()),
     };
     Router::new()
         .route("/api/v1/health", get(health))
@@ -62,6 +72,7 @@ pub fn build_router_with_reader(
         .route("/api/v1/sessions/{id}/summarize", post(summarize_session))
         .route("/api/v1/settings", get(get_settings).put(put_settings))
         .route("/api/v1/peek", post(peek))
+        .route("/api/v1/ask", post(crate::ask::ask))
         .route("/ws/live", get(crate::ws::ws_handler))
         // Embedded web UI (ui/dist via rust-embed): everything that isn't
         // an API route serves static files, unknown paths fall back to
@@ -691,7 +702,7 @@ fn not_found(id: &str) -> Response {
         .into_response()
 }
 
-fn internal(msg: String) -> Response {
+pub(crate) fn internal(msg: String) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({"error": msg})),

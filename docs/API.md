@@ -251,6 +251,75 @@ can't produce a capture right now (no eligible window, window minimized
 or gone — retry later), `500` for machine-level failures (capture
 unsupported/blocked, no OCR language pack, capture/OCR error).
 
+## POST /api/v1/ask
+
+The assistant service (the copilot's engine-side half): builds a prompt
+from the question, optional on-demand screen OCR, an in-memory rolling
+window of the live transcript (last `copilot.transcript_window_min`
+minutes, default 10), and optional follow-up history — then streams the
+LLM answer as Server-Sent Events. Every fragment is simultaneously
+mirrored on `/ws/live` as `answer_delta` / `answer_done` / `ask_error`
+events, so a UI holding the socket needs no second connection.
+
+Body fields: `question` (required), `include_screen`,
+`include_transcript` (both default false), `provider` (default:
+`[copilot].provider`, falling back to the LLM settings/config default),
+`session_id` (attach to a stored session — its title enters the prompt
+and scopes follow-up history; default: the active session, if any),
+`follow_up` (include prior Q/A from in-memory history), `exclude_hwnd`
+(window handle excluded from screen capture; used by the Phase 9
+overlay so it never OCRs its own answer).
+
+Nothing question- or screen-derived is persisted unless
+`[copilot].retain_context = true` (default off — with retention off the
+`asks` table is never even created). Ask history for follow-ups is
+in-memory only and dies with the daemon.
+
+Real captured exchange (Groq, while a session was recording a meeting
+about a beta rollout and a briefing page was the foreground window;
+abridged mid-stream):
+
+```
+$ curl -N -X POST http://127.0.0.1:4820/api/v1/ask \
+    -H "Content-Type: application/json" \
+    -d '{"question":"what was just being discussed and what'\''s on my screen?",
+         "include_screen":true,"include_transcript":true,"provider":"groq"}'
+data: {"ask_id":"a19f6718d151","model":"llama-3.3-70b-versatile","provider":"groq","screen":{"app_name":"almanac","ocr_ms":15,"window_title":"Almanac"},"transcript_segments":3,"type":"ask_started"}
+
+data: {"ask_id":"a19f6718d151","text":"*","type":"answer_delta"}
+
+data: {"ask_id":"a19f6718d151","text":" The","type":"answer_delta"}
+
+data: {"ask_id":"a19f6718d151","text":" recent","type":"answer_delta"}
+…
+data: {"ask_id":"a19f6718d151","text":"\".","type":"answer_delta"}
+
+data: {"ask_id":"a19f6718d151","type":"answer_done","usage":{"completion_tokens":39,"prompt_tokens":366,"total_tokens":405}}
+```
+
+The opening `ask_started` event echoes exactly what context was
+captured (the honesty affordance the overlay's context chips are built
+from). `usage` is the provider's token report, when it sends one. SSE
+keep-alive comments (`:`) bridge long silent stretches — a local
+reasoning model can think for a long time before its first visible
+token (see docs/PHASE8_ASSISTANT_REPORT.md for measured numbers).
+
+Errors before the stream starts are plain JSON: `400` empty question /
+unknown provider, `404` unknown `session_id`, `409` when the chosen LLM
+provider is not ready (e.g. key env var unset) or when the screen
+capture hit a transient desktop state (window minimized/gone — retry),
+`500` for machine-level capture failures. After the stream has started,
+failures arrive as an `ask_error` event on both surfaces:
+
+```
+data: {"ask_id":"a19f671…","type":"ask_error","message":"llm ollama returned HTTP 404: …"}
+```
+
+Config (`[copilot]` in auricle.toml): `transcript_window_min` (10),
+`max_screen_chars` (6000), `retain_context` (false),
+`provider` (unset → LLM default), plus the Phase 9 overlay hotkeys
+`hotkey_summon` / `hotkey_quick`.
+
 ## WebSocket /ws/live
 
 Server-push JSON events, one per text frame. Real captured sequence:
@@ -273,6 +342,9 @@ Event types:
 | `session_started` | session, title, stt_provider | |
 | `session_stopped` | session | emitted after flush + persistence complete |
 | `session_updated` | session, title | post-stop auto-title landed (see POST /sessions) |
+| `answer_delta` | ask_id, text | one fragment of an ask's streamed answer (mirrors the ask's SSE response) |
+| `answer_done` | ask_id, usage | an ask completed; `usage` when the provider reported tokens |
+| `ask_error` | ask_id, message | an ask failed (upstream LLM error, screen capture failure) |
 | `device_lost` | session, channel, message | a capture device failed mid-session |
 | `error` | session, message | recoverable engine/provider errors |
 | `lag` | dropped_partials | sent to a slow consumer: partials were dropped for it (finals are never dropped) |

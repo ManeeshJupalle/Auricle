@@ -203,6 +203,39 @@ impl Default for OpenAiLlmConfig {
     }
 }
 
+/// The `[copilot]` section: the screen-aware assistant layer
+/// (COPILOT_ARCHITECTURE §3). Hotkeys are consumed by the Phase 9 overlay;
+/// they live here so one config section covers the whole copilot.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct CopilotConfig {
+    /// Rolling in-memory transcript window fed to asks, in minutes.
+    pub transcript_window_min: u64,
+    /// Screen OCR text is truncated to this many characters before it
+    /// enters the prompt.
+    pub max_screen_chars: usize,
+    /// Persist asks (question + screen context + answer) to the database.
+    /// Default OFF: nothing screen- or question-derived is stored.
+    pub retain_context: bool,
+    pub hotkey_summon: String,
+    pub hotkey_quick: String,
+    /// LLM provider for asks; None falls back to `[llm].provider`.
+    pub provider: Option<String>,
+}
+
+impl Default for CopilotConfig {
+    fn default() -> Self {
+        CopilotConfig {
+            transcript_window_min: 10,
+            max_screen_chars: 6_000,
+            retain_context: false,
+            hotkey_summon: "Ctrl+Shift+Space".to_string(),
+            hotkey_quick: "Ctrl+Shift+A".to_string(),
+            provider: None,
+        }
+    }
+}
+
 /// The `[server]` section.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
@@ -231,6 +264,7 @@ pub struct Config {
     pub audio: AudioConfig,
     pub stt: SttConfig,
     pub llm: LlmConfig,
+    pub copilot: CopilotConfig,
     pub server: ServerConfig,
 }
 
@@ -345,6 +379,26 @@ base_url = "http://localhost:8080/v1"
         assert_eq!(cfg.stt.deepgram.api_key_env, "MY_DG_KEY");
         assert_eq!(cfg.stt.groq_whisper.model, "whisper-large-v3");
         assert_eq!(cfg.stt.openai_compat.base_url, "http://localhost:8080/v1");
+    }
+
+    #[test]
+    fn copilot_defaults_and_overrides() {
+        let cfg = Config::parse("").unwrap();
+        assert_eq!(cfg.copilot.transcript_window_min, 10);
+        assert_eq!(cfg.copilot.max_screen_chars, 6_000);
+        assert!(!cfg.copilot.retain_context, "privacy default: off");
+        assert_eq!(cfg.copilot.hotkey_summon, "Ctrl+Shift+Space");
+        assert_eq!(cfg.copilot.hotkey_quick, "Ctrl+Shift+A");
+        assert_eq!(cfg.copilot.provider, None, "falls back to [llm].provider");
+
+        let cfg = Config::parse(
+            "[copilot]\ntranscript_window_min = 5\nretain_context = true\nprovider = \"groq\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.copilot.transcript_window_min, 5);
+        assert!(cfg.copilot.retain_context);
+        assert_eq!(cfg.copilot.provider.as_deref(), Some("groq"));
+        assert_eq!(cfg.copilot.max_screen_chars, 6_000);
     }
 
     #[test]

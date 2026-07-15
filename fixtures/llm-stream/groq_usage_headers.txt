@@ -1,0 +1,22 @@
+HTTP/1.1 200 OK
+Date: Wed, 15 Jul 2026 17:56:58 GMT
+Content-Type: text/event-stream
+Transfer-Encoding: chunked
+Connection: keep-alive
+Cache-Control: no-cache
+Server: cloudflare
+vary: Origin
+x-groq-region: msp
+x-ratelimit-limit-requests: 1000
+x-ratelimit-limit-tokens: 12000
+x-ratelimit-remaining-requests: 999
+x-ratelimit-remaining-tokens: 11945
+x-ratelimit-reset-requests: 1m26.4s
+x-ratelimit-reset-tokens: 275ms
+x-request-id: req_01kxkeseznewfrw1pq9z8xsdrj
+cf-cache-status: DYNAMIC
+set-cookie: __cf_bm=JEfa5vF6X6K_Mkd98Ob7H56H28UbSvYqghQaz_aYpZQ-1784138218.447084-1.0.1.1-Inwp7AFojUF3yoAka8UxZnvC.5QKuEaWXY2Y1o16VpASXtXwqOqjzhXBhMJ2ByDRUMN6v8GHOWVVY1dyAS2cu6m_RW.CFdmMexelJqyZCNL5vj1_kiMWVEHhdwmGIVQw; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Wed, 15 Jul 2026 18:26:58 GMT
+Strict-Transport-Security: max-age=15552000
+CF-RAY: a1baa5994fac1b04-ORD
+alt-svc: h3=":443"; ma=86400
+

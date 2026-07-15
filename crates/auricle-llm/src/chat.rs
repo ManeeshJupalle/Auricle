@@ -9,8 +9,10 @@
 
 use async_trait::async_trait;
 use auricle_core::{Error, Result};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use crate::stream::{parse_stream_frame, SseParser, TokenUsage, DONE_SENTINEL};
 use crate::LlmProvider;
 
 #[derive(Debug, Serialize)]
@@ -19,6 +21,15 @@ struct ChatRequest<'a> {
     messages: [ChatMessage<'a>; 2],
     temperature: f32,
     stream: bool,
+    /// Ollama sends no usage frame without this; Groq tolerates it (and
+    /// reports usage on the finish chunk regardless) — fixture-verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +71,31 @@ impl OpenAiChatProvider {
             client: reqwest::Client::new(),
         }
     }
+
+    /// POST the request and surface non-2xx as a clean error. Both
+    /// providers answer `stream: true` errors with a plain JSON body and a
+    /// real HTTP status (fixtures `*_badmodel_error.txt`), so this check
+    /// covers streaming and non-streaming alike.
+    async fn send_checked(&self, request: &ChatRequest<'_>) -> Result<reqwest::Response> {
+        let mut req = self.client.post(&self.endpoint).json(request);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| Error::Config(format!("llm request to {} failed: {e}", self.endpoint)))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let head: String = body.chars().take(300).collect();
+            return Err(Error::Config(format!(
+                "llm {} returned HTTP {status}: {head}",
+                self.id
+            )));
+        }
+        Ok(resp)
+    }
 }
 
 #[async_trait]
@@ -87,24 +123,9 @@ impl LlmProvider for OpenAiChatProvider {
             ],
             temperature: 0.3,
             stream: false,
+            stream_options: None,
         };
-        let mut req = self.client.post(&self.endpoint).json(&request);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| Error::Config(format!("llm request to {} failed: {e}", self.endpoint)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            let head: String = body.chars().take(300).collect();
-            return Err(Error::Config(format!(
-                "llm {} returned HTTP {status}: {head}",
-                self.id
-            )));
-        }
+        let resp = self.send_checked(&request).await?;
         let body: ChatResponse = resp
             .json()
             .await
@@ -121,6 +142,68 @@ impl LlmProvider for OpenAiChatProvider {
             )));
         }
         Ok(content)
+    }
+
+    async fn chat_stream(
+        &self,
+        system: &str,
+        user: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<Option<TokenUsage>> {
+        let request = ChatRequest {
+            model: &self.model,
+            messages: [
+                ChatMessage {
+                    role: "system",
+                    content: system,
+                },
+                ChatMessage {
+                    role: "user",
+                    content: user,
+                },
+            ],
+            temperature: 0.3,
+            stream: true,
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
+        };
+        let resp = self.send_checked(&request).await?;
+        let mut body = resp.bytes_stream();
+        let mut parser = SseParser::new();
+        let mut usage = None;
+        let mut sent_any = false;
+        'stream: while let Some(chunk) = body.next().await {
+            let chunk =
+                chunk.map_err(|e| Error::Config(format!("llm {} stream failed: {e}", self.id)))?;
+            for payload in parser.push(&chunk) {
+                if payload == DONE_SENTINEL {
+                    break 'stream;
+                }
+                let frame = parse_stream_frame(&payload).map_err(|e| {
+                    Error::Config(format!("llm {} sent an unparseable frame: {e}", self.id))
+                })?;
+                if frame.usage.is_some() {
+                    usage = frame.usage;
+                }
+                if let Some(delta) = frame.delta {
+                    if tx.send(delta).await.is_err() {
+                        return Ok(usage); // consumer gone: abandon quietly
+                    }
+                    sent_any = true;
+                }
+            }
+        }
+        if !sent_any {
+            // A reasoning model can think its way to a stop with no
+            // answer content at all; treat it like the empty completion
+            // in `complete`.
+            return Err(Error::Config(format!(
+                "llm {} streamed an empty completion",
+                self.id
+            )));
+        }
+        Ok(usage)
     }
 }
 

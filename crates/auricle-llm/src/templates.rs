@@ -12,6 +12,10 @@ pub const DEFAULT_TEMPLATES: &[(&str, &str)] = &[
     ("action-items", include_str!("../templates/action-items.md")),
     ("standup", include_str!("../templates/standup.md")),
     ("1on1", include_str!("../templates/1on1.md")),
+    // The copilot ask system prompt — not a summary template, but shipped
+    // and overridden through the same mechanism (COPILOT_ARCHITECTURE
+    // §2.2: "lives with the other templates, user-overridable").
+    ("copilot", include_str!("../templates/copilot.md")),
 ];
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -93,7 +97,7 @@ mod tests {
             let text = load_template(dir, name).unwrap();
             assert!(text.contains("transcript"), "{name} looks like a prompt");
         }
-        assert_eq!(list_templates(dir).len(), 4);
+        assert_eq!(list_templates(dir).len(), 5);
     }
 
     #[test]
@@ -111,7 +115,7 @@ mod tests {
         assert!(load_template(&dir, "standup").unwrap().contains("Blockers"));
 
         let list = list_templates(&dir);
-        assert_eq!(list.len(), 5);
+        assert_eq!(list.len(), 6);
         let minutes = list.iter().find(|t| t.name == "minutes").unwrap();
         assert!(minutes.overridden);
         let standup = list.iter().find(|t| t.name == "standup").unwrap();

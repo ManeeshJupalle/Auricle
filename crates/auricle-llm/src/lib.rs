@@ -5,6 +5,7 @@
 
 mod chat;
 mod mapreduce;
+mod stream;
 mod templates;
 
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use auricle_core::{Config, Error, Result};
 
 pub use chat::OpenAiChatProvider;
 pub use mapreduce::{chunk_by_lines, estimate_tokens, summarize, MAP_REDUCE_TOKEN_THRESHOLD};
+pub use stream::{parse_stream_frame, FrameOut, SseParser, TokenUsage, DONE_SENTINEL};
 pub use templates::{list_templates, load_template, TemplateInfo, DEFAULT_TEMPLATES};
 
 // PHASE-NEXT: native Anthropic variant — skipped in this build because no
@@ -26,6 +28,24 @@ pub trait LlmProvider: Send + Sync {
     fn model(&self) -> &str;
     /// One chat completion: system prompt + user content -> assistant text.
     async fn complete(&self, system: &str, user: &str) -> Result<String>;
+
+    /// Streaming chat completion: answer fragments are delivered through
+    /// `tx` as they arrive; returns the provider-reported token usage (if
+    /// any) once the stream ends. A closed receiver aborts the stream
+    /// without error — the consumer walked away.
+    ///
+    /// Default: wraps [`complete`](Self::complete), delivering the whole
+    /// answer as one fragment. Providers with native streaming override it.
+    async fn chat_stream(
+        &self,
+        system: &str,
+        user: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<Option<TokenUsage>> {
+        let text = self.complete(system, user).await?;
+        let _ = tx.send(text).await;
+        Ok(None)
+    }
 }
 
 /// Readiness of one LLM provider for the API/UI pickers.

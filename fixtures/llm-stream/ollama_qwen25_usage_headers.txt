@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Date: Wed, 15 Jul 2026 17:56:25 GMT
+Transfer-Encoding: chunked
+

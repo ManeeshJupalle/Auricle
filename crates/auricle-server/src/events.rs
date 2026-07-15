@@ -56,6 +56,22 @@ pub enum WsEvent {
         session: String,
         title: String,
     },
+    /// One streamed fragment of an ask's answer (mirrors the ask's SSE
+    /// response so the overlay can ride the socket it already holds).
+    AnswerDelta {
+        ask_id: String,
+        text: String,
+    },
+    /// An ask's answer completed; `usage` when the provider reported it.
+    AnswerDone {
+        ask_id: String,
+        usage: Option<auricle_llm::TokenUsage>,
+    },
+    /// An ask failed (upstream LLM error, unusable context, …).
+    AskError {
+        ask_id: String,
+        message: String,
+    },
     DeviceLost {
         session: String,
         channel: String,
@@ -143,6 +159,47 @@ mod tests {
         assert_eq!(v["type"], "model_download_started");
         assert_eq!(v["model"], "base.en");
         assert_eq!(v["size_mb"], 141);
+    }
+
+    #[test]
+    fn ask_events_serialize() {
+        let v: serde_json::Value = serde_json::from_str(
+            &WsEvent::AnswerDelta {
+                ask_id: "a1".into(),
+                text: "The chunker".into(),
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(v["type"], "answer_delta");
+        assert_eq!(v["ask_id"], "a1");
+        assert_eq!(v["text"], "The chunker");
+
+        let v: serde_json::Value = serde_json::from_str(
+            &WsEvent::AnswerDone {
+                ask_id: "a1".into(),
+                usage: Some(auricle_llm::TokenUsage {
+                    prompt_tokens: 54,
+                    completion_tokens: 21,
+                    total_tokens: 75,
+                }),
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(v["type"], "answer_done");
+        assert_eq!(v["usage"]["total_tokens"], 75);
+
+        let v: serde_json::Value = serde_json::from_str(
+            &WsEvent::AskError {
+                ask_id: "a1".into(),
+                message: "llm ollama returned HTTP 404".into(),
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(v["type"], "ask_error");
+        assert!(v["message"].as_str().unwrap().contains("404"));
     }
 
     #[test]

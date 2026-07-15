@@ -65,7 +65,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signa
 async-trait = "0.1"
 whisper-rs = "0.16"
 voice_activity_detector = "0.2.1"
-reqwest = { version = "0.12", features = ["multipart", "json"] }
+# `stream` exposes bytes_stream() for SSE chat streaming (auricle-llm).
+reqwest = { version = "0.12", features = ["multipart", "json", "stream"] }
 sha2 = "0.10"
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 # Stream/Sink combinators for the tungstenite WebSocket (split/send/next).

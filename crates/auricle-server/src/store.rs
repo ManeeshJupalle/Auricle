@@ -375,6 +375,70 @@ impl Store {
         Ok(rows)
     }
 
+    /// Persist one ask (question + optional screen context + answer).
+    ///
+    /// Deliberately NOT part of [`MIGRATIONS`]: the `asks` table exists
+    /// only after the first persisted ask, and the caller may call this
+    /// only when `copilot.retain_context = true`. With retention off
+    /// (the default) nothing question- or screen-derived ever reaches
+    /// this database — the table is never even created.
+    pub fn insert_ask(
+        &self,
+        session_id: Option<&str>,
+        question: &str,
+        screen_context: Option<&str>,
+        answer: &str,
+        provider: &str,
+        created_at: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS asks(
+                id INTEGER PRIMARY KEY,
+                session_id TEXT,
+                question TEXT NOT NULL,
+                screen_context TEXT,
+                answer TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                created_at INT NOT NULL
+             );",
+        )
+        .map_err(db_err)?;
+        conn.execute(
+            "INSERT INTO asks(session_id, question, screen_context, answer, provider, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                session_id,
+                question,
+                screen_context,
+                answer,
+                provider,
+                created_at
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Test/verification surface: does the `asks` table exist, and how
+    /// many rows does it hold? `None` = the table was never created.
+    pub fn asks_count(&self) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='asks'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_err)?;
+        if exists == 0 {
+            return Ok(None);
+        }
+        conn.query_row("SELECT COUNT(*) FROM asks", [], |r| r.get(0))
+            .map(Some)
+            .map_err(db_err)
+    }
+
     pub fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -638,6 +702,45 @@ mod tests {
         assert_eq!(rows[1].template, "action-items");
         assert!(rows[0].id > 0);
         assert!(store.get_summaries("other").unwrap().is_empty());
+    }
+
+    #[test]
+    fn asks_table_does_not_exist_until_the_first_persisted_ask() {
+        let path = temp_db("asks");
+        let store = Store::open(&path).unwrap();
+        // Opening (and migrating) the store must not create the table:
+        // with retain_context off, insert_ask is never called and the
+        // schema itself carries no trace of the copilot.
+        assert_eq!(store.asks_count().unwrap(), None);
+
+        let id = store
+            .insert_ask(
+                Some("s1"),
+                "what's on screen?",
+                Some("{\"window_title\":\"Jira\"}"),
+                "A sprint board.",
+                "ollama",
+                1_700_000_000,
+            )
+            .unwrap();
+        assert!(id > 0);
+        let id2 = store
+            .insert_ask(
+                None,
+                "and without a session?",
+                None,
+                "Works.",
+                "groq",
+                1_700_000_001,
+            )
+            .unwrap();
+        assert!(id2 > id);
+        assert_eq!(store.asks_count().unwrap(), Some(2));
+
+        // Reopen: still there, migrations still clean.
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.asks_count().unwrap(), Some(2));
     }
 
     #[test]

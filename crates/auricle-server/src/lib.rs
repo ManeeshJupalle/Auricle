@@ -7,10 +7,13 @@
 //! never persisted).
 
 mod api;
+mod ask;
+mod assemble;
 mod engine;
 mod events;
 mod export;
 mod lifecycle;
+mod ring;
 mod store;
 mod title;
 mod ws;
