@@ -24,6 +24,8 @@ pub enum Error {
     Model(String),
     /// Configuration file could not be read or parsed.
     Config(String),
+    /// Screen capture / OCR failure (auricle-vision).
+    Vision(String),
     Io(std::io::Error),
 }
 
@@ -45,6 +47,7 @@ impl fmt::Display for Error {
             Error::Stt(msg) => write!(f, "stt error: {msg}"),
             Error::Model(msg) => write!(f, "model error: {msg}"),
             Error::Config(msg) => write!(f, "config error: {msg}"),
+            Error::Vision(msg) => write!(f, "screen capture error: {msg}"),
             Error::Io(e) => write!(f, "i/o error: {e}"),
         }
     }

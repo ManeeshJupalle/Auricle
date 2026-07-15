@@ -1,0 +1,13 @@
+[package]
+name = "auricle-vision"
+description = "On-demand active-window capture (Windows.Graphics.Capture) + local OCR (Windows.Media.Ocr) for Auricle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

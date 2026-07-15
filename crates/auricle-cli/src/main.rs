@@ -72,6 +72,12 @@ enum Command {
         #[arg(long)]
         md: bool,
     },
+    /// Capture the active window and print its text (screen OCR)
+    Peek {
+        /// Print the full ScreenContext as JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -89,6 +95,7 @@ fn main() -> ExitCode {
         Command::Providers => cmd_providers(cli.config.as_deref()),
         Command::Serve { bind } => cmd_serve(cli.config.as_deref(), bind),
         Command::Export { id, md } => cmd_export(&id, md),
+        Command::Peek { json } => cmd_peek(json),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -172,6 +179,60 @@ fn cmd_serve(config: Option<&Path>, bind: Option<String>) -> Result<()> {
     let data_root = auricle_server::default_data_root()?;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(auricle_server::serve(cfg, data_root, bind))
+}
+
+fn cmd_peek(json: bool) -> Result<()> {
+    use auricle_vision::{ScreenReader, WindowsOcrReader};
+
+    let reader = Arc::new(WindowsOcrReader::new());
+
+    // Warm the D3D device + OCR engine (~300 ms) while the user focuses
+    // the target window, so the printed timing is the true capture→text
+    // cost. Warm-up errors are ignored here: the capture below re-runs
+    // initialization and surfaces the same typed error.
+    let warm = {
+        let reader = reader.clone();
+        thread::spawn(move || {
+            let _ = reader.warm_up();
+        })
+    };
+    for s in (1..=3).rev() {
+        eprint!("\rcapturing the active window in {s}\u{2026} ");
+        let _ = std::io::stderr().flush();
+        thread::sleep(Duration::from_secs(1));
+    }
+    eprintln!();
+    let _ = warm.join();
+
+    let started = std::time::Instant::now();
+    let ctx = reader
+        .capture_active_window(None)
+        .map_err(|e| Error::Vision(e.to_string()))?;
+    let total_ms = started.elapsed().as_millis() as u64;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ctx).map_err(|e| Error::Vision(e.to_string()))?
+        );
+        eprintln!(
+            "capture\u{2192}text: {total_ms} ms ({} ms capture, {} ms ocr)",
+            total_ms.saturating_sub(ctx.ocr_ms),
+            ctx.ocr_ms
+        );
+    } else {
+        println!(
+            "\u{2500}\u{2500} {} ({}) \u{2500}\u{2500}",
+            ctx.window_title, ctx.app_name
+        );
+        println!("{}", ctx.text);
+        println!(
+            "\ncapture\u{2192}text: {total_ms} ms ({} ms capture, {} ms ocr)",
+            total_ms.saturating_sub(ctx.ocr_ms),
+            ctx.ocr_ms
+        );
+    }
+    Ok(())
 }
 
 fn cmd_export(id: &str, md: bool) -> Result<()> {

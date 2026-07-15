@@ -223,6 +223,34 @@ $ curl http://127.0.0.1:4820/api/v1/settings
 PUT upserts the keys in the body (non-object bodies → `400`) and returns
 the full settings object.
 
+## POST /api/v1/peek
+
+Capture the active window and OCR it — on demand, one frame, locally
+(Windows.Graphics.Capture + Windows.Media.Ocr). No body. Nothing
+screen-derived is persisted; the result exists only in the response.
+The "active" window is the foreground window, or the topmost eligible
+window when the foreground is not capturable (untitled/shell/cloaked/
+tool windows are skipped). `text` is flattened to reading order (bands
+top-to-bottom, left-to-right within a band). `app_name` is the owning
+executable's stem; `captured_at` is unix epoch ms; `ocr_ms` is OCR time
+(capture typically adds ~90 ms warm). Real captured exchange (text field
+abridged — the full response carried 2 640 chars of a VS Code window):
+
+```
+$ curl -i -X POST http://127.0.0.1:4820/api/v1/peek
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"window_title":"windows_ocr.rs - Visual Studio Code","app_name":"Code",
+ "text":"File Edit Selection View Go Run Terminal Help\n@ windows_ocr.rs X Release Notes: 1.124.2\nD: > Auricle > crates > auricle-vision > src > windows_ocr.rs\nWindows implementation: Windows .Graphics.Capture (one frame, session\nclosed immediately) + Windows . Media.Ocr. No concealment APIs the\n…",
+ "captured_at":1784088083684,"ocr_ms":199}
+```
+
+Errors (`{"error": …}` as everywhere): `409` when the desktop state
+can't produce a capture right now (no eligible window, window minimized
+or gone — retry later), `500` for machine-level failures (capture
+unsupported/blocked, no OCR language pack, capture/OCR error).
+
 ## WebSocket /ws/live
 
 Server-push JSON events, one per text frame. Real captured sequence:

@@ -15,7 +15,7 @@ mod store;
 mod title;
 mod ws;
 
-pub use api::{build_router, serve};
+pub use api::{build_router, build_router_with_reader, serve};
 pub use engine::{AudioSource, Engine, EngineOptions, StartParams};
 pub use events::WsEvent;
 pub use export::{render_markdown, render_markdown_full};

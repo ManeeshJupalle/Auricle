@@ -6,6 +6,7 @@ members = [
     "crates/auricle-pipeline",
     "crates/auricle-stt",
     "crates/auricle-llm",
+    "crates/auricle-vision",
     "crates/auricle-server",
     "crates/auricle-cli",
     "benches/latency",
@@ -23,7 +24,36 @@ auricle-capture = { path = "crates/auricle-capture", version = "0.1.0" }
 auricle-pipeline = { path = "crates/auricle-pipeline", version = "0.1.0" }
 auricle-stt = { path = "crates/auricle-stt", version = "0.1.0" }
 auricle-llm = { path = "crates/auricle-llm", version = "0.1.0" }
+auricle-vision = { path = "crates/auricle-vision", version = "0.1.0" }
 auricle-server = { path = "crates/auricle-server", version = "0.1.0" }
+# Screen capture (Windows.Graphics.Capture) + OCR (Windows.Media.Ocr) for
+# auricle-vision. Feature list is the probe-verified minimum; note
+# Security_Authorization_AppCapabilityAccess is required for
+# GraphicsCaptureAccess::RequestAccessAsync to exist at all (its return
+# type lives in that namespace — see docs/PHASE7_VISION_REPORT.md).
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Security_Authorization_AppCapabilityAccess",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dwm",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
 cpal = "0.18.1"
 rtrb = "0.3"
 rubato = "0.16"

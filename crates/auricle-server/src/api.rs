@@ -20,14 +20,30 @@ pub struct AppState {
     pub engine: Arc<Engine>,
     /// Bearer token required on every request (None on localhost binds).
     pub token: Option<Arc<String>>,
+    /// On-demand screen capture + OCR for /peek (mocked in tests).
+    pub screen_reader: Arc<dyn auricle_vision::ScreenReader>,
 }
 
 /// Build the router. Exposed for the integration tests, which bind an
 /// ephemeral port and inject a fake provider through the engine options.
 pub fn build_router(engine: Arc<Engine>, token: Option<String>) -> Router {
+    build_router_with_reader(
+        engine,
+        token,
+        Arc::new(auricle_vision::WindowsOcrReader::new()),
+    )
+}
+
+/// `build_router` with an injected `ScreenReader` (peek endpoint tests).
+pub fn build_router_with_reader(
+    engine: Arc<Engine>,
+    token: Option<String>,
+    screen_reader: Arc<dyn auricle_vision::ScreenReader>,
+) -> Router {
     let state = AppState {
         engine,
         token: token.map(Arc::new),
+        screen_reader,
     };
     Router::new()
         .route("/api/v1/health", get(health))
@@ -45,6 +61,7 @@ pub fn build_router(engine: Arc<Engine>, token: Option<String>) -> Router {
         .route("/api/v1/sessions/{id}/export", get(export_session))
         .route("/api/v1/sessions/{id}/summarize", post(summarize_session))
         .route("/api/v1/settings", get(get_settings).put(put_settings))
+        .route("/api/v1/peek", post(peek))
         .route("/ws/live", get(crate::ws::ws_handler))
         // Embedded web UI (ui/dist via rust-embed): everything that isn't
         // an API route serves static files, unknown paths fall back to
@@ -638,6 +655,31 @@ async fn put_settings(
     match store.all_settings() {
         Ok(map) => Json(serde_json::Value::Object(map)).into_response(),
         Err(e) => internal(e.to_string()),
+    }
+}
+
+/// POST /api/v1/peek — capture + OCR the active window, on demand only.
+/// Nothing screen-derived is persisted; the result exists solely in this
+/// response.
+async fn peek(State(state): State<AppState>) -> Response {
+    let reader = state.screen_reader.clone();
+    // Capture + OCR block for 100–500 ms; keep them off the async workers.
+    let result = tokio::task::spawn_blocking(move || reader.capture_active_window(None)).await;
+    match result {
+        Ok(Ok(ctx)) => Json(ctx).into_response(),
+        Ok(Err(e)) => {
+            use auricle_vision::VisionError;
+            let status = match e {
+                // Transient desktop state: a retry can succeed.
+                VisionError::NoWindow | VisionError::Minimized | VisionError::WindowGone => {
+                    StatusCode::CONFLICT
+                }
+                // Machine-level: capture blocked or OCR pack absent.
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, Json(json!({"error": e.to_string()}))).into_response()
+        }
+        Err(join_err) => internal(format!("peek task failed: {join_err}")),
     }
 }
 

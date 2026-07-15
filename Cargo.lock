@@ -136,8 +136,10 @@ dependencies = [
  "auricle-pipeline",
  "auricle-server",
  "auricle-stt",
+ "auricle-vision",
  "clap",
  "hound",
+ "serde_json",
  "tokio",
  "windows",
 ]
@@ -195,6 +197,7 @@ dependencies = [
  "auricle-llm",
  "auricle-pipeline",
  "auricle-stt",
+ "auricle-vision",
  "axum",
  "futures-util",
  "hound",
@@ -228,6 +231,14 @@ dependencies = [
  "tokio-tungstenite",
  "whisper-rs",
  "wiremock",
+]
+
+[[package]]
+name = "auricle-vision"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "windows",
 ]
 
 [[package]]
