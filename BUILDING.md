@@ -72,3 +72,35 @@ anywhere with no Node.
   openai-compat providers. Disable for a local-only build.
 - Vulkan GPU inference for whisper: roadmap (whisper-rs `vulkan` feature is
   wired upstream; untested here).
+
+## Overlay (the copilot shell, `overlay/`)
+
+Tauri v2 app in its own cargo workspace; needs the WebView2 runtime
+(preinstalled on Windows 11) plus the same Rust/Node toolchain.
+
+```
+cargo build --release                                    # engine first (the MSI bundles it)
+copy target\release\auricle.exe overlay\src-tauri\binaries\auricle-x86_64-pc-windows-msvc.exe
+cd overlay && npm ci && npx tauri build                  # MSI in overlay\src-tauri\target\release\bundle\msi\
+```
+
+Empirical warning: a plain `cargo build --release` in `overlay/src-tauri`
+does **not** produce a production overlay — without the `custom-protocol`
+feature the binary still points at the dev server URL and renders a blank
+(or, worse, someone else's) page. Use `npx tauri build`, or pass
+`--features custom-protocol` explicitly.
+
+Dev iteration: `npx tauri dev` (vite on :1420 with hot reload). Tests:
+`npm test` (vitest) and `cargo test` in `overlay/src-tauri`.
+
+### MSI install scope
+
+The MSI **installs per-user by default** (no elevation,
+`%LOCALAPPDATA%\Programs\Auricle Copilot`) via a dual-purpose WiX package
+(`overlay/src-tauri/wix/main.wxs` — tauri-bundler's stock template with
+`ALLUSERS=2` + `MSIINSTALLPERUSER=1` baked in; that property block is the
+only local change). For a machine-wide install (requires elevation):
+
+```
+msiexec /i "Auricle Copilot_x.y.z_x64_en-US.msi" ALLUSERS=1 MSIINSTALLPERUSER=""
+```

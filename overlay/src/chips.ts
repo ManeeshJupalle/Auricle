@@ -9,7 +9,9 @@ export interface AskStartedInfo {
   transcript_segments: number | null;
 }
 
-const TITLE_MAX = 34;
+// Round 2: 34 amputated browser titles ("…- Jira - G…"); the chip row
+// wraps, so longer labels cost a second line at worst.
+const TITLE_MAX = 48;
 
 /**
  * `windowMin` is the transcript window length shown on the chip. The

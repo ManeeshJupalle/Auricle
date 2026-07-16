@@ -42,7 +42,8 @@
     "externalBin": ["binaries/auricle"],
     "windows": {
       "wix": {
-        "language": "en-US"
+        "language": "en-US",
+        "template": "wix/main.wxs"
       }
     }
   }

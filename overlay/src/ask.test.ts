@@ -17,17 +17,19 @@ describe('ask SSE event mapping', () => {
         transcript_segments: 3,
       },
       10,
+      1_000,
     );
     expect(started).toEqual({
       type: 'ASK_STARTED',
       askId: 'a19f6718d151',
+      provider: 'groq',
       chips: [
         { icon: 'screen', label: 'Almanac' },
         { icon: 'transcript', label: 'transcript: last 10 min · 3 segments' },
       ],
     });
 
-    expect(applyAskEvent({ type: 'answer_delta', ask_id: 'a', text: ' The' }, 10)).toEqual({
+    expect(applyAskEvent({ type: 'answer_delta', ask_id: 'a', text: ' The' }, 10, 1_100)).toEqual({
       type: 'DELTA',
       text: ' The',
     });
@@ -40,32 +42,50 @@ describe('ask SSE event mapping', () => {
           usage: { completion_tokens: 39, prompt_tokens: 366, total_tokens: 405 },
         },
         10,
+        2_400,
       ),
-    ).toEqual({ type: 'DONE', usage: { completion_tokens: 39, prompt_tokens: 366, total_tokens: 405 } });
-  });
-
-  it('maps ask_error and tolerates a missing usage', () => {
-    expect(
-      applyAskEvent({ type: 'ask_error', ask_id: 'a', message: 'llm ollama returned HTTP 404' }, 10),
-    ).toEqual({ type: 'ERROR', message: 'llm ollama returned HTTP 404' });
-    expect(applyAskEvent({ type: 'answer_done', ask_id: 'a', usage: null }, 10)).toEqual({
+    ).toEqual({
       type: 'DONE',
-      usage: null,
+      usage: { completion_tokens: 39, prompt_tokens: 366, total_tokens: 405 },
+      at: 2_400,
     });
   });
 
+  it('maps ask_error and tolerates a missing usage or provider', () => {
+    expect(
+      applyAskEvent(
+        { type: 'ask_error', ask_id: 'a', message: 'llm ollama returned HTTP 404' },
+        10,
+        0,
+      ),
+    ).toEqual({ type: 'ERROR', message: 'llm ollama returned HTTP 404' });
+    expect(applyAskEvent({ type: 'answer_done', ask_id: 'a', usage: null }, 10, 7)).toEqual({
+      type: 'DONE',
+      usage: null,
+      at: 7,
+    });
+    const started = applyAskEvent(
+      { type: 'ask_started', ask_id: 'a', screen: null, transcript_segments: null },
+      10,
+      0,
+    );
+    expect(started).toMatchObject({ provider: null });
+  });
+
   it('ignores unknown event types (forward compatibility)', () => {
-    expect(applyAskEvent({ type: 'shiny_new_event' }, 10)).toBeNull();
+    expect(applyAskEvent({ type: 'shiny_new_event' }, 10, 0)).toBeNull();
   });
 
   it('screen: null produces no screen chip', () => {
     const started = applyAskEvent(
       { type: 'ask_started', ask_id: 'a', screen: null, transcript_segments: 0 },
       10,
+      0,
     );
     expect(started).toEqual({
       type: 'ASK_STARTED',
       askId: 'a',
+      provider: null,
       chips: [{ icon: 'transcript', label: 'transcript: empty window' }],
     });
   });

@@ -35,6 +35,7 @@ export function App() {
 
   const [init, setInit] = useState<InitInfo | null>(null);
   const [connected, setConnected] = useState(true);
+  const [recording, setRecording] = useState(false);
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -65,7 +66,7 @@ export function App() {
     const unQuick = listen('quick-assist', () => {
       const phase = stateRef.current.phase;
       if (phase === 'asking' || phase === 'streaming') return; // busy: reducer would ignore it too
-      dispatch({ type: 'QUICK_ASSIST' });
+      dispatch({ type: 'QUICK_ASSIST', at: performance.now() });
       runAsk(QUICK_ASSIST_QUESTION, false); // fresh situational ask, not a follow-up
     });
     const unToast = listen<string>('tray-error', (e) => {
@@ -81,12 +82,13 @@ export function App() {
   }, [runAsk]);
 
   // The window is sized to the rendered card: a transparent window region
-  // would still swallow clicks, so there must not be one.
+  // would still swallow clicks, so there must not be one. +20 covers the
+  // 10 px shadow gutter on each side.
   useEffect(() => {
     const card = cardRef.current;
     if (!card) return;
     const observer = new ResizeObserver(() => {
-      void invoke('resize_overlay', { height: card.offsetHeight + 8 });
+      void invoke('resize_overlay', { height: card.offsetHeight + 20 });
     });
     observer.observe(card);
     return () => observer.disconnect();
@@ -105,19 +107,27 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Engine connection monitor (through the Rust bridge; backoff while down).
+  // Engine connection monitor (through the Rust bridge; backoff while
+  // down). Health also drives the header dot: red = a session is
+  // actually recording, nothing else.
   useEffect(() => {
     let failures = 0;
     let timer: number;
     let stopped = false;
     const poll = async () => {
       try {
-        await invoke('get_health');
+        const health = await invoke<{ state?: string }>('get_health');
         failures = 0;
-        if (!stopped) setConnected(true);
+        if (!stopped) {
+          setConnected(true);
+          setRecording(health.state === 'recording');
+        }
       } catch {
         failures += 1;
-        if (!stopped) setConnected(false);
+        if (!stopped) {
+          setConnected(false);
+          setRecording(false);
+        }
       }
       if (!stopped) timer = window.setTimeout(poll, nextPollDelay(failures));
     };
@@ -148,7 +158,7 @@ export function App() {
     if (q === '' || s.phase === 'asking' || s.phase === 'streaming' || s.phase === 'hidden') {
       return;
     }
-    dispatch({ type: 'SUBMIT', question: q });
+    dispatch({ type: 'SUBMIT', question: q, at: performance.now() });
     runAsk(q, s.hasHistory);
     if (inputRef.current) inputRef.current.value = '';
   };
@@ -159,7 +169,9 @@ export function App() {
       window.setTimeout(() => setCopied(false), 1200);
     };
     if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(state.answer).then(done, () => copyFallback(state.answer, done));
+      void navigator.clipboard
+        .writeText(state.answer)
+        .then(done, () => copyFallback(state.answer, done));
     } else {
       copyFallback(state.answer, done);
     }
@@ -167,11 +179,19 @@ export function App() {
 
   const busy = state.phase === 'asking' || state.phase === 'streaming';
   const showAnswer = state.answer !== '' || busy;
+  // Round 2: actions belong to the displayed answer, not to a phase —
+  // dismiss → re-summon keeps the answer, so it keeps Copy too.
+  const showActions = state.answer !== '' && !busy && state.phase !== 'error';
 
   return (
     <div className="overlay" ref={cardRef}>
       <header className="ov-head" data-tauri-drag-region>
-        <span className="ov-dot" data-busy={busy || undefined} />
+        <span
+          className="ov-dot"
+          data-busy={busy || undefined}
+          data-recording={recording || undefined}
+          title={recording ? 'recording' : 'idle'}
+        />
         <span className="ov-title" data-tauri-drag-region>
           Auricle Copilot
         </span>
@@ -198,6 +218,14 @@ export function App() {
 
       {toast && <div className="ov-warning">⚠ {toast}</div>}
 
+      {state.quick && showAnswer && (
+        <div className="ov-quick">
+          <span className="ov-quick-bolt">⚡</span>
+          Quick assist
+          <span className="ov-quick-q">— what's happening right now?</span>
+        </div>
+      )}
+
       {state.chips.length > 0 && (
         <div className="ov-chips">
           {state.chips.map((c, i) => (
@@ -211,9 +239,16 @@ export function App() {
 
       {showAnswer && (
         <div className="ov-answer" ref={answerRef}>
-          {state.phase === 'asking' && state.answer === '' ? (
+          {state.answer === '' && state.phase === 'asking' ? (
             <div className="ov-pending">
               gathering context<span className="ov-ellipsis" />
+            </div>
+          ) : state.answer === '' && state.phase === 'streaming' ? (
+            // Context is in; the model hasn't produced its first token
+            // yet (a local model can sit here for a while).
+            <div className="ov-pending">
+              <span className="ov-caret" /> {state.provider ?? 'the model'} is thinking
+              <span className="ov-ellipsis" />
             </div>
           ) : (
             <>
@@ -226,12 +261,19 @@ export function App() {
 
       {state.phase === 'error' && <div className="ov-error">⚠ {state.error}</div>}
 
-      {state.phase === 'answered' && (
+      {showActions && (
         <div className="ov-actions">
           <button className="ov-btn" onClick={copyAnswer}>
             {copied ? 'Copied ✓' : 'Copy'}
           </button>
-          {state.usage && <span className="ov-usage">{state.usage.total_tokens} tokens</span>}
+          {state.provider && state.elapsedMs !== null && (
+            <span
+              className="ov-usage"
+              title={state.usage ? `${state.usage.total_tokens} tokens` : undefined}
+            >
+              {state.provider} · {(state.elapsedMs / 1000).toFixed(1)}s
+            </span>
+          )}
         </div>
       )}
 
@@ -244,8 +286,8 @@ export function App() {
             busy
               ? 'answering…'
               : state.hasHistory
-                ? 'Follow up… (Enter to send, Esc to dismiss)'
-                : 'Ask about the meeting or your screen… (Enter to send)'
+                ? 'Follow up… (Enter · Esc)'
+                : 'Ask about the meeting or your screen… (Enter · Esc)'
           }
           disabled={busy}
           onKeyDown={(e) => {

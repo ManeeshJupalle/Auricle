@@ -36,7 +36,7 @@ describe('context chip derivation (the honesty affordance)', () => {
     expect(chips[0].label).toBe('transcript: empty window');
   });
 
-  it('long window titles truncate with an ellipsis', () => {
+  it('long window titles truncate with an ellipsis (48-char budget)', () => {
     const chips = deriveChips(
       {
         screen: {
@@ -47,8 +47,17 @@ describe('context chip derivation (the honesty affordance)', () => {
       },
       10,
     );
-    expect(chips[0].label.length).toBeLessThanOrEqual('msedge — '.length + 34);
+    expect(chips[0].label.length).toBeLessThanOrEqual('msedge — '.length + 48);
     expect(chips[0].label.endsWith('…')).toBe(true);
+    // Typical browser titles now survive whole (round-2 item 3).
+    const jira = deriveChips(
+      {
+        screen: { window_title: 'Almanac - Kanban Board - Jira', app_name: 'chrome' },
+        transcript_segments: null,
+      },
+      10,
+    );
+    expect(jira[0].label).toBe('chrome — Almanac - Kanban Board - Jira');
   });
 
   it('skips the app prefix when the title already names it', () => {

@@ -3,9 +3,11 @@
 The visible product moment: a global hotkey summons a frameless,
 always-on-top glass card that captures context through the public API
 and streams the answer. Everything below was verified live on the dev
-machine on 2026-07-15. **Round-1 screenshots are in
-`docs/screenshots/overlay/`; the round-2 fix pass is deliberately
-deferred — the maintainer asked to weigh in on the look first.**
+machine on 2026-07-15. Round 1 was built and verified, then paused for
+the maintainer's look review; the review came back "blessed with
+changes" and the round-2 section at the end records every change and
+its verification. Screenshots for both rounds are in
+`docs/screenshots/overlay/` (`r1_*` / `r2_*`).
 
 **Environment:** Windows 11 Home 10.0.26200, now at **125 % display
 scaling** (Phase 7 recorded 100 % — the machine changed underneath us,
@@ -155,6 +157,33 @@ visible in `r1_pending/streaming` variants from the slow-model round.
   the engine's file it can't locate.
 - Quit leaves the engine running by design (a recording must survive
   the shell; stopping the engine is a tray/dashboard decision).
-- The MSI's default per-machine scope prompts UAC on interactive
-  install; per-user install is what the smoke test used. Whether to
-  flip the default is a ship-session decision.
+
+---
+
+# Round 2 — maintainer review fixes (all applied and re-verified)
+
+The look review blessed the direction with seven changes. Before →
+after, each verified in the `r2_*` screenshots:
+
+| # | Review item | What changed | Verified in |
+|---|---|---|---|
+| 1 | Card read "recording/alert" at rest: red focus ring in both themes, red header dot always | New `--focus` token (calm blue derived from the transcript's "You" tone) drives the input focus ring in both themes. The header dot is neutral gray at rest and turns red ONLY while `/health` reports `state: recording` — it is now an honest recording indicator, polled on the existing health cadence | `r2_summoned_dark` (neutral dot, blue ring) vs `r2_thinking_dark`/`r2_answered_dark` (red dot while the session records) vs `r2_engine_offline_dark` (neutral again after the session ended) |
+| 1a | Copy vanished after dismiss → re-summon | Actions row keys on "an answer is displayed and nothing is busy", not on phase `answered` | `r2_engine_offline_dark` — that card is a re-summoned `ready` state and still shows Copy + provider·time |
+| 1b | Bare caret during the first-token wait | Distinct thinking state: caret + "`{provider}` is thinking…" once `ask_started` lands and until the first token | `r2_thinking_dark` ("ollama is thinking…") |
+| 1c | Chip titles amputated at 34 chars | Budget raised to 48; typical browser titles now survive whole (locked by a vitest case) | `r2_*` chips |
+| 1d | Esc hint only on the follow-up placeholder | Both placeholders read "(Enter · Esc)" | `r2_summoned_*` |
+| 1e | Drop shadow clipped by the 4 px margin | Margin widened to 10 px with a compact shadow sized to fit it (window resize accounts for +20) | all `r2_*` — the card visibly floats |
+| 2 | Desktop content ghosted through the card | All card surfaces are fully opaque (`rgb()` gradients, no alpha); transparency exists only in the shadow gutter outside the card | compare `r1_answered_dark` top edge vs any `r2_*`; the strip of desktop visible at a shot's edge is the outside gutter, by design |
+| 3 | Answer panel ≈ card background in dark | Answer panel lightened (rgb 30/34/43 → 24/27/35 gradient) + `--edge-strong` border | `r2_answered_dark` |
+| 4 | Light theme: dark chrome around a light card | Opaque light surfaces + lighter/softer light-theme shadow + slightly stronger light edge; what remains dark at a screenshot's rim is the see-through gutter showing the desktop, not chrome | `r2_summoned_light`, `r2_answered_light` |
+| 5 | Raw token count | Actions row shows "`{provider} · {elapsed}s`" (submit → answer_done, timed through event payloads so the reducer stays pure); token count moved to the row's tooltip | `r2_answered_dark` ("groq · 1.1s"), `r2_answered_light` ("groq · 1.8s") |
+| 6 | No distinct quick-assist state | "⚡ Quick assist — what's happening right now?" marker renders above the chips for hotkey-initiated asks (cleared by the next typed ask); thinking state covered under 1b | `r2_thinking_dark`, `r2_answered_dark`, `r2_answered_light` |
+| 7 | MSI required elevation by default | Custom WiX template (tauri-bundler 2.x stock template + `ALLUSERS=2`/`MSIINSTALLPERUSER=1` in the Property table — the canonical dual-purpose pattern; only that block changed). Plain `msiexec /i <msi> /quiet` now installs per-user with **no elevation** (verified: exit 0 into `%LOCALAPPDATA%\Programs`, uninstall clean); per-machine remains available via `ALLUSERS=1 MSIINSTALLPERUSER=""`, documented in BUILDING.md |
+
+Round-2 gates: vitest 29/29 (one new chip-truncation case; state/ask
+tests extended for provider, elapsed timing, and the quick flag) ·
+overlay cargo test 11/11, fmt + clippy `-D warnings` clean · engine
+workspace clippy clean and untouched · concealment grep over the
+overlay sources and the WiX template: zero hits · MSI rebuilt with the
+per-user default and smoke-tested (install → per-user dir → uninstall
+clean).

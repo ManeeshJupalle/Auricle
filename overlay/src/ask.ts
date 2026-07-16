@@ -14,9 +14,14 @@ export type AskSseEvent = Record<string, unknown>;
 
 /**
  * Map one SSE event to a reducer event (null = ignore). Exported for
- * tests; transport-independent.
+ * tests; transport-independent. `now` stamps DONE so the reducer can
+ * compute elapsed time without touching a clock.
  */
-export function applyAskEvent(ev: AskSseEvent, windowMin: number): OverlayEvent | null {
+export function applyAskEvent(
+  ev: AskSseEvent,
+  windowMin: number,
+  now: number,
+): OverlayEvent | null {
   switch (ev.type) {
     case 'ask_started': {
       const info: AskStartedInfo = {
@@ -28,13 +33,14 @@ export function applyAskEvent(ev: AskSseEvent, windowMin: number): OverlayEvent 
         type: 'ASK_STARTED',
         askId: String(ev.ask_id ?? ''),
         chips: deriveChips(info, windowMin),
+        provider: typeof ev.provider === 'string' ? ev.provider : null,
       };
     }
     case 'answer_delta':
       return { type: 'DELTA', text: String(ev.text ?? '') };
     case 'answer_done': {
       const usage = ev.usage as { total_tokens: number } | null | undefined;
-      return { type: 'DONE', usage: usage ?? null };
+      return { type: 'DONE', usage: usage ?? null, at: now };
     }
     case 'ask_error':
       return { type: 'ERROR', message: String(ev.message ?? 'ask failed') };
@@ -62,7 +68,7 @@ export async function streamAsk(
 ): Promise<void> {
   const channel = new Channel<AskSseEvent>();
   channel.onmessage = (ev) => {
-    const mapped = applyAskEvent(ev, windowMin);
+    const mapped = applyAskEvent(ev, windowMin, performance.now());
     if (mapped) onEvent(mapped);
   };
   try {

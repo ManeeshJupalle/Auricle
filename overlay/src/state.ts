@@ -1,6 +1,7 @@
 // The overlay's summon/ask lifecycle as a pure reducer — every hotkey,
 // SSE event, and user action is an event here, so the whole state machine
-// is unit-testable without Tauri or a DOM.
+// is unit-testable without Tauri or a DOM. Time enters only through
+// event payloads (`at`), never from clocks inside the reducer.
 
 export type Chip = { icon: 'screen' | 'transcript'; label: string };
 
@@ -8,7 +9,7 @@ export type Phase =
   | 'hidden' // window not shown
   | 'ready' // shown, waiting for a question
   | 'asking' // request sent, no ask_started yet
-  | 'streaming' // deltas arriving
+  | 'streaming' // ask accepted; deltas arriving (or first token pending)
   | 'answered' // answer complete
   | 'error'; // ask failed
 
@@ -21,6 +22,14 @@ export interface OverlayState {
   askId: string | null;
   /** Set when the NEXT submit should carry follow_up: true. */
   hasHistory: boolean;
+  /** True when the current ask came from the quick-assist hotkey. */
+  quick: boolean;
+  /** Provider id echoed by ask_started (e.g. "groq"). */
+  provider: string | null;
+  /** Timestamp (`at`) the current ask was submitted. */
+  startedAt: number | null;
+  /** Submit → answer_done duration, set on DONE. */
+  elapsedMs: number | null;
   usage: { total_tokens: number } | null;
 }
 
@@ -32,6 +41,10 @@ export const initialState: OverlayState = {
   error: null,
   askId: null,
   hasHistory: false,
+  quick: false,
+  provider: null,
+  startedAt: null,
+  elapsedMs: null,
   usage: null,
 };
 
@@ -41,15 +54,33 @@ export const QUICK_ASSIST_QUESTION =
 
 export type OverlayEvent =
   | { type: 'SUMMON' }
-  | { type: 'QUICK_ASSIST' }
-  | { type: 'SUBMIT'; question: string }
-  | { type: 'ASK_STARTED'; askId: string; chips: Chip[] }
+  | { type: 'QUICK_ASSIST'; at: number }
+  | { type: 'SUBMIT'; question: string; at: number }
+  | { type: 'ASK_STARTED'; askId: string; chips: Chip[]; provider: string | null }
   | { type: 'DELTA'; text: string }
-  | { type: 'DONE'; usage: { total_tokens: number } | null }
+  | { type: 'DONE'; usage: { total_tokens: number } | null; at: number }
   | { type: 'ERROR'; message: string }
   | { type: 'DISMISS' };
 
 const busy = (phase: Phase) => phase === 'asking' || phase === 'streaming';
+
+/** Everything one new ask resets. */
+function freshAsk(state: OverlayState, question: string, quick: boolean, at: number): OverlayState {
+  return {
+    ...state,
+    phase: 'asking',
+    question,
+    answer: '',
+    chips: [],
+    error: null,
+    askId: null,
+    quick,
+    provider: null,
+    startedAt: at,
+    elapsedMs: null,
+    usage: null,
+  };
+}
 
 export function reduce(state: OverlayState, ev: OverlayEvent): OverlayState {
   switch (ev.type) {
@@ -62,36 +93,24 @@ export function reduce(state: OverlayState, ev: OverlayEvent): OverlayState {
     case 'QUICK_ASSIST':
       // Immediate ask — works from any non-busy state, including hidden.
       if (busy(state.phase)) return state;
-      return {
-        ...state,
-        phase: 'asking',
-        question: QUICK_ASSIST_QUESTION,
-        answer: '',
-        chips: [],
-        error: null,
-        askId: null,
-        usage: null,
-      };
+      return freshAsk(state, QUICK_ASSIST_QUESTION, true, ev.at);
 
     case 'SUBMIT': {
       if (busy(state.phase) || state.phase === 'hidden') return state;
       const q = ev.question.trim();
       if (q === '') return state;
-      return {
-        ...state,
-        phase: 'asking',
-        question: q,
-        answer: '',
-        chips: [],
-        error: null,
-        askId: null,
-        usage: null,
-      };
+      return freshAsk(state, q, false, ev.at);
     }
 
     case 'ASK_STARTED':
       if (state.phase !== 'asking') return state;
-      return { ...state, phase: 'streaming', askId: ev.askId, chips: ev.chips };
+      return {
+        ...state,
+        phase: 'streaming',
+        askId: ev.askId,
+        chips: ev.chips,
+        provider: ev.provider,
+      };
 
     case 'DELTA':
       // First delta may arrive before ask_started on the fallback
@@ -101,7 +120,13 @@ export function reduce(state: OverlayState, ev: OverlayEvent): OverlayState {
 
     case 'DONE':
       if (!busy(state.phase)) return state;
-      return { ...state, phase: 'answered', usage: ev.usage, hasHistory: true };
+      return {
+        ...state,
+        phase: 'answered',
+        usage: ev.usage,
+        hasHistory: true,
+        elapsedMs: state.startedAt === null ? null : ev.at - state.startedAt,
+      };
 
     case 'ERROR':
       if (state.phase === 'hidden') return state;
