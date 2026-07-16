@@ -13,19 +13,19 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ManeeshJupalle/Auricle"
 
 [workspace.dependencies]
-auricle-core = { path = "crates/auricle-core", version = "0.1.0" }
-auricle-capture = { path = "crates/auricle-capture", version = "0.1.0" }
-auricle-pipeline = { path = "crates/auricle-pipeline", version = "0.1.0" }
-auricle-stt = { path = "crates/auricle-stt", version = "0.1.0" }
-auricle-llm = { path = "crates/auricle-llm", version = "0.1.0" }
-auricle-vision = { path = "crates/auricle-vision", version = "0.1.0" }
-auricle-server = { path = "crates/auricle-server", version = "0.1.0" }
+auricle-core = { path = "crates/auricle-core", version = "0.3.0" }
+auricle-capture = { path = "crates/auricle-capture", version = "0.3.0" }
+auricle-pipeline = { path = "crates/auricle-pipeline", version = "0.3.0" }
+auricle-stt = { path = "crates/auricle-stt", version = "0.3.0" }
+auricle-llm = { path = "crates/auricle-llm", version = "0.3.0" }
+auricle-vision = { path = "crates/auricle-vision", version = "0.3.0" }
+auricle-server = { path = "crates/auricle-server", version = "0.3.0" }
 # Screen capture (Windows.Graphics.Capture) + OCR (Windows.Media.Ocr) for
 # auricle-vision. Feature list is the probe-verified minimum; note
 # Security_Authorization_AppCapabilityAccess is required for

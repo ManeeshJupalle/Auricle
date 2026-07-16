@@ -1,17 +1,31 @@
 # Auricle
 
-<!-- DEMO GIF -->
+<!-- HERO GIF (copilot): docs/demo_copilot.gif — quick-assist over a real meeting: hotkey → context chips → streaming answer → follow-up → Esc -->
 
-**A local-first meeting transcription engine.** Auricle is not another
-meeting app — it is a single Rust binary that captures your meeting audio
-(system loopback + microphone, no bot joining your calls), transcribes it in
-real time through swappable STT backends, and exposes everything over a
-REST/WebSocket API. The bundled web UI is just a client; curl is an equally
-first-class one. Privacy by default: with the local Whisper backend, no
-audio ever leaves your machine.
+**A local-first meeting engine — not another meeting app — that ships
+with a desktop copilot.** Auricle is a single Rust binary that captures
+your meeting audio (system loopback + microphone, no bot joining your
+calls), transcribes it in real time through swappable STT backends, and
+exposes everything over a REST/WebSocket API. On top of that API sit two
+bundled clients: an embedded web dashboard, and an always-on-top copilot
+overlay that can answer "what's happening right now?" from the live
+transcript and whatever is on your screen. Privacy by default: with the
+local Whisper backend, no audio ever leaves your machine.
 
 > *Auricle: the outer ear — the part of you that listens. It sits on your
 > head, not in the cloud.*
+
+Three things, one engine:
+
+- **📝 Meeting notes** — live two-speaker transcript, LLM auto-titles,
+  one-click summaries, full-text search, markdown export, optional
+  synchronized audio playback.
+- **⚡ Copilot** — `Ctrl+Shift+A` mid-meeting: one keystroke captures
+  the active window (local OCR) + the last 10 minutes of transcript and
+  streams an answer into a small overlay, with context chips naming
+  exactly what was captured.
+- **🔌 API** — everything above is `curl`-able: REST + WebSocket +
+  SSE on one localhost port. The UIs are just clients; yours can be too.
 
 ## Why
 
@@ -26,16 +40,18 @@ and ships them as one lightweight daemon.
 |---|---|---|---|
 | Capture | local system audio + mic | bot joins the meeting | local system audio + mic |
 | STT | local only | cloud, swappable | **local + cloud, swappable per session** |
-| Interface | the desktop app | REST API | **REST/WS API; web UI is just a client** |
+| Interface | the desktop app | REST API | **REST/WS API; dashboard + overlay are just clients** |
 | Runtime | Tauri + Next.js | Django/Postgres/Redis fleet | **one ~31 MB binary, SQLite** |
 | Audio leaves your machine | no | yes | **only if you opt into a cloud provider** |
 
 ## Quickstart
 
+**Engine + dashboard:**
+
 ```
-# 1. Get auricle (release binary, or see BUILDING.md to build from source)
+# 1. Get auricle:  cargo install auricle-cli   (or grab auricle.exe from Releases)
 auricle devices          # see your microphones + loopback outputs
-auricle serve            # daemon + web UI on http://127.0.0.1:4820
+auricle serve            # daemon + web dashboard on http://127.0.0.1:4820
 
 # or skip the server entirely:
 auricle record --stt whisper-local --model base.en   # live transcript in your terminal
@@ -47,22 +63,30 @@ the system-audio side is labeled **Them**, your microphone is **You**.
 Sessions get LLM auto-titles after stop, full-text search in the sidebar,
 synchronized audio playback when raw-audio retention is on, and one-click
 summaries (minutes, action items, standup, 1:1) with a local (Ollama) or
-cloud LLM. Everything the UI does goes through the public API.
+cloud LLM.
+
+**Copilot:** install `Auricle Copilot_0.3.0_x64_en-US.msi` from Releases
+(per-user, no admin prompt; the engine is bundled and spawns
+automatically). Then `Ctrl+Shift+Space` summons the ask card,
+`Ctrl+Shift+A` asks "what's happening?" in one keystroke, `Esc`
+dismisses. The tray icon starts/stops recording and opens the dashboard.
 
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
-+ LLM summaries), or any OpenAI-compatible endpoint via config. Local
-Whisper models download automatically with SHA-256 verification on first
-use.
++ LLM answers/summaries), or any OpenAI-compatible endpoint via config.
+Local Whisper models download automatically with SHA-256 verification on
+first use.
 
-## Architecture
+## The engine
+
+<!-- ENGINE GIF: docs/demo_engine.gif — live dashboard transcript with a mid-sentence provider swap and the latency readout -->
 
 ```
  mic ──cpal──► ring buffer ─► resample 16k ─► Silero VAD ─► chunker ─┐
                                                                      ├─► STT provider ─► assembler ─► SQLite
  system audio ─WASAPI loopback─► ring buffer ─► … (same pipeline) ───┘   (trait object)      │
                                                                                              ├─► REST /api/v1
-        whisper-local │ deepgram │ groq-whisper │ openai-compat                              └─► WS /ws/live ─► web UI
+        whisper-local │ deepgram │ groq-whisper │ openai-compat                              └─► WS /ws/live ─► clients
 ```
 
 - Capture callbacks are allocation-free and lock-free (rtrb ring buffers).
@@ -76,23 +100,20 @@ use.
   non-localhost `Host` headers (DNS rebinding).
 - Full API reference with real captured examples: [docs/API.md](docs/API.md).
 
-## Screen peek + ask (the copilot service)
+## The copilot
 
-Auricle can also read your screen — deliberately, one frame at a time.
+Auricle can read your screen — deliberately, one frame at a time.
 `auricle peek` (or `POST /api/v1/peek`) captures the active window via
 Windows.Graphics.Capture, OCRs it with the OS-local Windows.Media.Ocr,
-and returns reading-order text with the window title and app name.
-Warm capture→text is 175–300 ms on 1080p windows (measured:
-[docs/PHASE7_VISION_REPORT.md](docs/PHASE7_VISION_REPORT.md)).
+and returns reading-order text. Warm capture→text is 175–300 ms on 1080p
+windows ([docs/PHASE7_VISION_REPORT.md](docs/PHASE7_VISION_REPORT.md)).
 
-On top of that sits the assistant service: `POST /api/v1/ask` combines
-your question, an on-demand screen capture, and the last few minutes of
-the live transcript (an in-memory rolling window — no database reads),
-and streams an LLM answer as SSE, mirrored as `answer_delta` events on
-the same WebSocket the UI already holds. Follow-up questions
-(`follow_up: true`) see your earlier asks from in-memory history.
-Ollama, Groq, or any OpenAI-compatible endpoint — same swappable
-provider story as everything else:
+The assistant service builds on that: `POST /api/v1/ask` combines your
+question, an on-demand screen capture, and the last 10 minutes of live
+transcript (an in-memory rolling window — no database reads), and streams
+an LLM answer as SSE, mirrored on the same WebSocket the dashboard holds.
+Follow-ups see your earlier asks from in-memory history. Ollama, Groq, or
+any OpenAI-compatible endpoint:
 
 ```
 curl -N -X POST http://127.0.0.1:4820/api/v1/ask \
@@ -101,67 +122,84 @@ curl -N -X POST http://127.0.0.1:4820/api/v1/ask \
        "include_screen":true,"include_transcript":true}'
 ```
 
-Measured time-to-first-token: **0.7 s with Groq** (budget < 1.5 s);
-local Ollama misses its 4 s budget on 2019-class hardware with the
-models tested — honest numbers and root causes (reasoning models think
-before they speak; 14B prompt evaluation is slow) in
-[docs/PHASE8_ASSISTANT_REPORT.md](docs/PHASE8_ASSISTANT_REPORT.md).
+The overlay (`overlay/`, Tauri v2) is the copilot's face: summons in
+~100 ms, streams markdown answers, shows **context chips** naming exactly
+what was captured, and passes its own window handle to `/ask` so a
+capture never reads the overlay's previous answer back into the next
+one. It talks only to the public API
+([docs/PHASE9_OVERLAY_REPORT.md](docs/PHASE9_OVERLAY_REPORT.md)).
 
-And the copilot has a face: `overlay/` is a Tauri v2 shell — press
-**Ctrl+Shift+Space** for a small always-on-top ask card
-(**Ctrl+Shift+A** asks "what's happening?" with screen + transcript in
-one keystroke, Esc dismisses). It shows **context chips** naming
-exactly what was captured, streams the answer as markdown, and runs a
-tray icon that starts/stops recording and spawns the engine if it
-isn't running. The overlay summons in ~100 ms, talks only to the
-public API, and passes its own window handle to `/ask` so the capture
-never reads the overlay's previous answer back into the next one
-(engineering notes: [docs/PHASE9_OVERLAY_REPORT.md](docs/PHASE9_OVERLAY_REPORT.md)).
+## Transparency
 
-The copilot layer is built under constraints that are design rules, not
-marketing:
+The copilot's constraints are design rules, not marketing — from the
+architecture doc, verbatim:
 
-- **No concealment, ever.** No `SetWindowDisplayAffinity`, no
-  hide-from-screen-share tricks — anywhere in the codebase.
-- **No continuous surveillance.** Capture happens only on an explicit
-  command; there is no background screenshot loop and no keylogging.
-- **Nothing screen- or question-derived is persisted** unless you set
-  `copilot.retain_context = true` (default off — with it off, the
-  database schema never even grows the table).
+- **No concealment.** The overlay is a normal window. No
+  hide-from-screen-capture tricks (`SetWindowDisplayAffinity` /
+  `WDA_EXCLUDEFROMCAPTURE` is out of scope and will not be added). If you
+  share your screen, the overlay is visible — that's the point.
+- **No continuous surveillance.** Screen capture happens only on explicit
+  hotkey press. There is no background screenshot loop, no keylogging, no
+  watching.
+- **Privacy defaults preserved.** OCR text and questions are processed in
+  memory; nothing screen-derived is persisted unless
+  `copilot.retain_context = true`. Fully-local operation (Windows OCR +
+  Ollama) is the default configuration.
 
 ## Performance
 
-Measured on an i7-9750H (2019 6-core laptop), real-time-paced fixture through
-the production pipeline — full methodology and budget misses in
-[benches/RESULTS.md](benches/RESULTS.md):
+Measured on an i7-9750H (2019 6-core laptop) — methodology and budget
+misses in [benches/RESULTS.md](benches/RESULTS.md) and the phase reports:
 
-| provider | capture→partial p50 | capture→final p50 |
-|---|---|---|
-| deepgram (nova-3, streaming) | **0.14 s** | **0.54 s** |
-| groq-whisper (large-v3-turbo, batch) | 0.25 s | 0.27 s (p95 5.8 s) |
-| whisper-local (base.en, CPU) | 1.9 s | 2.6 s |
+| metric | measured |
+|---|---|
+| capture → partial, deepgram nova-3 streaming (p50) | **0.14 s** |
+| capture → final, deepgram (p50) | **0.54 s** |
+| capture → partial / final, groq-whisper batch (p50) | 0.25 s / 0.27 s (p95 5.8 s) |
+| capture → partial / final, whisper-local base.en CPU (p50) | 1.9 s / 2.6 s |
+| hotkey → screen text ready (warm, 1080p) | 0.18–0.30 s |
+| hotkey → overlay visible | **0.09–0.12 s** |
+| ask → first answer token, Groq llama-3.3-70b | **0.7 s** |
+| ask → first answer token, local Ollama (qwen2.5:14b, warm) | 10.1 s |
+| ask → first answer token, local Ollama (qwen3:8b, reasoning) | 104 s |
 
 ## Limitations (honest ones)
 
 - **Speaker channels ≠ diarization.** "You"/"Them" comes from which device
   the audio arrived on. Multiple remote speakers are all "Them"; separating
   them needs a pluggable diarizer (roadmap).
-- **Windows-only capture in v1.** The capture layer is the only
-  platform-specific crate; macOS/Linux are roadmap.
+- **Windows-only.** The capture, OCR, and overlay layers are
+  platform-specific; macOS/Linux are roadmap.
+- **A fully-local copilot is slow on modest CPUs.** The measured
+  time-to-first-token on a 2019 laptop is 10.1 s with qwen2.5:14b (prompt
+  evaluation dominates) and 104 s with qwen3:8b (reasoning models think
+  before they speak) — against 0.7 s for Groq. Local answers are private,
+  not fast; the numbers and root causes are in
+  [docs/PHASE8_ASSISTANT_REPORT.md](docs/PHASE8_ASSISTANT_REPORT.md).
 - **Live-transcription quality is provider- and hardware-bound.**
   whisper-local `small.en` cannot keep up with continuous speech on
-  2019-class laptop CPUs (numbers in benches/RESULTS.md); `base.en` or a
-  cloud provider are the realistic choices there.
+  2019-class laptop CPUs; `base.en` or a cloud provider are the realistic
+  choices there.
 - **Screen-peek OCR is Windows' built-in engine.** Near-perfect on
   article text, honest-but-imperfect on dense small fonts (`auricle` can
-  come back as `auride` in a file tree); per-window-type quality notes in
-  the phase report.
+  come back as `auride` in a file tree).
 - One recording session at a time, by design.
+
+## Roadmap
+
+- **v0.4 — system-wide dictation: speak into any app.** The capture →
+  VAD → STT pipeline already exists; dictation is pointing it at the
+  focused window's input.
+- macOS capture (the capture layer is the only platform-specific engine
+  crate).
+- Pluggable diarization for multi-speaker separation.
+- Vision-LLM screen understanding as an alternative to OCR (the
+  `ScreenReader` trait is the extension point).
 
 ## Repo layout
 
 `crates/` — core, capture, pipeline, stt, llm, vision, server, cli ·
-`ui/` — Vite/React client (embedded into the binary) ·
+`ui/` — Vite/React dashboard (embedded into the binary) ·
 `overlay/` — Tauri v2 copilot overlay + tray (a pure API client) ·
 `fixtures/` — real captured API payloads driving the tests ·
 `benches/` — latency harness + results ·
