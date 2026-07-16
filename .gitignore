@@ -5,3 +5,12 @@ ui/node_modules
 # Built by `npm run build` in ui/; embedded into the binary at compile time.
 crates/auricle-server/ui-dist
 
+# Overlay (Tauri v2) build artifacts.
+overlay/node_modules
+overlay/dist
+overlay/vite.log
+overlay/src-tauri/target
+overlay/src-tauri/gen
+# The engine exe copied in as the MSI sidecar (33 MB build artifact).
+overlay/src-tauri/binaries
+

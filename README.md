@@ -107,6 +107,17 @@ models tested — honest numbers and root causes (reasoning models think
 before they speak; 14B prompt evaluation is slow) in
 [docs/PHASE8_ASSISTANT_REPORT.md](docs/PHASE8_ASSISTANT_REPORT.md).
 
+And the copilot has a face: `overlay/` is a Tauri v2 shell — press
+**Ctrl+Shift+Space** for a small always-on-top ask card
+(**Ctrl+Shift+A** asks "what's happening?" with screen + transcript in
+one keystroke, Esc dismisses). It shows **context chips** naming
+exactly what was captured, streams the answer as markdown, and runs a
+tray icon that starts/stops recording and spawns the engine if it
+isn't running. The overlay summons in ~100 ms, talks only to the
+public API, and passes its own window handle to `/ask` so the capture
+never reads the overlay's previous answer back into the next one
+(engineering notes: [docs/PHASE9_OVERLAY_REPORT.md](docs/PHASE9_OVERLAY_REPORT.md)).
+
 The copilot layer is built under constraints that are design rules, not
 marketing:
 
@@ -151,6 +162,7 @@ the production pipeline — full methodology and budget misses in
 
 `crates/` — core, capture, pipeline, stt, llm, vision, server, cli ·
 `ui/` — Vite/React client (embedded into the binary) ·
+`overlay/` — Tauri v2 copilot overlay + tray (a pure API client) ·
 `fixtures/` — real captured API payloads driving the tests ·
 `benches/` — latency harness + results ·
 `docs/` — API reference + phase engineering reports.

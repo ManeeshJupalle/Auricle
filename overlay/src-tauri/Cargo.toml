@@ -1,0 +1,39 @@
+[package]
+name = "auricle-overlay"
+version = "0.3.0"
+description = "Auricle Copilot overlay — always-on-top ask window + tray for the Auricle engine"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ManeeshJupalle/Auricle"
+
+# Deliberately its own workspace: the overlay is a pure API client of the
+# engine and must not join the engine's cargo workspace (no path deps on
+# engine crates — Global Rule: public API only).
+[workspace]
+
+[lib]
+name = "auricle_overlay_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# `tauri build` enables this to serve the embedded frontend; a plain
+# `cargo build --release` without it produces a devUrl-pointing binary
+# that renders a blank window (found the hard way — see the phase report).
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["time", "macros"] }
+
+[profile.release]
+strip = true
