@@ -83,9 +83,9 @@ by inspection and the standard gates (fmt, clippy `-D warnings`,
 cargo test incl. new store/endpoint/autotitle tests, vitest 26/26,
 `npm run build` embedded into the release exe).
 
-## Visual identity pass (Claude Design import)
+## Visual identity pass (design mock import)
 
-The maintainer supplied a Claude Design mock (`Auricle.dc.html`) which was
+The maintainer supplied a design mock (`Auricle.dc.html`) which was
 implemented as the final visual identity: near-black radial-washed canvas,
 glassy gradient sidebar with an active-rail session list, red accent
 (#ef4444/#c0362f) with glow, Geist / Geist Mono typography, pill-style

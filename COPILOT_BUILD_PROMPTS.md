@@ -1,6 +1,6 @@
 # Auricle Copilot — Phased Build Prompts (Phases 7–9)
 
-One phase per Claude Code session. Do not start a phase until the previous phase's acceptance gate is verified and committed. These phases build ON the shipped v0.1 engine — the pipeline, capture, STT, and existing server behavior must not change except where a phase explicitly says so.
+One phase per build session. Do not start a phase until the previous phase's acceptance gate is verified and committed. These phases build ON the shipped v0.1 engine — the pipeline, capture, STT, and existing server behavior must not change except where a phase explicitly says so.
 
 ---
 
