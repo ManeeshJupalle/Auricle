@@ -6,8 +6,8 @@
 # - LIBCLANG_PATH: whisper-rs-sys runs bindgen at build time, which needs
 #   libclang. (Its bundled fallback bindings are Linux-generated and do not
 #   compile against MSVC — verified empirically, see PHASE2 notes.) This
-#   points at the per-user `pip install libclang` wheel; if you have a full
-#   LLVM install instead, use e.g. 'C:\Program Files\LLVM\bin'.
+#   points at a standard LLVM install (`winget install LLVM.LLVM`); a
+#   per-user `pip install libclang` wheel's native/ dir works too.
 [env]
 CMAKE = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-LIBCLANG_PATH = 'C:\Users\manee\AppData\Local\Programs\Python\Python311\Lib\site-packages\clang\native'
+LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'

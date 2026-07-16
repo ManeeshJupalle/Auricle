@@ -111,7 +111,7 @@ client; no engine change was needed or made.
 | Focus | foreground = overlay after every summon (RegisterHotKey grants activation; Phase 7 finding 14 holds) |
 | Esc dismiss | visible=False within 300 ms |
 | Quick-assist during a real session (Deepgram, live TTS) | answer grounded in BOTH sources; chips showed the true captured window + "transcript: last 10 min · N segments" |
-| HWND exclusion | overlay is foreground at capture time, yet chips/answers always name the window *behind* it (Chrome, Cursor) — never "Auricle Copilot"; the overlay never OCR'd its own answer |
+| HWND exclusion | overlay is foreground at capture time, yet chips/answers always name the window *behind* it (the browser/editor in use) — never "Auricle Copilot"; the overlay never OCR'd its own answer |
 | Engine killed under the overlay | amber "engine offline" badge (health poll backoff 1-2-4-8-10 s); badge clears after the engine returns; mid-stream ask ends with the truncated answer preserved |
 | Overlay killed mid-recording | engine state `recording` before and after; a sentence spoken *after* the kill was transcribed and persisted |
 | retain_context=false | after all overlay asks, the engine DB still has no `asks` table |
@@ -173,10 +173,10 @@ after, each verified in the `r2_*` screenshots:
 | 1c | Chip titles amputated at 34 chars | Budget raised to 48; typical browser titles now survive whole (locked by a vitest case) | `r2_*` chips |
 | 1d | Esc hint only on the follow-up placeholder | Both placeholders read "(Enter · Esc)" | `r2_summoned_*` |
 | 1e | Drop shadow clipped by the 4 px margin | Margin widened to 10 px with a compact shadow sized to fit it (window resize accounts for +20) | all `r2_*` — the card visibly floats |
-| 2 | Desktop content ghosted through the card | All card surfaces are fully opaque (`rgb()` gradients, no alpha); transparency exists only in the shadow gutter outside the card | compare `r1_answered_dark` top edge vs any `r2_*`; the strip of desktop visible at a shot's edge is the outside gutter, by design |
+| 2 | Desktop content ghosted through the card | All card surfaces are fully opaque (`rgb()` gradients, no alpha); transparency exists only in the shadow gutter outside the card | the `r1_*` cards are translucent (the page behind tints the surface) vs the opaque `r2_*` cards; any strip of desktop at a shot's edge is the outside gutter, by design |
 | 3 | Answer panel ≈ card background in dark | Answer panel lightened (rgb 30/34/43 → 24/27/35 gradient) + `--edge-strong` border | `r2_answered_dark` |
 | 4 | Light theme: dark chrome around a light card | Opaque light surfaces + lighter/softer light-theme shadow + slightly stronger light edge; what remains dark at a screenshot's rim is the see-through gutter showing the desktop, not chrome | `r2_summoned_light`, `r2_answered_light` |
-| 5 | Raw token count | Actions row shows "`{provider} · {elapsed}s`" (submit → answer_done, timed through event payloads so the reducer stays pure); token count moved to the row's tooltip | `r2_answered_dark` ("groq · 1.1s"), `r2_answered_light` ("groq · 1.8s") |
+| 5 | Raw token count | Actions row shows "`{provider} · {elapsed}s`" (submit → answer_done, timed through event payloads so the reducer stays pure); token count moved to the row's tooltip | `r2_answered_dark` / `r2_answered_light` ("groq · 1.2s") vs the `r1_*` raw token counts |
 | 6 | No distinct quick-assist state | "⚡ Quick assist — what's happening right now?" marker renders above the chips for hotkey-initiated asks (cleared by the next typed ask); thinking state covered under 1b | `r2_thinking_dark`, `r2_answered_dark`, `r2_answered_light` |
 | 7 | MSI required elevation by default | Custom WiX template (tauri-bundler 2.x stock template + `ALLUSERS=2`/`MSIINSTALLPERUSER=1` in the Property table — the canonical dual-purpose pattern; only that block changed). Plain `msiexec /i <msi> /quiet` now installs per-user with **no elevation** (verified: exit 0 into `%LOCALAPPDATA%\Programs`, uninstall clean); per-machine remains available via `ALLUSERS=1 MSIINSTALLPERUSER=""`, documented in BUILDING.md |
 

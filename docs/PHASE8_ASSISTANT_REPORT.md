@@ -66,7 +66,7 @@ TTS played through the system default output; all spoken sentences
 transcribed correctly. Asks were issued with
 `include_screen: true, include_transcript: true` and the question
 *"what was just being discussed and what's on my screen?"* while a
-window ("Almanac", a text-dense briefing page) was foreground. The
+window (a text-dense briefing page) was foreground. The
 `curl -N` exchange is reproduced in API.md; every answer was verified
 grounded in BOTH sources (transcript facts: Aurora project, $320,000
 budget, two Rust engineers; screen facts: the briefing's action items).

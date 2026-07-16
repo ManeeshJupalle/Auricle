@@ -50,14 +50,14 @@ describe('context chip derivation (the honesty affordance)', () => {
     expect(chips[0].label.length).toBeLessThanOrEqual('msedge — '.length + 48);
     expect(chips[0].label.endsWith('…')).toBe(true);
     // Typical browser titles now survive whole (round-2 item 3).
-    const jira = deriveChips(
+    const board = deriveChips(
       {
-        screen: { window_title: 'Almanac - Kanban Board - Jira', app_name: 'chrome' },
+        screen: { window_title: 'Sprint Board — Demo Project - Personal', app_name: 'msedge' },
         transcript_segments: null,
       },
       10,
     );
-    expect(jira[0].label).toBe('chrome — Almanac - Kanban Board - Jira');
+    expect(board[0].label).toBe('msedge — Sprint Board — Demo Project - Personal');
   });
 
   it('skips the app prefix when the title already names it', () => {
@@ -68,10 +68,10 @@ describe('context chip derivation (the honesty affordance)', () => {
     // "Task Manager" doesn't contain "Taskmgr" — prefix kept.
     expect(chips[0].label).toBe('Taskmgr — Task Manager');
     const chips2 = deriveChips(
-      { screen: { window_title: 'Almanac', app_name: 'almanac' }, transcript_segments: null },
+      { screen: { window_title: 'Notepad', app_name: 'notepad' }, transcript_segments: null },
       10,
     );
-    expect(chips2[0].label).toBe('Almanac');
+    expect(chips2[0].label).toBe('Notepad');
   });
 
   it('respects a non-default window length on the label', () => {

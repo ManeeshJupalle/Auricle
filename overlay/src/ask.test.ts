@@ -10,10 +10,10 @@ describe('ask SSE event mapping', () => {
     const started = applyAskEvent(
       {
         type: 'ask_started',
-        ask_id: 'a19f6718d151',
+        ask_id: 'a19f69571183',
         provider: 'groq',
         model: 'llama-3.3-70b-versatile',
-        screen: { app_name: 'almanac', ocr_ms: 15, window_title: 'Almanac' },
+        screen: { app_name: 'msedge', ocr_ms: 74, window_title: 'Speech recognition - Wikipedia' },
         transcript_segments: 3,
       },
       10,
@@ -21,10 +21,10 @@ describe('ask SSE event mapping', () => {
     );
     expect(started).toEqual({
       type: 'ASK_STARTED',
-      askId: 'a19f6718d151',
+      askId: 'a19f69571183',
       provider: 'groq',
       chips: [
-        { icon: 'screen', label: 'Almanac' },
+        { icon: 'screen', label: 'msedge — Speech recognition - Wikipedia' },
         { icon: 'transcript', label: 'transcript: last 10 min · 3 segments' },
       ],
     });

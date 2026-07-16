@@ -99,7 +99,7 @@ literally): `GET /api/v1/sessions?q=budget`.
 
 ```
 $ curl http://127.0.0.1:4820/api/v1/sessions
-{"sessions":[{"ended_at":1783233667,"id":"s19f31016d52","meta":{"audio":{"loopback":"C:\\Users\\manee\\AppData\\Local\\auricle\\sessions\\s19f31016d52\\loopback_16k.wav","mic":"C:\\Users\\manee\\AppData\\Local\\auricle\\sessions\\s19f31016d52\\mic_16k.wav"},"devices":{"loopback":"Speakers (Stealth 600P Gen 3)","mic":"Microphone (Stealth 600P Gen 3)"}},"started_at":1783233605,"stt_provider":"deepgram","title":"API walkthrough"}, …]}
+{"sessions":[{"ended_at":1783233667,"id":"s19f31016d52","meta":{"audio":{"loopback":"C:\\Users\\you\\AppData\\Local\\auricle\\sessions\\s19f31016d52\\loopback_16k.wav","mic":"C:\\Users\\you\\AppData\\Local\\auricle\\sessions\\s19f31016d52\\mic_16k.wav"},"devices":{"loopback":"Speakers (Stealth 600P Gen 3)","mic":"Microphone (Stealth 600P Gen 3)"}},"started_at":1783233605,"stt_provider":"deepgram","title":"API walkthrough"}, …]}
 ```
 
 `meta.audio` appears only when `[audio].retain_raw_audio = true`: the
@@ -276,25 +276,24 @@ Nothing question- or screen-derived is persisted unless
 in-memory only and dies with the daemon.
 
 Real captured exchange (Groq, while a session was recording a meeting
-about a beta rollout and a briefing page was the foreground window;
-abridged mid-stream):
+and a sprint-board page was the foreground window; abridged mid-stream):
 
 ```
 $ curl -N -X POST http://127.0.0.1:4820/api/v1/ask \
     -H "Content-Type: application/json" \
     -d '{"question":"what was just being discussed and what'\''s on my screen?",
          "include_screen":true,"include_transcript":true,"provider":"groq"}'
-data: {"ask_id":"a19f6718d151","model":"llama-3.3-70b-versatile","provider":"groq","screen":{"app_name":"almanac","ocr_ms":15,"window_title":"Almanac"},"transcript_segments":3,"type":"ask_started"}
+data: {"ask_id":"a19f69571183","model":"llama-3.3-70b-versatile","provider":"groq","screen":{"app_name":"msedge","ocr_ms":74,"window_title":"Sprint Board — Demo Project - Personal - Microsoft Edge"},"transcript_segments":4,"type":"ask_started"}
 
-data: {"ask_id":"a19f6718d151","text":"*","type":"answer_delta"}
+data: {"ask_id":"a19f69571183","text":"The","type":"answer_delta"}
 
-data: {"ask_id":"a19f6718d151","text":" The","type":"answer_delta"}
+data: {"ask_id":"a19f69571183","text":" recent","type":"answer_delta"}
 
-data: {"ask_id":"a19f6718d151","text":" recent","type":"answer_delta"}
+data: {"ask_id":"a19f69571183","text":" discussion","type":"answer_delta"}
 …
-data: {"ask_id":"a19f6718d151","text":"\".","type":"answer_delta"}
+data: {"ask_id":"a19f69571183","text":")","type":"answer_delta"}
 
-data: {"ask_id":"a19f6718d151","type":"answer_done","usage":{"completion_tokens":39,"prompt_tokens":366,"total_tokens":405}}
+data: {"ask_id":"a19f69571183","type":"answer_done","usage":{"completion_tokens":151,"prompt_tokens":546,"total_tokens":697}}
 ```
 
 The opening `ask_started` event echoes exactly what context was
