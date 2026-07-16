@@ -120,6 +120,11 @@ impl Engine {
         &self.cfg
     }
 
+    /// The data root this engine writes under (DB, models/, sessions/).
+    pub fn data_root(&self) -> &std::path::Path {
+        &self.data_root
+    }
+
     pub fn subscribe_important(&self) -> broadcast::Receiver<WsEvent> {
         self.important_tx.subscribe()
     }

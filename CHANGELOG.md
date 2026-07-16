@@ -26,7 +26,9 @@ same public API.
 - **Security:** same-origin enforcement for browser requests — foreign
   pages cannot open `/ws/live` and read transcripts (WebSocket handshakes
   bypass CORS); tokenless loopback binds reject non-localhost `Host`
-  headers (DNS rebinding).
+  headers (DNS rebinding); bearer tokens compared in constant time;
+  retained-audio serving is path-contained under the engine's sessions
+  directory (defense-in-depth against database tampering).
 - **Screen peek (`auricle-vision`):** on-demand single-frame capture of
   the active window (Windows.Graphics.Capture) + local OCR
   (Windows.Media.Ocr) behind a `ScreenReader` trait; reading-order
@@ -86,6 +88,9 @@ same public API.
   handle so captures never include the overlay itself.
 - **MSI installer:** per-user by default (no elevation), engine bundled
   as a sidecar; per-machine via documented msiexec flags.
+- **Overlay hardening:** strict webview CSP; the engine attach validates
+  the health payload shape before routing asks, so an unrelated process
+  squatting the port is never mistaken for the engine.
 
 Measured on the reference laptop (i7-9750H): capture→partial 0.14 s
 (Deepgram p50), hotkey→overlay visible 91–122 ms, ask time-to-first-token

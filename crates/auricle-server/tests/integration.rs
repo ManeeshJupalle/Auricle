@@ -183,6 +183,31 @@ async fn retained_audio_is_16bit_and_served_with_ranges() {
 }
 
 #[tokio::test]
+async fn session_audio_never_serves_paths_outside_the_sessions_dir() {
+    // Defense-in-depth: if session meta is tampered to point at an
+    // arbitrary file, the audio endpoint must refuse to serve it.
+    let (base, engine) = spawn_server("audio-containment").await;
+    let outside = fixture_path(); // a real file, deliberately outside data_root/sessions
+    engine
+        .store()
+        .create_session(
+            "tampered",
+            "t",
+            1_700_000_000,
+            "fake",
+            &serde_json::json!({"audio": {"loopback": outside.to_string_lossy()}}),
+        )
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/api/v1/sessions/tampered/audio/loopback"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404, "outside path must not be served");
+}
+
+#[tokio::test]
 async fn cross_origin_and_rebound_requests_are_rejected() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;

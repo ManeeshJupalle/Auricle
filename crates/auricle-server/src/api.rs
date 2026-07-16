@@ -205,7 +205,7 @@ async fn auth_middleware(
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .is_some_and(|t| t == expected.as_str());
+            .is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
         if !ok {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -215,6 +215,21 @@ async fn auth_middleware(
         }
     }
     next.run(request).await
+}
+
+/// Constant-time byte comparison for the bearer token. Token-gated binds
+/// are remote by definition, and a plain `==` short-circuits at the first
+/// mismatching byte — response timing would leak how much of the token a
+/// caller has guessed. (Length still short-circuits: token length is not
+/// treated as secret.)
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// An Origin is acceptable when it is same-origin with the request's Host,
@@ -570,7 +585,19 @@ async fn session_audio(
         )
             .into_response();
     };
-    if tokio::fs::metadata(path).await.is_err() {
+    // Defense-in-depth: the path was written by this engine, but a
+    // tampered database must not turn this endpoint into an arbitrary
+    // file server. Canonicalize (resolving `..` and symlinks) and require
+    // the file to live under this engine's sessions directory.
+    let sessions_root = state.engine.data_root().join("sessions");
+    let contained = match (
+        tokio::fs::canonicalize(path).await,
+        tokio::fs::canonicalize(&sessions_root).await,
+    ) {
+        (Ok(file), Ok(root)) => file.starts_with(&root),
+        _ => false, // missing file or missing root: nothing to serve
+    };
+    if !contained {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "retained audio file is missing on disk"})),
@@ -713,6 +740,15 @@ pub(crate) fn internal(msg: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constant_time_eq_matches_semantics_of_eq() {
+        assert!(constant_time_eq(b"secret-token", b"secret-token"));
+        assert!(!constant_time_eq(b"secret-token", b"secret-tokeX"));
+        assert!(!constant_time_eq(b"secret-token", b"Xecret-token"));
+        assert!(!constant_time_eq(b"short", b"longer-token"));
+        assert!(constant_time_eq(b"", b""));
+    }
 
     #[test]
     fn loopback_authorities_are_recognized() {

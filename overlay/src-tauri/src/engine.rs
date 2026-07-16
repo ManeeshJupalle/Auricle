@@ -30,6 +30,12 @@ impl EngineExe {
 
 /// Resolution order: env override → exe-adjacent sidecar → PATH. Pure
 /// given its inputs (unit-tested); the caller passes the real env/exe dir.
+///
+/// The PATH fallback is a deliberate trade-off (audit finding, accepted):
+/// MSI installs always have the adjacent sidecar and never reach it; it
+/// exists for `cargo install auricle-cli` users running the bare overlay
+/// exe. A hostile writable PATH entry is already game over for every
+/// program on the machine, not something this lookup can defend.
 pub fn resolve_engine_exe(env_override: Option<PathBuf>, exe_dir: Option<&Path>) -> EngineExe {
     if let Some(p) = env_override {
         return EngineExe::EnvOverride(p);
@@ -52,13 +58,27 @@ pub enum Attach {
 }
 
 pub async fn health_ok(client: &reqwest::Client, base_url: &str) -> bool {
-    client
+    let Ok(resp) = client
         .get(format!("{base_url}/api/v1/health"))
         .timeout(Duration::from_millis(1500))
         .send()
         .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+    else {
+        return false;
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    // Impersonation guard: any local process can bind the port first (an
+    // unrelated dev server squatted :1420 during Phase 9 verification —
+    // same failure mode). Before attaching and routing asks here, require
+    // the response to carry Auricle's health shape. Not cryptographic
+    // (loopback processes are mutually trusted by design, see API.md),
+    // but it stops accidental port squatters cold.
+    match resp.json::<serde_json::Value>().await {
+        Ok(v) => v["status"] == "ok" && v["version"].is_string() && v["state"].is_string(),
+        Err(_) => false,
+    }
 }
 
 /// Attach to a running engine or spawn one and wait for it to answer.
@@ -140,9 +160,8 @@ mod tests {
         assert_eq!(resolve_engine_exe(None, None), EngineExe::OnPath);
     }
 
-    #[tokio::test]
-    async fn attach_when_health_answers_spawns_nothing() {
-        // A local listener that answers 200 to anything.
+    /// Serve a fixed HTTP body on an ephemeral port.
+    fn serve_body(body: &'static str) -> std::net::SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -151,14 +170,40 @@ mod tests {
                 let mut s = stream;
                 let mut buf = [0u8; 1024];
                 let _ = s.read(&mut buf);
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(response.as_bytes());
             }
         });
+        addr
+    }
+
+    #[tokio::test]
+    async fn attach_when_auricle_health_answers_spawns_nothing() {
+        // The real health shape (API.md): status + version + state.
+        let addr =
+            serve_body(r#"{"active_session":null,"state":"idle","status":"ok","version":"0.3.0"}"#);
         let client = reqwest::Client::new();
         // A nonexistent exe path proves nothing is spawned on this path.
         let exe = EngineExe::EnvOverride(PathBuf::from("Z:/does/not/exist.exe"));
         let result = attach_or_spawn(&client, &format!("http://{addr}"), exe).await;
         assert_eq!(result, Ok(Attach::Attached));
+    }
+
+    #[tokio::test]
+    async fn a_port_squatter_is_not_attached_to() {
+        // 200 OK from something that is not Auricle: never attach — fall
+        // through to the spawn path (which fails here, proving the fall).
+        let addr = serve_body(r#"{"hello":"world"}"#);
+        let client = reqwest::Client::new();
+        let exe = EngineExe::EnvOverride(PathBuf::from("Z:/does/not/exist.exe"));
+        let err = attach_or_spawn(&client, &format!("http://{addr}"), exe)
+            .await
+            .unwrap_err();
+        assert!(err.contains("could not start the engine"), "{err}");
     }
 
     #[tokio::test]
