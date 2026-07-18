@@ -220,16 +220,13 @@ async fn auth_middleware(
 /// Constant-time byte comparison for the bearer token. Token-gated binds
 /// are remote by definition, and a plain `==` short-circuits at the first
 /// mismatching byte — response timing would leak how much of the token a
-/// caller has guessed. (Length still short-circuits: token length is not
-/// treated as secret.)
+/// caller has guessed. Delegates to `subtle`, whose `ct_eq` carries an
+/// optimization barrier: a hand-rolled fold can be legally rewritten by
+/// the optimizer into an early-exit compare, reintroducing the leak.
+/// (Length still short-circuits: token length is not treated as secret.)
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    use subtle::ConstantTimeEq;
+    a.ct_eq(b).into()
 }
 
 /// An Origin is acceptable when it is same-origin with the request's Host,
@@ -538,10 +535,20 @@ async fn delete_session(State(state): State<AppState>, Path(id): Path<String>) -
         )
             .into_response();
     }
-    // Retained audio (if any) lives outside the DB; remove it with the rows.
-    let audio_dir = crate::default_data_root()
-        .map(|r| r.join("sessions").join(&id))
-        .ok();
+    // Retained audio (if any) lives outside the DB; remove it with the
+    // rows. Build the dir from this engine's own data root (not the
+    // process default — an engine on a custom root would otherwise orphan
+    // its WAVs), and only when the id is a single path component so a
+    // tampered id cannot escape the sessions dir via `..` or separators.
+    let audio_dir = {
+        let mut comps = std::path::Path::new(&id).components();
+        match (comps.next(), comps.next()) {
+            (Some(std::path::Component::Normal(_)), None) => {
+                Some(state.engine.data_root().join("sessions").join(&id))
+            }
+            _ => None,
+        }
+    };
     match state.engine.store().delete_session(&id) {
         Ok(true) => {
             if let Some(dir) = audio_dir {
@@ -588,23 +595,25 @@ async fn session_audio(
     // Defense-in-depth: the path was written by this engine, but a
     // tampered database must not turn this endpoint into an arbitrary
     // file server. Canonicalize (resolving `..` and symlinks) and require
-    // the file to live under this engine's sessions directory.
+    // the file to live under this engine's sessions directory. Serve the
+    // *canonicalized* path, not the raw one, so the file that is opened is
+    // the file that was checked (a symlink swapped after the check cannot
+    // redirect the open).
     let sessions_root = state.engine.data_root().join("sessions");
-    let contained = match (
+    let served = match (
         tokio::fs::canonicalize(path).await,
         tokio::fs::canonicalize(&sessions_root).await,
     ) {
-        (Ok(file), Ok(root)) => file.starts_with(&root),
-        _ => false, // missing file or missing root: nothing to serve
+        (Ok(file), Ok(root)) if file.starts_with(&root) => file,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "retained audio file is missing on disk"})),
+            )
+                .into_response();
+        }
     };
-    if !contained {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "retained audio file is missing on disk"})),
-        )
-            .into_response();
-    }
-    match tower::ServiceExt::oneshot(tower_http::services::ServeFile::new(path), request).await {
+    match tower::ServiceExt::oneshot(tower_http::services::ServeFile::new(&served), request).await {
         Ok(resp) => resp.into_response(),
         Err(infallible) => match infallible {},
     }

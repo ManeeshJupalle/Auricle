@@ -155,7 +155,17 @@ async fn get_health(app: tauri::AppHandle) -> Result<serde_json::Value, String> 
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    resp.json().await.map_err(|e| e.to_string())
+    if !resp.status().is_success() {
+        return Err(format!("engine health returned HTTP {}", resp.status()));
+    }
+    // The attach guard only runs once; a process can squat the port after
+    // the engine exits. Re-check the health shape on every poll so the
+    // overlay never reports "connected" (or routes asks) to a squatter.
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !engine::is_engine_health(&body) {
+        return Err("response on the engine port is not Auricle's health shape".to_string());
+    }
+    Ok(body)
 }
 
 #[tauri::command]

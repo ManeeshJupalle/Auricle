@@ -97,7 +97,12 @@ first use.
 - The daemon defends its localhost boundary: browser requests are
   same-origin enforced (WebSocket handshakes bypass CORS — a foreign page
   cannot read your live transcript) and tokenless loopback binds reject
-  non-localhost `Host` headers (DNS rebinding).
+  non-localhost `Host` headers (DNS rebinding). Bearer tokens are compared
+  in constant time, and retained-audio serving is path-contained under the
+  engine's sessions directory (defense-in-depth against database tampering).
+- The overlay ships a strict webview CSP, and its engine attach validates
+  the health payload shape before routing asks — a stray process squatting
+  the port is never mistaken for the engine.
 - Full API reference with real captured examples: [docs/API.md](docs/API.md).
 
 ## The copilot

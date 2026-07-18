@@ -187,6 +187,10 @@ async fn session_audio_never_serves_paths_outside_the_sessions_dir() {
     // Defense-in-depth: if session meta is tampered to point at an
     // arbitrary file, the audio endpoint must refuse to serve it.
     let (base, engine) = spawn_server("audio-containment").await;
+    // The sessions root must exist on disk, or the endpoint 404s by
+    // failing to canonicalize a missing root — which would pass this test
+    // for the wrong reason (never exercising the containment comparison).
+    std::fs::create_dir_all(engine.data_root().join("sessions")).unwrap();
     let outside = fixture_path(); // a real file, deliberately outside data_root/sessions
     engine
         .store()
@@ -391,6 +395,12 @@ async fn full_session_via_rest_and_ws() {
         .unwrap();
     assert_eq!(health["status"], "ok");
     assert_eq!(health["state"], "idle");
+    // The overlay's attach guard requires a string `version`; pin it here
+    // so a server-side rename/retype can't silently break cross-crate attach.
+    assert!(
+        health["version"].is_string(),
+        "health must carry a string version"
+    );
 
     // Subscribe to live events first.
     let ws_url = base.replace("http://", "ws://") + "/ws/live";

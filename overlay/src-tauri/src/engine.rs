@@ -76,9 +76,17 @@ pub async fn health_ok(client: &reqwest::Client, base_url: &str) -> bool {
     // (loopback processes are mutually trusted by design, see API.md),
     // but it stops accidental port squatters cold.
     match resp.json::<serde_json::Value>().await {
-        Ok(v) => v["status"] == "ok" && v["version"].is_string() && v["state"].is_string(),
+        Ok(v) => is_engine_health(&v),
         Err(_) => false,
     }
+}
+
+/// True when a `/health` body carries Auricle's documented shape
+/// (`status: "ok"` + string `version` + string `state`). Shared by the
+/// attach probe and the steady-state health poll so a port squatter is
+/// rejected in both, not only at attach time.
+pub fn is_engine_health(v: &serde_json::Value) -> bool {
+    v["status"] == "ok" && v["version"].is_string() && v["state"].is_string()
 }
 
 /// Attach to a running engine or spawn one and wait for it to answer.
