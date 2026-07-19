@@ -167,6 +167,10 @@ architecture doc, verbatim:
   transcript text is scrubbed of emails, card/SSN numbers, phone numbers,
   IPs, and API-key-shaped secrets — replaced with visible labels like
   `[email]` — before it is stored, shown, or sent to any cloud provider.
+- **Diagnostics stay local.** Crashes are written to a local file (no
+  telemetry, no phone-home). If you hit a bug, the dashboard's **About** tab
+  has a "Copy diagnostics" button — a bundle of version + recent crash
+  traces (no user content) to attach to an issue, entirely at your choice.
 
 ## Performance
 

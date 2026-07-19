@@ -96,6 +96,22 @@ export interface ProvidersResponse {
 
 export type Settings = Record<string, unknown>;
 
+export interface CrashRecord {
+  ts: number;
+  version: string;
+  os: string;
+  arch: string;
+  thread: string;
+  message: string;
+  location: string;
+  backtrace: string;
+}
+
+export interface DiagnosticsInfo {
+  system: { version: string; os: string; arch: string };
+  crashes: CrashRecord[];
+}
+
 export interface EgressEntry {
   id: number;
   ts: number;

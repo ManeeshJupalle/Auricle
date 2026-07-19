@@ -1586,6 +1586,56 @@ select option:disabled {
   gap: 4px;
 }
 
+/* ---------- diagnostics (About) ---------- */
+
+.diag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.diag-row .mono {
+  font-size: 12px;
+}
+
+.diag-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.diag-list li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--edge);
+  font-size: 13px;
+}
+
+.diag-when {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.diag-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+}
+
+.diag-at {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* ---------- egress ledger ---------- */
 
 .egress-headline {

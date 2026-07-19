@@ -1,5 +1,6 @@
 import type {
   DeviceInfo,
+  DiagnosticsInfo,
   EgressEntry,
   Health,
   ProvidersResponse,
@@ -102,6 +103,8 @@ export const api = {
     fetch(`/api/v1/egress${session ? `?session=${encodeURIComponent(session)}` : ''}`)
       .then((r) => json<{ entries: EgressEntry[] }>(r))
       .then((b) => b.entries),
+
+  diagnostics: () => fetch('/api/v1/diagnostics').then((r) => json<DiagnosticsInfo>(r)),
 
   exportUrl: (id: string) => `/api/v1/sessions/${encodeURIComponent(id)}/export?format=md`,
 };

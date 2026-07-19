@@ -76,6 +76,7 @@ pub fn build_router_with_reader(
             put(put_secret).delete(delete_secret),
         )
         .route("/api/v1/egress", get(egress))
+        .route("/api/v1/diagnostics", get(diagnostics))
         .route("/api/v1/peek", post(peek))
         .route("/api/v1/ask", post(crate::ask::ask))
         .route("/ws/live", get(crate::ws::ws_handler))
@@ -115,6 +116,10 @@ async fn static_handler(uri: axum::http::Uri) -> Response {
 
 /// Run the daemon: open the store, bind, serve until the process ends.
 pub async fn serve(cfg: Config, data_root: PathBuf, bind_override: Option<String>) -> Result<()> {
+    // Capture panics (this thread and spawned tasks) to a local file for
+    // diagnostics. Local only — nothing is sent anywhere.
+    crate::diagnostics::install_panic_hook(data_root.clone());
+
     let bind = bind_override.unwrap_or_else(|| cfg.server.bind.clone());
     let addr: std::net::SocketAddr = bind
         .parse()
@@ -437,6 +442,18 @@ async fn egress(State(state): State<AppState>, Query(q): Query<EgressQuery>) -> 
         Ok(entries) => Json(json!({ "entries": entries })).into_response(),
         Err(e) => internal(e.to_string()),
     }
+}
+
+/// GET /api/v1/diagnostics — build/runtime info plus recent crash records
+/// captured locally. Read-only; a user copies this into a bug report. No
+/// user content is ever included, and nothing is sent anywhere.
+async fn diagnostics(State(state): State<AppState>) -> Response {
+    let dir = state.engine.data_root();
+    Json(json!({
+        "system": crate::diagnostics::system_info(),
+        "crashes": crate::diagnostics::recent_crashes(dir, 20),
+    }))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]

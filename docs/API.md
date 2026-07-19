@@ -282,6 +282,22 @@ $ curl http://127.0.0.1:4820/api/v1/egress?limit=2
 ]}
 ```
 
+## GET /api/v1/diagnostics
+
+Build/runtime info plus recent crash records captured locally (a panic hook
+appends to `<data_root>/diagnostics.jsonl`). Read-only, for pasting into a
+bug report. **Local only** — nothing is sent anywhere, and no user content
+(transcripts, prompts, audio) is included; records hold only the panic
+message, source location, thread, and backtrace.
+
+```
+$ curl http://127.0.0.1:4820/api/v1/diagnostics
+{"system":{"version":"0.3.0","os":"windows","arch":"x86_64"},
+ "crashes":[{"ts":1721348051,"version":"0.3.0","os":"windows","arch":"x86_64",
+   "thread":"tokio-runtime-worker","message":"...","location":"src/....rs:120:9",
+   "backtrace":"..."}]}
+```
+
 ## POST /api/v1/peek
 
 Capture the active window and OCR it — on demand, one frame, locally
