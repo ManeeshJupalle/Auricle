@@ -26,6 +26,7 @@ use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
 
 use config::{Corner, OverlayConfig};
 
@@ -242,6 +243,53 @@ async fn run_tray_action(http: &reqwest::Client, base: &str, action: &str) -> Re
     }
 }
 
+/// Check GitHub for a newer signed release. On the tray action
+/// (`interactive`) this downloads, installs, and relaunches; on the silent
+/// startup check it only nudges via a toast so nothing installs behind the
+/// user's back. Update integrity is verified against the bundled public key
+/// (tauri.conf.json → plugins.updater.pubkey); a tampered artifact is
+/// rejected before it can run.
+async fn check_for_updates(app: tauri::AppHandle, interactive: bool) {
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            if interactive {
+                let _ = app.emit("tray-error", format!("updater unavailable: {e}"));
+            }
+            return;
+        }
+    };
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            if !interactive {
+                let _ = app.emit(
+                    "tray-error",
+                    format!("Update {version} is available — Tray → Check for updates to install."),
+                );
+                return;
+            }
+            let _ = app.emit("tray-error", format!("Downloading update {version}…"));
+            match update.download_and_install(|_, _| {}, || {}).await {
+                Ok(()) => app.restart(),
+                Err(e) => {
+                    let _ = app.emit("tray-error", format!("update failed: {e}"));
+                }
+            }
+        }
+        Ok(None) => {
+            if interactive {
+                let _ = app.emit("tray-error", "You're on the latest version.".to_string());
+            }
+        }
+        Err(e) => {
+            if interactive {
+                let _ = app.emit("tray-error", format!("update check failed: {e}"));
+            }
+        }
+    }
+}
+
 /// Tray actions hit the same public REST API as any other client.
 /// Failures surface in the overlay itself (summon + toast event).
 fn tray_action(app: tauri::AppHandle, action: &'static str) {
@@ -289,6 +337,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -336,6 +385,7 @@ pub fn run() {
                 .text("dashboard", "Open dashboard")
                 .text("summon", "Summon copilot")
                 .separator()
+                .text("check-updates", "Check for updates")
                 .text("quit", "Quit overlay")
                 .build()?;
             TrayIconBuilder::with_id("main")
@@ -351,6 +401,9 @@ pub fn run() {
                         let _ = app.opener().open_url(url, None::<&str>);
                     }
                     "summon" => summon(app, false),
+                    "check-updates" => {
+                        tauri::async_runtime::spawn(check_for_updates(app.clone(), true));
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -378,6 +431,11 @@ pub fn run() {
                     }
                 }
             });
+
+            // Silent update check on launch: nudge (never auto-install) if a
+            // newer signed release is waiting.
+            let update_handle = app.handle().clone();
+            tauri::async_runtime::spawn(check_for_updates(update_handle, false));
             Ok(())
         })
         .on_window_event(|window, event| match event {

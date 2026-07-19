@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Overlay webview: core window/event access only. All engine traffic goes through Rust commands.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "updater:default"]
 }

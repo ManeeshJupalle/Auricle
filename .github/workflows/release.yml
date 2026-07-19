@@ -1,0 +1,78 @@
+name: Release
+
+# Tag a version (e.g. `git tag v0.4.0 && git push origin v0.4.0`) to build a
+# signed installer + updater artifacts and open a draft GitHub Release. The
+# draft is published manually after a smoke test — publishing is what makes
+# it the "latest" release the updater endpoint points at.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # whisper-rs-sys (an engine dependency) needs CMake + libclang, same as CI.
+      - name: Point CMAKE and LIBCLANG_PATH at the runner's tools
+        shell: pwsh
+        run: |
+          "CMAKE=$((Get-Command cmake).Source)" | Out-File -Append $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
+
+      # 1. Dashboard UI first — rust-embed snapshots crates/auricle-server/ui-dist
+      #    into the engine binary at compile time.
+      - name: Build dashboard UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      # 2. Engine binary (embeds the dashboard) staged as the overlay's sidecar.
+      #    Tauri resolves externalBin `binaries/auricle` to the target-triple name.
+      - name: Build engine and stage the sidecar
+        shell: pwsh
+        run: |
+          cargo build --release -p auricle-cli
+          New-Item -ItemType Directory -Force overlay/src-tauri/binaries | Out-Null
+          Copy-Item target/release/auricle.exe `
+            overlay/src-tauri/binaries/auricle-x86_64-pc-windows-msvc.exe -Force
+
+      - name: Install overlay dependencies
+        working-directory: overlay
+        run: npm ci
+
+      # 3. Build the overlay, sign the updater artifacts, generate latest.json,
+      #    and open a draft Release with the MSI + latest.json attached.
+      - name: Build overlay and publish draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signature (integrity of the update payload). Generate once
+          # with `npm run tauri signer generate`; store the private key + its
+          # password as these two repo secrets. NOT code signing.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Authenticode code signing (SmartScreen trust) — the remaining step,
+          # gated on a cert. With Azure Trusted Signing, set a sign command in
+          # bundle.windows.signCommand and its secrets here. See RELEASING.md.
+          # TAURI_WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+        with:
+          projectPath: overlay
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Auricle Copilot ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
