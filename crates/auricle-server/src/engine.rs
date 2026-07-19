@@ -199,6 +199,12 @@ impl Engine {
             .get("retain_raw_audio")
             .and_then(|v| v.as_bool())
             .unwrap_or(self.cfg.audio.retain_raw_audio);
+        // PII redaction: off unless the setting turns it on. Read once here
+        // so a mid-session toggle doesn't split a transcript.
+        let redact_pii = settings
+            .get("redact_pii")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let mut provider_cfg = self.cfg.clone();
         if let Some(model) = setting_str("whisper_model") {
             provider_cfg.stt.whisper_local.model = model;
@@ -414,6 +420,7 @@ impl Engine {
             self.important_tx.clone(),
             self.partial_tx.clone(),
             session_clock,
+            redact_pii,
         ));
 
         *self.active.lock().unwrap() = Some(ActiveSession {
@@ -777,6 +784,7 @@ async fn collect_events(
     important_tx: broadcast::Sender<WsEvent>,
     partial_tx: broadcast::Sender<WsEvent>,
     session_clock: Instant,
+    redact_pii: bool,
 ) {
     let mut assembler = Assembler::new(&session_id);
     while let Some((channel, ev)) = ev_rx.recv().await {
@@ -787,9 +795,15 @@ async fn collect_events(
             });
             continue;
         }
-        let Some(PipelineEvent::Transcript(t)) = assembler.ingest(ev) else {
+        let Some(PipelineEvent::Transcript(mut t)) = assembler.ingest(ev) else {
             continue;
         };
+        // Single choke point: scrub here and every consumer — the database,
+        // the live view, the transcript ring feeding asks, and summaries —
+        // sees only redacted text.
+        if redact_pii {
+            t.text = crate::redact::redact(&t.text);
+        }
         if t.is_final {
             if let Err(e) = store.insert_segment(
                 &session_id,

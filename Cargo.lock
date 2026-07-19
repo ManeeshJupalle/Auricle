@@ -204,6 +204,7 @@ dependencies = [
  "futures-util",
  "hound",
  "mime_guess",
+ "regex",
  "reqwest",
  "rusqlite",
  "rust-embed",

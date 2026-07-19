@@ -237,6 +237,20 @@ export function Settings() {
           Off by default. When enabled, future sessions store their audio locally and note the
           paths in session metadata.
         </p>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={settings['redact_pii'] === true}
+            onChange={(e) => save({ redact_pii: e.target.checked })}
+          />
+          <span>Redact PII from transcripts (emails, cards, SSNs, phone numbers, IPs, API keys)</span>
+          {saved === 'redact_pii' && <span className="saved">saved</span>}
+        </label>
+        <p className="dim note">
+          Off by default. When enabled, matches are replaced with a visible label (e.g. [email])
+          before the text is stored or sent to any cloud provider. Applies to future sessions and
+          covers transcript text only.
+        </p>
       </section>
     </div>
   );

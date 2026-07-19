@@ -207,6 +207,7 @@ config for *subsequent* session starts (request params still win):
 | `retain_raw_audio` | bool | `[audio].retain_raw_audio` |
 | `ollama_model` | string | `[llm.ollama].model` (summaries/titles) |
 | `llm_provider` | string | `[llm].provider` — default for summaries and post-stop auto-titles |
+| `redact_pii` | bool | none — when true, transcript text is scrubbed of PII/secrets before it is persisted or sent to any cloud provider (read at session start) |
 | `onboarded` | bool | none — set by the dashboard's first-run setup so it isn't shown again |
 
 Unrecognized keys are stored and returned but have no engine effect.

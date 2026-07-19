@@ -71,6 +71,8 @@ sha2 = "0.10"
 # Optimization-barrier-protected constant-time comparison for the bearer
 # token (a hand-rolled fold can be legalized into an early-exit compare).
 subtle = "2"
+# PII/secret redaction patterns for transcript text (auricle-server).
+regex = "1"
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 # Stream/Sink combinators for the tungstenite WebSocket (split/send/next).
 futures-util = "0.3"

@@ -163,6 +163,10 @@ architecture doc, verbatim:
   summary — with the destination and rough size, and records local-only
   actions too. Metadata only; contents are never logged. See it in the
   dashboard's **Egress** tab or `GET /api/v1/egress`.
+- **Optional PII redaction.** Turn on `redact_pii` (Settings → Privacy) and
+  transcript text is scrubbed of emails, card/SSN numbers, phone numbers,
+  IPs, and API-key-shaped secrets — replaced with visible labels like
+  `[email]` — before it is stored, shown, or sent to any cloud provider.
 
 ## Performance
 
