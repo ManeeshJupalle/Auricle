@@ -198,9 +198,9 @@ impl DeepgramProvider {
     /// the Windows user environment). The key lives in memory only; it is
     /// never persisted.
     pub fn from_env(cfg: &DeepgramConfig) -> Result<Self> {
-        let api_key = auricle_core::env_lookup(&cfg.api_key_env).ok_or_else(|| {
+        let api_key = auricle_core::secret_lookup(&cfg.api_key_env).ok_or_else(|| {
             Error::Stt(format!(
-                "deepgram API key env var {} is not set",
+                "deepgram API key {} is not set (environment or credential store)",
                 cfg.api_key_env
             ))
         })?;

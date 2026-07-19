@@ -69,15 +69,19 @@ pub struct OpenAiBatchProvider {
 }
 
 impl OpenAiBatchProvider {
-    /// Read the API key from `api_key_env`. Key lives in memory only.
+    /// Read the API key named `api_key_env` from the environment or the OS
+    /// credential store. Key lives in memory only.
     pub fn from_env(
         id: &'static str,
         api_key_env: &str,
         base_url: &str,
         model: &str,
     ) -> Result<Self> {
-        let api_key = auricle_core::env_lookup(api_key_env)
-            .ok_or_else(|| Error::Stt(format!("{id} API key env var {api_key_env} is not set")))?;
+        let api_key = auricle_core::secret_lookup(api_key_env).ok_or_else(|| {
+            Error::Stt(format!(
+                "{id} API key {api_key_env} is not set (environment or credential store)"
+            ))
+        })?;
         Ok(Self::with_key(id, api_key, base_url, model))
     }
 

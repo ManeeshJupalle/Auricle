@@ -7,7 +7,7 @@ use auricle_core::{Config, Error, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
 
@@ -71,6 +71,10 @@ pub fn build_router_with_reader(
         .route("/api/v1/sessions/{id}/export", get(export_session))
         .route("/api/v1/sessions/{id}/summarize", post(summarize_session))
         .route("/api/v1/settings", get(get_settings).put(put_settings))
+        .route(
+            "/api/v1/secrets/{provider}",
+            put(put_secret).delete(delete_secret),
+        )
         .route("/api/v1/peek", post(peek))
         .route("/api/v1/ask", post(crate::ask::ask))
         .route("/ws/live", get(crate::ws::ws_handler))
@@ -120,9 +124,10 @@ pub async fn serve(cfg: Config, data_root: PathBuf, bind_override: Option<String
         None
     } else {
         let var = cfg.server.token_env.clone();
-        Some(auricle_core::env_lookup(&var).ok_or_else(|| {
+        Some(auricle_core::secret_lookup(&var).ok_or_else(|| {
             Error::Config(format!(
-                "binding to non-localhost {addr} requires a bearer token in ${var}"
+                "binding to non-localhost {addr} requires a bearer token in {var} \
+                 (environment or credential store)"
             ))
         })?)
     };
@@ -346,6 +351,70 @@ async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
         .collect();
     let templates = auricle_llm::list_templates(&data_root.join("templates"));
     Json(json!({"providers": statuses, "llm": llm, "templates": templates}))
+}
+
+/// Map a public secret id to the config-declared name it is keyed under.
+/// Both the environment and the OS credential store use this name, so one
+/// entry serves every consumer (e.g. `groq` covers STT and LLM alike).
+/// Returns `None` for an unknown id.
+fn secret_name_for(cfg: &Config, id: &str) -> Option<String> {
+    let name = match id {
+        "deepgram" => &cfg.stt.deepgram.api_key_env,
+        "groq" => &cfg.llm.groq.api_key_env,
+        "openai" => &cfg.llm.openai_compat.api_key_env,
+        "token" => &cfg.server.token_env,
+        _ => return None,
+    };
+    Some(name.clone())
+}
+
+#[derive(serde::Deserialize)]
+struct SecretBody {
+    value: String,
+}
+
+/// Store an API key / token in the OS credential store. The value is
+/// written to the credential store only — never to config, the database,
+/// or the response (which reports presence, not the secret).
+async fn put_secret(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SecretBody>,
+) -> Response {
+    let Some(name) = secret_name_for(state.engine.config(), &id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown secret \"{id}\"")})),
+        )
+            .into_response();
+    };
+    if body.value.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "value must not be empty"})),
+        )
+            .into_response();
+    }
+    match auricle_core::secret_set(&name, &body.value) {
+        Ok(()) => Json(json!({"id": id, "stored": true})).into_response(),
+        Err(e) => internal(format!("credential store: {e}")),
+    }
+}
+
+/// Remove a stored secret from the OS credential store (idempotent). Does
+/// not clear an env-var-provided key; readiness reflects both sources.
+async fn delete_secret(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(name) = secret_name_for(state.engine.config(), &id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown secret \"{id}\"")})),
+        )
+            .into_response();
+    };
+    match auricle_core::secret_delete(&name) {
+        Ok(()) => Json(json!({"id": id, "deleted": true})).into_response(),
+        Err(e) => internal(format!("credential store: {e}")),
+    }
 }
 
 #[derive(serde::Deserialize)]

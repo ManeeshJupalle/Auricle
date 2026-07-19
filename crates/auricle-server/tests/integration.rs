@@ -212,6 +212,30 @@ async fn session_audio_never_serves_paths_outside_the_sessions_dir() {
 }
 
 #[tokio::test]
+async fn secrets_endpoint_rejects_unknown_id_and_empty_value() {
+    // Both paths return before the credential store is touched, so this
+    // never reads or writes real keys on the host.
+    let (base, _engine) = spawn_server("secrets").await;
+    let client = reqwest::Client::new();
+
+    let unknown = client
+        .put(format!("{base}/api/v1/secrets/not-a-provider"))
+        .json(&serde_json::json!({"value": "x"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 404, "unknown secret id must 404");
+
+    let empty = client
+        .put(format!("{base}/api/v1/secrets/deepgram"))
+        .json(&serde_json::json!({"value": "   "}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), 400, "empty value must 400");
+}
+
+#[tokio::test]
 async fn cross_origin_and_rebound_requests_are_rejected() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;

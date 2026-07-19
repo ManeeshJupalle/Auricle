@@ -74,6 +74,9 @@ dismisses. The tray icon starts/stops recording and opens the dashboard.
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
 + LLM answers/summaries), or any OpenAI-compatible endpoint via config.
+Keys can also be stored in the OS credential store (Windows Credential
+Manager) through `PUT /api/v1/secrets/{provider}`; resolution prefers the
+environment, then the credential store, so nothing is kept in config files.
 Local Whisper models download automatically with SHA-256 verification on
 first use.
 

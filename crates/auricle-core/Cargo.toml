@@ -16,3 +16,7 @@ toml = { workspace = true }
 # keys as missing (recurring real-user papercut).
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# OS credential store (Windows Credential Manager) for API keys entered
+# through the settings UI, so packaged users never have to set environment
+# variables. Resolution still prefers the environment (see secret.rs).
+keyring = { version = "3", features = ["windows-native"] }

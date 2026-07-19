@@ -66,10 +66,10 @@ pub fn llm_provider_ids() -> &'static [&'static str] {
 /// daemon is down).
 pub fn llm_provider_statuses(cfg: &Config) -> Vec<LlmProviderStatus> {
     let key_status = |var: &str| {
-        if auricle_core::env_lookup(var).is_some() {
+        if auricle_core::secret_present(var) {
             (true, format!("key present ({var})"))
         } else {
-            (false, format!("env var {var} not set"))
+            (false, format!("{var} not set (environment or credential store)"))
         }
     };
     let groq = key_status(&cfg.llm.groq.api_key_env);
@@ -107,9 +107,9 @@ pub fn create_llm_provider(id: &str, cfg: &Config) -> Result<Arc<dyn LlmProvider
             None,
         ))),
         "groq" => {
-            let key = auricle_core::env_lookup(&cfg.llm.groq.api_key_env).ok_or_else(|| {
+            let key = auricle_core::secret_lookup(&cfg.llm.groq.api_key_env).ok_or_else(|| {
                 Error::Config(format!(
-                    "groq LLM key env var {} is not set",
+                    "groq LLM key {} is not set (environment or credential store)",
                     cfg.llm.groq.api_key_env
                 ))
             })?;
@@ -122,9 +122,9 @@ pub fn create_llm_provider(id: &str, cfg: &Config) -> Result<Arc<dyn LlmProvider
         }
         "openai-compat" => {
             let key =
-                auricle_core::env_lookup(&cfg.llm.openai_compat.api_key_env).ok_or_else(|| {
+                auricle_core::secret_lookup(&cfg.llm.openai_compat.api_key_env).ok_or_else(|| {
                     Error::Config(format!(
-                        "openai-compat LLM key env var {} is not set",
+                        "openai-compat LLM key {} is not set (environment or credential store)",
                         cfg.llm.openai_compat.api_key_env
                     ))
                 })?;

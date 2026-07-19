@@ -62,10 +62,10 @@ pub fn provider_statuses(cfg: &Config, data_dir: &Path) -> Vec<ProviderStatus> {
     #[cfg(feature = "cloud")]
     {
         let key_status = |var: &str| {
-            if auricle_core::env_lookup(var).is_some() {
+            if auricle_core::secret_present(var) {
                 (true, format!("key present ({var})"))
             } else {
-                (false, format!("env var {var} not set"))
+                (false, format!("{var} not set (environment or credential store)"))
             }
         };
         let (ready, detail) = key_status(&cfg.stt.deepgram.api_key_env);
