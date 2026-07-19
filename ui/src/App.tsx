@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { api } from './api';
 import { Sidebar } from './components/Sidebar';
 import { useAuricle } from './store';
 import { About } from './views/About';
+import { Onboarding } from './views/Onboarding';
 import { SessionView } from './views/SessionView';
 import { Settings } from './views/Settings';
 
@@ -12,6 +14,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const conn = useAuricle((s) => s.conn);
   const activeSession = useAuricle((s) => s.activeSession);
   const droppedPartials = useAuricle((s) => s.droppedPartials);
@@ -24,6 +27,18 @@ export function App() {
       setView('session');
     }
   }, [activeSession]);
+
+  // First-run gate: show setup until the `onboarded` setting is true. If
+  // settings are unreachable, don't block the app.
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => setNeedsOnboarding(s.onboarded !== true))
+      .catch(() => setNeedsOnboarding(false));
+  }, []);
+
+  if (needsOnboarding === null) return <div className="app" />;
+  if (needsOnboarding) return <Onboarding onDone={() => setNeedsOnboarding(false)} />;
 
   return (
     <div className={`app ${collapsed ? 'sidebar-collapsed' : ''}`}>

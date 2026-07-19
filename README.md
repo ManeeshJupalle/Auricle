@@ -58,12 +58,15 @@ auricle record --stt whisper-local --model base.en   # live transcript in your t
 auricle peek             # OCR the window you're looking at (local, on-demand)
 ```
 
-Open `http://127.0.0.1:4820`, press **Start recording**, play your meeting —
-the system-audio side is labeled **Them**, your microphone is **You**.
+Open `http://127.0.0.1:4820`; a first-run setup walks you through picking
+audio devices, choosing fully-local vs cloud transcription, and entering
+any cloud keys. Then press **Start recording**, play your meeting — the
+system-audio side is labeled **Them**, your microphone is **You**.
 Sessions get LLM auto-titles after stop, full-text search in the sidebar,
 synchronized audio playback when raw-audio retention is on, and one-click
 summaries (minutes, action items, standup, 1:1) with a local (Ollama) or
-cloud LLM.
+cloud LLM. Devices, providers, and keys are all editable later under
+**Settings**.
 
 **Copilot:** install `Auricle Copilot_0.3.0_x64_en-US.msi` from Releases
 (per-user, no admin prompt; the engine is bundled and spawns

@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { SecretField } from '../components/SecretField';
 import { applyTheme, currentTheme, type Theme } from '../theme';
-import type { DeviceInfo, ProviderInfo, Settings as SettingsMap } from '../types';
+import type {
+  DeviceInfo,
+  LlmProviderInfo,
+  ProviderInfo,
+  Settings as SettingsMap,
+} from '../types';
 
 /**
  * Settings persist via PUT /api/v1/settings and overlay the daemon's TOML
@@ -10,6 +16,7 @@ import type { DeviceInfo, ProviderInfo, Settings as SettingsMap } from '../types
 export function Settings() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [llm, setLlm] = useState<LlmProviderInfo[]>([]);
   const [settings, setSettings] = useState<SettingsMap>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,10 +26,43 @@ export function Settings() {
       .then(([d, p, s]) => {
         setDevices(d);
         setProviders(p.providers);
+        setLlm(p.llm);
         setSettings(s);
       })
       .catch((e) => setError((e as Error).message));
   }, []);
+
+  // Re-read provider/LLM readiness after a key is stored or removed.
+  const reloadProviders = () => {
+    api
+      .providers()
+      .then((p) => {
+        setProviders(p.providers);
+        setLlm(p.llm);
+      })
+      .catch((e) => setError((e as Error).message));
+  };
+
+  // One credential slot can back several providers (Groq and any
+  // OpenAI-compatible endpoint serve both STT and the LLM). A slot is
+  // "ready" when any provider that uses it reports a key present.
+  const sttReady = (id: string) => providers.find((p) => p.id === id)?.ready ?? false;
+  const llmReady = (id: string) => llm.find((p) => p.id === id)?.ready ?? false;
+  const keySlots = [
+    { id: 'deepgram', label: 'Deepgram', used: 'streaming STT', ready: sttReady('deepgram') },
+    {
+      id: 'groq',
+      label: 'Groq',
+      used: 'batch STT + summaries & answers',
+      ready: sttReady('groq-whisper') || llmReady('groq'),
+    },
+    {
+      id: 'openai',
+      label: 'OpenAI-compatible',
+      used: 'batch STT + summaries & answers',
+      ready: sttReady('openai-compat') || llmReady('openai-compat'),
+    },
+  ];
 
   const save = (patch: SettingsMap) => {
     setError(null);
@@ -164,19 +204,20 @@ export function Settings() {
         </label>
         <div className="keys">
           <span>Cloud API keys</span>
-          <ul>
-            {providers
-              .filter((p) => p.kind.startsWith('cloud'))
-              .map((p) => (
-                <li key={p.id}>
-                  <span className={`dot ${p.ready ? 'ok' : 'missing'}`} />
-                  <span className="key-id">{p.id}</span>
-                  <span className="dim">{p.detail}</span>
-                </li>
-              ))}
-          </ul>
+          {keySlots.map((slot) => (
+            <SecretField
+              key={slot.id}
+              id={slot.id}
+              label={slot.label}
+              used={slot.used}
+              ready={slot.ready}
+              onChanged={reloadProviders}
+            />
+          ))}
           <p className="dim note">
-            Keys are read from environment variables and never stored or displayed.
+            Keys are stored in the OS credential store (Windows Credential Manager), never in
+            config files, and are never displayed. An environment variable of the same name still
+            takes precedence if set.
           </p>
         </div>
       </section>

@@ -207,6 +207,7 @@ config for *subsequent* session starts (request params still win):
 | `retain_raw_audio` | bool | `[audio].retain_raw_audio` |
 | `ollama_model` | string | `[llm.ollama].model` (summaries/titles) |
 | `llm_provider` | string | `[llm].provider` — default for summaries and post-stop auto-titles |
+| `onboarded` | bool | none — set by the dashboard's first-run setup so it isn't shown again |
 
 Unrecognized keys are stored and returned but have no engine effect.
 
@@ -222,6 +223,30 @@ $ curl http://127.0.0.1:4820/api/v1/settings
 
 PUT upserts the keys in the body (non-object bodies → `400`) and returns
 the full settings object.
+
+## PUT / DELETE /api/v1/secrets/{provider}
+
+Store or remove an API key / bearer token in the OS credential store
+(Windows Credential Manager). `{provider}` is one of `deepgram`, `groq`,
+`openai`, or `token`; several providers share one entry (e.g. `groq`
+covers batch STT and the LLM). Key resolution prefers an environment
+variable of the same configured name, then the credential store, so a set
+env var always wins. The value is written to the credential store only —
+never to config, the database, logs, or any response; readiness surfaces
+through `GET /api/v1/providers` (presence only).
+
+```
+$ curl -X PUT http://127.0.0.1:4820/api/v1/secrets/deepgram \
+    -H "Content-Type: application/json" \
+    -d '{"value":"dg_..."}'
+{"id":"deepgram","stored":true}
+
+$ curl -X DELETE http://127.0.0.1:4820/api/v1/secrets/deepgram
+{"id":"deepgram","deleted":true}
+```
+
+Unknown provider id → `404`; empty value → `400` (both before the store is
+touched). DELETE is idempotent and does not clear an env-var-provided key.
 
 ## POST /api/v1/peek
 

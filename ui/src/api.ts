@@ -83,5 +83,19 @@ export const api = {
       body: JSON.stringify(patch),
     }).then((r) => json<Settings>(r)),
 
+  // Store an API key / token in the OS credential store. The value is
+  // never read back — readiness comes from GET /api/v1/providers.
+  putSecret: (provider: string, value: string) =>
+    fetch(`/api/v1/secrets/${encodeURIComponent(provider)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    }).then((r) => json<{ id: string; stored: boolean }>(r)),
+
+  deleteSecret: (provider: string) =>
+    fetch(`/api/v1/secrets/${encodeURIComponent(provider)}`, { method: 'DELETE' }).then((r) =>
+      json<{ id: string; deleted: boolean }>(r),
+    ),
+
   exportUrl: (id: string) => `/api/v1/sessions/${encodeURIComponent(id)}/export?format=md`,
 };
