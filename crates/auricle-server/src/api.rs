@@ -75,6 +75,7 @@ pub fn build_router_with_reader(
             "/api/v1/secrets/{provider}",
             put(put_secret).delete(delete_secret),
         )
+        .route("/api/v1/egress", get(egress))
         .route("/api/v1/peek", post(peek))
         .route("/api/v1/ask", post(crate::ask::ask))
         .route("/ws/live", get(crate::ws::ws_handler))
@@ -249,7 +250,7 @@ fn origin_allowed(origin: &str, host: Option<&str>) -> bool {
 
 /// True when a `host[:port]` authority is localhost or a loopback IP
 /// (handles `127.0.0.1:4820`, `localhost`, `[::1]:4820`, raw `::1`).
-fn authority_is_loopback(authority: &str) -> bool {
+pub(crate) fn authority_is_loopback(authority: &str) -> bool {
     let a = authority.trim();
     let bare = if let Some(rest) = a.strip_prefix('[') {
         rest.split(']').next().unwrap_or("")
@@ -418,6 +419,23 @@ async fn delete_secret(State(state): State<AppState>, Path(id): Path<String>) ->
 }
 
 #[derive(serde::Deserialize)]
+struct EgressQuery {
+    session: Option<String>,
+    limit: Option<i64>,
+}
+
+/// GET /api/v1/egress — the egress ledger: what user data left the machine
+/// (and what explicitly stayed local), newest first. Metadata only; the
+/// audio, prompt, and answer are never recorded, only where they went.
+async fn egress(State(state): State<AppState>, Query(q): Query<EgressQuery>) -> Response {
+    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+    match state.engine.store().list_egress(q.session.as_deref(), limit) {
+        Ok(entries) => Json(json!({ "entries": entries })).into_response(),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct SummarizeBody {
     template: Option<String>,
     provider: Option<String>,
@@ -476,6 +494,17 @@ async fn summarize_session(
     };
 
     let transcript = crate::export::render_transcript_text(&segments);
+    // Egress ledger: the transcript text goes to the summarizing LLM (or
+    // stays local). Metadata only — the transcript itself is not recorded.
+    crate::egress::record(
+        &store,
+        Some(id.as_str()),
+        "summary",
+        crate::egress::llm_egress(&provider_id, &cfg),
+        &provider_id,
+        Some(transcript.chars().count() as i64),
+        Some(&format!("summary: {template_name}")),
+    );
     let content = match auricle_llm::summarize(provider.as_ref(), &template, &transcript).await {
         Ok(c) => c,
         Err(e) => {

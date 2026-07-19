@@ -9,6 +9,7 @@
 mod api;
 mod ask;
 mod assemble;
+mod egress;
 mod engine;
 mod events;
 mod export;

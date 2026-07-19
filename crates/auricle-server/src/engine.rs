@@ -368,6 +368,23 @@ impl Engine {
         self.store
             .create_session(session_id, &title, unix_secs(), provider.id(), &meta)
             .map_err(StartError::Internal)?;
+        // Egress ledger: record where this session's audio goes. Local
+        // providers (on-device Whisper) are logged as "local" so the ledger
+        // shows the full picture, not just cloud traffic.
+        let dest = if provider.kind() == SttKind::Local {
+            ("local", None)
+        } else {
+            crate::egress::stt_egress(provider.id(), &provider_cfg)
+        };
+        crate::egress::record(
+            &self.store,
+            Some(session_id),
+            "audio",
+            dest,
+            provider.id(),
+            None,
+            Some("live capture"),
+        );
         let _ = self.important_tx.send(WsEvent::SessionStarted {
             session: session_id.to_string(),
             title,

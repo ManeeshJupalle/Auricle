@@ -248,6 +248,39 @@ $ curl -X DELETE http://127.0.0.1:4820/api/v1/secrets/deepgram
 Unknown provider id → `404`; empty value → `400` (both before the store is
 touched). DELETE is idempotent and does not clear an env-var-provided key.
 
+## GET /api/v1/egress
+
+The egress ledger: one row per time user data left the machine to a third
+party — and per time it explicitly stayed local. Metadata only; the audio,
+prompt, and answer themselves are never recorded, only where they went and
+roughly how much. Newest first.
+
+Query params: `session` (scope to one session id), `limit` (default 200,
+max 1000).
+
+| field | meaning |
+|---|---|
+| `ts` | unix seconds |
+| `session_id` | owning session, or null |
+| `destination` | `"cloud"` (left the machine) or `"local"` (stayed on-device) |
+| `provider` | e.g. `deepgram`, `groq`, `whisper-local` |
+| `host` | destination host for cloud rows, else null/local host |
+| `kind` | `"audio"` (a session's live capture), `"prompt"` (an ask), `"summary"` |
+| `items` | rough size — characters for text; null for audio |
+| `detail` | short human note (e.g. `"ask + screen + transcript"`) |
+
+```
+$ curl http://127.0.0.1:4820/api/v1/egress?limit=2
+{"entries":[
+  {"id":8,"ts":1721348051,"session_id":"s_...","destination":"cloud",
+   "provider":"groq","host":"api.groq.com","kind":"prompt","items":4213,
+   "detail":"ask + transcript"},
+  {"id":7,"ts":1721348010,"session_id":"s_...","destination":"local",
+   "provider":"whisper-local","host":null,"kind":"audio","items":null,
+   "detail":"live capture"}
+]}
+```
+
 ## POST /api/v1/peek
 
 Capture the active window and OCR it — on demand, one frame, locally

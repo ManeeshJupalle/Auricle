@@ -156,6 +156,11 @@ architecture doc, verbatim:
   memory; nothing screen-derived is persisted unless
   `copilot.retain_context = true`. Fully-local operation (Windows OCR +
   Ollama) is the default configuration.
+- **Verifiable, not just promised.** An egress ledger records every time
+  user data left the machine to a cloud provider — audio, prompt, or
+  summary — with the destination and rough size, and records local-only
+  actions too. Metadata only; contents are never logged. See it in the
+  dashboard's **Egress** tab or `GET /api/v1/egress`.
 
 ## Performance
 

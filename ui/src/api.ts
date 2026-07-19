@@ -1,5 +1,6 @@
 import type {
   DeviceInfo,
+  EgressEntry,
   Health,
   ProvidersResponse,
   SessionDetail,
@@ -96,6 +97,11 @@ export const api = {
     fetch(`/api/v1/secrets/${encodeURIComponent(provider)}`, { method: 'DELETE' }).then((r) =>
       json<{ id: string; deleted: boolean }>(r),
     ),
+
+  egress: (session?: string) =>
+    fetch(`/api/v1/egress${session ? `?session=${encodeURIComponent(session)}` : ''}`)
+      .then((r) => json<{ entries: EgressEntry[] }>(r))
+      .then((b) => b.entries),
 
   exportUrl: (id: string) => `/api/v1/sessions/${encodeURIComponent(id)}/export?format=md`,
 };

@@ -95,3 +95,18 @@ export interface ProvidersResponse {
 }
 
 export type Settings = Record<string, unknown>;
+
+export interface EgressEntry {
+  id: number;
+  ts: number;
+  session_id: string | null;
+  /** 'cloud' = left the machine; 'local' = stayed on-device. */
+  destination: 'cloud' | 'local';
+  provider: string;
+  host: string | null;
+  /** 'audio' | 'prompt' | 'summary' */
+  kind: string;
+  /** Rough size (chars for text; null for audio). */
+  items: number | null;
+  detail: string | null;
+}

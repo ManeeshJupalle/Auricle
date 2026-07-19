@@ -236,6 +236,44 @@ async fn secrets_endpoint_rejects_unknown_id_and_empty_value() {
 }
 
 #[tokio::test]
+async fn egress_ledger_records_stt_audio_on_session_start() {
+    let (base, engine) = spawn_server("egress").await;
+    let client = reqwest::Client::new();
+
+    let id = engine
+        .start_session(StartParams {
+            title: Some("egress run".into()),
+            stt_provider: None,
+            mic_device: None,
+            loopback_device: None,
+            audio: Some(AudioSource::WavFile {
+                path: fixture_path(),
+                channel: ChannelId::Loopback,
+            }),
+        })
+        .await
+        .unwrap();
+
+    let ledger: serde_json::Value = client
+        .get(format!("{base}/api/v1/egress"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let entries = ledger["entries"].as_array().unwrap();
+    let audio = entries
+        .iter()
+        .find(|e| e["kind"] == "audio")
+        .expect("session start records an audio egress row");
+    assert_eq!(audio["destination"], "local", "the fake STT provider is local");
+    assert_eq!(audio["session_id"], id);
+
+    engine.stop_session(&id).unwrap();
+}
+
+#[tokio::test]
 async fn cross_origin_and_rebound_requests_are_rejected() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;

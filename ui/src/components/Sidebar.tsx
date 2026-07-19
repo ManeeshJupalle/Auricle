@@ -24,8 +24,8 @@ interface SidebarProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onDeleted: (id: string) => void;
-  onNav: (view: 'settings' | 'about') => void;
-  activeNav: 'session' | 'settings' | 'about';
+  onNav: (view: 'settings' | 'egress' | 'about') => void;
+  activeNav: 'session' | 'settings' | 'egress' | 'about';
   refreshKey: number;
 }
 
@@ -262,6 +262,13 @@ export function Sidebar({
             onClick={() => onNav('settings')}
           >
             Settings
+          </button>
+          <span className="side-nav-divider" />
+          <button
+            className={`side-nav-btn ${activeNav === 'egress' ? 'active' : ''}`}
+            onClick={() => onNav('egress')}
+          >
+            Egress
           </button>
           <span className="side-nav-divider" />
           <button

@@ -3,11 +3,12 @@ import { api } from './api';
 import { Sidebar } from './components/Sidebar';
 import { useAuricle } from './store';
 import { About } from './views/About';
+import { Egress } from './views/Egress';
 import { Onboarding } from './views/Onboarding';
 import { SessionView } from './views/SessionView';
 import { Settings } from './views/Settings';
 
-type View = 'session' | 'settings' | 'about';
+type View = 'session' | 'settings' | 'egress' | 'about';
 
 export function App() {
   const [view, setView] = useState<View>('session');
@@ -71,6 +72,8 @@ export function App() {
         </div>
         {view === 'settings' ? (
           <Settings />
+        ) : view === 'egress' ? (
+          <Egress />
         ) : view === 'about' ? (
           <About />
         ) : selectedId ? (

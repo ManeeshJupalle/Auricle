@@ -226,6 +226,31 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
     });
     let _ = event_tx.try_send(Event::default().data(started.to_string()));
 
+    // Egress ledger: record the prompt leaving for the LLM (or staying
+    // local). Metadata only — the question, screen text, and transcript are
+    // never recorded here, just how much left and where it went.
+    let mut parts: Vec<&str> = Vec::new();
+    if body.include_screen {
+        parts.push("screen");
+    }
+    if transcript_segments.is_some() {
+        parts.push("transcript");
+    }
+    let detail = if parts.is_empty() {
+        "ask".to_string()
+    } else {
+        format!("ask + {}", parts.join(" + "))
+    };
+    crate::egress::record(
+        &store,
+        resolved_session.as_ref().map(|s| s.id.as_str()),
+        "prompt",
+        crate::egress::llm_egress(&provider_id, &cfg),
+        &provider_id,
+        Some(user_prompt.chars().count() as i64),
+        Some(&detail),
+    );
+
     let llm_task = {
         let provider = provider.clone();
         let system = system.clone();

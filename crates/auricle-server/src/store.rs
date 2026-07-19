@@ -44,6 +44,21 @@ const MIGRATIONS: &[&str] = &[
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
      );",
+    // v2: egress ledger — one row per time user data left the machine to a
+    // third party (or explicitly stayed local). Metadata only: provider,
+    // host, rough size — never the audio, prompt, or answer itself.
+    "CREATE TABLE egress(
+        id INTEGER PRIMARY KEY,
+        ts INT NOT NULL,
+        session_id TEXT,
+        destination TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        host TEXT,
+        kind TEXT NOT NULL,
+        items INT,
+        detail TEXT
+     );
+     CREATE INDEX idx_egress_ts ON egress(ts DESC);",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +90,36 @@ pub struct SegmentRow {
     pub provider: String,
 }
 
+/// One egress-ledger row as returned to clients.
+#[derive(Debug, Clone, Serialize)]
+pub struct EgressRow {
+    pub id: i64,
+    pub ts: i64,
+    pub session_id: Option<String>,
+    /// `"cloud"` (data left the machine) or `"local"` (stayed on-device).
+    pub destination: String,
+    pub provider: String,
+    pub host: Option<String>,
+    /// What was sent: `"audio"`, `"prompt"`, or `"summary"`.
+    pub kind: String,
+    /// Rough size in provider-natural units (chars for text; null for audio).
+    pub items: Option<i64>,
+    pub detail: Option<String>,
+}
+
+/// Input to [`Store::record_egress`]. Borrowed to avoid allocations on the
+/// hot path; the ledger records metadata only, never the payload.
+pub struct EgressEntry<'a> {
+    pub ts: i64,
+    pub session_id: Option<&'a str>,
+    pub destination: &'a str,
+    pub provider: &'a str,
+    pub host: Option<&'a str>,
+    pub kind: &'a str,
+    pub items: Option<i64>,
+    pub detail: Option<&'a str>,
+}
+
 pub fn channel_code(channel: ChannelId) -> u8 {
     match channel {
         ChannelId::Mic => 0,
@@ -88,6 +133,20 @@ pub struct Store {
 
 fn db_err(e: rusqlite::Error) -> Error {
     Error::Io(std::io::Error::other(format!("sqlite: {e}")))
+}
+
+fn row_to_egress(r: &rusqlite::Row) -> rusqlite::Result<EgressRow> {
+    Ok(EgressRow {
+        id: r.get(0)?,
+        ts: r.get(1)?,
+        session_id: r.get(2)?,
+        destination: r.get(3)?,
+        provider: r.get(4)?,
+        host: r.get(5)?,
+        kind: r.get(6)?,
+        items: r.get(7)?,
+        detail: r.get(8)?,
+    })
 }
 
 impl Store {
@@ -437,6 +496,64 @@ impl Store {
         conn.query_row("SELECT COUNT(*) FROM asks", [], |r| r.get(0))
             .map(Some)
             .map_err(db_err)
+    }
+
+    /// Append one egress-ledger row. Metadata only — callers never pass the
+    /// audio, prompt, or answer, just where it went and roughly how much.
+    pub fn record_egress(&self, e: &EgressEntry) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO egress(ts, session_id, destination, provider, host, kind, items, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                e.ts,
+                e.session_id,
+                e.destination,
+                e.provider,
+                e.host,
+                e.kind,
+                e.items,
+                e.detail,
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Most-recent egress rows, optionally scoped to one session.
+    pub fn list_egress(&self, session_id: Option<&str>, limit: i64) -> Result<Vec<EgressRow>> {
+        let conn = self.conn.lock().unwrap();
+        let cols = "id, ts, session_id, destination, provider, host, kind, items, detail";
+        let rows = match session_id {
+            Some(id) => {
+                let mut stmt = conn
+                    .prepare(&format!(
+                        "SELECT {cols} FROM egress WHERE session_id = ?1
+                         ORDER BY ts DESC, id DESC LIMIT ?2"
+                    ))
+                    .map_err(db_err)?;
+                let rows = stmt
+                    .query_map(rusqlite::params![id, limit], row_to_egress)
+                    .map_err(db_err)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_err)?;
+                rows
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(&format!(
+                        "SELECT {cols} FROM egress ORDER BY ts DESC, id DESC LIMIT ?1"
+                    ))
+                    .map_err(db_err)?;
+                let rows = stmt
+                    .query_map([limit], row_to_egress)
+                    .map_err(db_err)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(db_err)?;
+                rows
+            }
+        };
+        Ok(rows)
     }
 
     pub fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
