@@ -429,7 +429,11 @@ struct EgressQuery {
 /// audio, prompt, and answer are never recorded, only where they went.
 async fn egress(State(state): State<AppState>, Query(q): Query<EgressQuery>) -> Response {
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
-    match state.engine.store().list_egress(q.session.as_deref(), limit) {
+    match state
+        .engine
+        .store()
+        .list_egress(q.session.as_deref(), limit)
+    {
         Ok(entries) => Json(json!({ "entries": entries })).into_response(),
         Err(e) => internal(e.to_string()),
     }

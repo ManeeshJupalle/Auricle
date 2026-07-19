@@ -69,7 +69,10 @@ pub fn llm_provider_statuses(cfg: &Config) -> Vec<LlmProviderStatus> {
         if auricle_core::secret_present(var) {
             (true, format!("key present ({var})"))
         } else {
-            (false, format!("{var} not set (environment or credential store)"))
+            (
+                false,
+                format!("{var} not set (environment or credential store)"),
+            )
         }
     };
     let groq = key_status(&cfg.llm.groq.api_key_env);
@@ -121,13 +124,14 @@ pub fn create_llm_provider(id: &str, cfg: &Config) -> Result<Arc<dyn LlmProvider
             )))
         }
         "openai-compat" => {
-            let key =
-                auricle_core::secret_lookup(&cfg.llm.openai_compat.api_key_env).ok_or_else(|| {
+            let key = auricle_core::secret_lookup(&cfg.llm.openai_compat.api_key_env).ok_or_else(
+                || {
                     Error::Config(format!(
                         "openai-compat LLM key {} is not set (environment or credential store)",
                         cfg.llm.openai_compat.api_key_env
                     ))
-                })?;
+                },
+            )?;
             Ok(Arc::new(OpenAiChatProvider::new(
                 "openai-compat",
                 &cfg.llm.openai_compat.base_url,

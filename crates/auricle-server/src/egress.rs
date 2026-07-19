@@ -82,8 +82,14 @@ mod tests {
 
     #[test]
     fn host_of_strips_scheme_port_and_path() {
-        assert_eq!(host_of("https://api.groq.com/openai/v1").as_deref(), Some("api.groq.com"));
-        assert_eq!(host_of("http://localhost:11434/v1").as_deref(), Some("localhost"));
+        assert_eq!(
+            host_of("https://api.groq.com/openai/v1").as_deref(),
+            Some("api.groq.com")
+        );
+        assert_eq!(
+            host_of("http://localhost:11434/v1").as_deref(),
+            Some("localhost")
+        );
         assert_eq!(host_of("").as_deref(), None);
     }
 

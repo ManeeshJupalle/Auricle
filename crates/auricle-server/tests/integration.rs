@@ -267,7 +267,10 @@ async fn egress_ledger_records_stt_audio_on_session_start() {
         .iter()
         .find(|e| e["kind"] == "audio")
         .expect("session start records an audio egress row");
-    assert_eq!(audio["destination"], "local", "the fake STT provider is local");
+    assert_eq!(
+        audio["destination"], "local",
+        "the fake STT provider is local"
+    );
     assert_eq!(audio["session_id"], id);
 
     engine.stop_session(&id).unwrap();

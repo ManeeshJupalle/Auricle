@@ -65,7 +65,10 @@ pub fn provider_statuses(cfg: &Config, data_dir: &Path) -> Vec<ProviderStatus> {
             if auricle_core::secret_present(var) {
                 (true, format!("key present ({var})"))
             } else {
-                (false, format!("{var} not set (environment or credential store)"))
+                (
+                    false,
+                    format!("{var} not set (environment or credential store)"),
+                )
             }
         };
         let (ready, detail) = key_status(&cfg.stt.deepgram.api_key_env);
