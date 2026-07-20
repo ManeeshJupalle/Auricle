@@ -11,14 +11,18 @@ use crate::api::authority_is_loopback;
 use crate::store::{EgressEntry, Store};
 
 /// Host portion of an http(s) base URL — no scheme, port, or path.
+/// Bracket-aware so it agrees with [`authority_is_loopback`]: a port-less
+/// `[::1]` must not be split on a colon that is part of the address.
 pub(crate) fn host_of(url: &str) -> Option<String> {
     let after = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let host_port = after.split(['/', '?']).next().unwrap_or("");
-    let host = host_port
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(host_port)
-        .trim();
+    let host_port = after.split(['/', '?']).next().unwrap_or("").trim();
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("") // [IPv6] or [IPv6]:port
+    } else if host_port.matches(':').count() > 1 {
+        host_port // raw IPv6 literal: colons are the address, not a port
+    } else {
+        host_port.split(':').next().unwrap_or(host_port) // host or host:port
+    };
     (!host.is_empty()).then(|| host.to_string())
 }
 
@@ -90,7 +94,16 @@ mod tests {
             host_of("http://localhost:11434/v1").as_deref(),
             Some("localhost")
         );
+        // Bracketed IPv6 loopback, with and without a port, must yield the
+        // bare address so classify() sees it as local (not "[:").
+        assert_eq!(host_of("http://[::1]:11434/v1").as_deref(), Some("::1"));
+        assert_eq!(host_of("http://[::1]/v1").as_deref(), Some("::1"));
         assert_eq!(host_of("").as_deref(), None);
+    }
+
+    #[test]
+    fn bracketed_ipv6_loopback_classifies_as_local() {
+        assert_eq!(classify(host_of("http://[::1]/v1")).0, "local");
     }
 
     #[test]

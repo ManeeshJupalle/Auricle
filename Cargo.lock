@@ -185,7 +185,6 @@ version = "0.3.0"
 dependencies = [
  "auricle-core",
  "hound",
- "tokio",
  "voice_activity_detector",
 ]
 

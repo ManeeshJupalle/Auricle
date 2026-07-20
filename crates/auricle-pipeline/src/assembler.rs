@@ -1,5 +1,4 @@
 use auricle_core::{ChannelId, SttEvent};
-use tokio::sync::broadcast;
 
 /// A transcript line pushed to clients.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,29 +33,20 @@ pub enum PipelineEvent {
 ///   out of order relative to each other).
 pub struct Assembler {
     session_id: String,
-    tx: broadcast::Sender<PipelineEvent>,
     finals: Vec<TranscriptEvent>,
     last_final_end: [(ChannelId, u64, String); 2],
 }
 
 impl Assembler {
     pub fn new(session_id: &str) -> Self {
-        let (tx, _) = broadcast::channel(256);
         Assembler {
             session_id: session_id.to_string(),
-            tx,
             finals: Vec::new(),
             last_final_end: [
                 (ChannelId::Mic, 0, String::new()),
                 (ChannelId::Loopback, 0, String::new()),
             ],
         }
-    }
-
-    /// Subscribe to live transcript events.
-    // PHASE-4: the WebSocket handler subscribes here.
-    pub fn subscribe(&self) -> broadcast::Receiver<PipelineEvent> {
-        self.tx.subscribe()
     }
 
     pub fn speaker_for(channel: ChannelId) -> &'static str {
@@ -66,9 +56,9 @@ impl Assembler {
         }
     }
 
-    /// Ingest one STT event; returns the event that was broadcast (if any).
+    /// Ingest one STT event; returns the event to emit (if any).
     pub fn ingest(&mut self, event: SttEvent) -> Option<PipelineEvent> {
-        let out = match event {
+        match event {
             SttEvent::Error(message) => {
                 // Surface on whichever channel errored; the SttEvent::Error
                 // carries no channel, so tag it unknown-side as mic-agnostic.
@@ -124,11 +114,7 @@ impl Assembler {
                     Some(PipelineEvent::Transcript(ev))
                 }
             }
-        };
-        if let Some(ev) = &out {
-            let _ = self.tx.send(ev.clone()); // no subscribers is fine
         }
-        out
     }
 
     /// The merged transcript so far, ordered by start time across channels.
@@ -299,16 +285,5 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(a.transcript().is_empty());
-    }
-
-    #[test]
-    fn subscribers_receive_broadcast_events() {
-        let mut a = Assembler::new("s");
-        let mut rx = a.subscribe();
-        a.ingest(final_seg(ChannelId::Mic, 0, 1000, "hi"));
-        match rx.try_recv() {
-            Ok(PipelineEvent::Transcript(t)) => assert_eq!(t.text, "hi"),
-            other => panic!("{other:?}"),
-        }
     }
 }

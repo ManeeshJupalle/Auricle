@@ -538,10 +538,7 @@ async fn summarize_session(
         }
     };
 
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let created_at = crate::engine::unix_secs();
     let summary_id = match store.insert_summary(
         &session.id,
         &template_name,

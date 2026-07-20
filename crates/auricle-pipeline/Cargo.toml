@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 auricle-core = { workspace = true }
-tokio = { workspace = true }
 voice_activity_detector = { workspace = true }
 
 [dev-dependencies]
