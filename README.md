@@ -72,9 +72,11 @@ cloud LLM. Devices, providers, and keys are all editable later under
 (per-user, no admin prompt; the engine is bundled and spawns
 automatically). Then `Ctrl+Shift+Space` summons the ask card,
 `Ctrl+Shift+A` asks "what's happening?" in one keystroke, `Esc`
-dismisses. The tray icon starts/stops recording and opens the dashboard.
-The overlay checks for updates on launch and from the tray; every update is
-signature-verified before it installs ([RELEASING.md](RELEASING.md)).
+dismisses. The tray icon starts/stops recording and opens the full
+dashboard in its own app window — the whole product is one installed
+app, no browser needed. The overlay checks for updates on launch and from
+the tray; every update is signature-verified before it installs
+([RELEASING.md](RELEASING.md)).
 
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT

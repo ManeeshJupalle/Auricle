@@ -24,7 +24,7 @@ use serde_json::json;
 use tauri::ipc::Channel;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, PhysicalPosition, WebviewWindow};
+use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -290,6 +290,59 @@ async fn check_for_updates(app: tauri::AppHandle, interactive: bool) {
     }
 }
 
+/// Open (or refocus) the dashboard window: the engine's web dashboard in
+/// its own webview instead of a browser tab, so the whole product is one
+/// app. The page keeps its engine origin (http://127.0.0.1:4820), so the
+/// daemon's same-origin defense applies to it exactly as to a browser
+/// tab; the webview gets no Tauri IPC (capabilities target "main" only).
+fn open_dashboard(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if let Some(win) = app.get_webview_window("dashboard") {
+            let _ = win.unminimize();
+            let _ = win.show();
+            let _ = win.set_focus();
+            return;
+        }
+        let (http, base) = {
+            let state = app.state::<AppState>();
+            (state.http.clone(), state.base_url().to_string())
+        };
+        // The engine may still be booting (attach_or_spawn allows 20 s
+        // after a spawn) — don't point a webview at a dead port.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !engine::health_ok(&http, &base).await {
+            if tokio::time::Instant::now() >= deadline {
+                summon(&app, false);
+                let _ = app.emit(
+                    "tray-error",
+                    "dashboard: the engine is not answering".to_string(),
+                );
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        let url: tauri::Url = match base.parse() {
+            Ok(u) => u,
+            Err(e) => {
+                summon(&app, false);
+                let _ = app.emit(
+                    "tray-error",
+                    format!("dashboard: bad engine URL {base}: {e}"),
+                );
+                return;
+            }
+        };
+        let built = WebviewWindowBuilder::new(&app, "dashboard", WebviewUrl::External(url))
+            .title("Auricle Dashboard")
+            .inner_size(1200.0, 800.0)
+            .build();
+        if let Err(e) = built {
+            summon(&app, false);
+            let _ = app.emit("tray-error", format!("dashboard window: {e}"));
+        }
+    });
+}
+
 /// Tray actions hit the same public REST API as any other client.
 /// Failures surface in the overlay itself (summon + toast event).
 fn tray_action(app: tauri::AppHandle, action: &'static str) {
@@ -336,7 +389,6 @@ pub fn run() {
     let handler_quick = quick_sc;
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -395,11 +447,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "start" => tray_action(app.clone(), "start"),
                     "stop" => tray_action(app.clone(), "stop"),
-                    "dashboard" => {
-                        use tauri_plugin_opener::OpenerExt;
-                        let url = app.state::<AppState>().base_url().to_string();
-                        let _ = app.opener().open_url(url, None::<&str>);
-                    }
+                    "dashboard" => open_dashboard(app.clone()),
                     "summon" => summon(app, false),
                     "check-updates" => {
                         tauri::async_runtime::spawn(check_for_updates(app.clone(), true));
@@ -439,17 +487,21 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // Frameless windows still get close requests (Alt+F4): the
-            // overlay lives in the tray, so close means hide.
+            // Both windows live under the tray, so close means hide: the
+            // frameless overlay still gets close requests (Alt+F4), and
+            // closing the dashboard must not quit the resident app.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
             }
-            // Click-through when idle, interactive when focused: losing
-            // focus makes the visible overlay a bystander; the summon
-            // hotkey (or alt-tab) makes it interactive again.
+            // Overlay only — click-through when idle, interactive when
+            // focused: losing focus makes the visible overlay a
+            // bystander; the summon hotkey (or alt-tab) makes it
+            // interactive again.
             tauri::WindowEvent::Focused(focused) => {
-                let _ = window.set_ignore_cursor_events(!focused);
+                if window.label() == "main" {
+                    let _ = window.set_ignore_cursor_events(!focused);
+                }
             }
             _ => {}
         })
