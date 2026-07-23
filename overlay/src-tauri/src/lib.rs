@@ -343,6 +343,33 @@ fn open_dashboard(app: tauri::AppHandle) {
     });
 }
 
+/// True when the OS foreground window is this window (or a child of it,
+/// like the WebView2 controller). Distinguishes "the user switched to
+/// another app" from "focus moved inside our own window" on a host
+/// Focused(false) event.
+#[cfg(windows)]
+fn foreground_is_window(window: &tauri::Window) -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetForegroundWindow() -> isize;
+        fn GetAncestor(hwnd: isize, ga_flags: u32) -> isize;
+    }
+    const GA_ROOT: u32 = 2;
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    // SAFETY: both calls take and return plain window handles.
+    unsafe {
+        let fg = GetForegroundWindow();
+        fg != 0 && GetAncestor(fg, GA_ROOT) == hwnd.0 as isize
+    }
+}
+
+#[cfg(not(windows))]
+fn foreground_is_window(_window: &tauri::Window) -> bool {
+    false
+}
+
 /// Tray actions hit the same public REST API as any other client.
 /// Failures surface in the overlay itself (summon + toast event).
 fn tray_action(app: tauri::AppHandle, action: &'static str) {
@@ -498,9 +525,17 @@ pub fn run() {
             // focused: losing focus makes the visible overlay a
             // bystander; the summon hotkey (or alt-tab) makes it
             // interactive again.
+            //
+            // Focused(false) ALSO fires when focus merely moves into the
+            // WebView2 child (the ask input autofocuses on summon) — the
+            // overlay is still the foreground window then, and going
+            // click-through would kill every mouse target (the × button)
+            // while the caret blinks in the input. Keep the window
+            // interactive while the OS foreground window is still us.
             tauri::WindowEvent::Focused(focused) => {
                 if window.label() == "main" {
-                    let _ = window.set_ignore_cursor_events(!focused);
+                    let interactive = *focused || foreground_is_window(window);
+                    let _ = window.set_ignore_cursor_events(!interactive);
                 }
             }
             _ => {}
