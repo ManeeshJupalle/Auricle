@@ -50,7 +50,7 @@ export function Egress() {
       <section className="panel egress-hero">
         <h2>Egress ledger</h2>
         {entries === null ? (
-          <p className="dim">Loading…</p>
+          <p className="dim">{error ? 'The ledger could not be read.' : 'Loading…'}</p>
         ) : cloud.length === 0 ? (
           <p className="egress-headline ok">
             Nothing has left this machine — every recorded action stayed fully local.

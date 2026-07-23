@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { useAuricle } from './store';
 import { About } from './views/About';
 import { Egress } from './views/Egress';
+import { Home } from './views/Home';
 import { Onboarding } from './views/Onboarding';
 import { SessionView } from './views/SessionView';
 import { Settings } from './views/Settings';
@@ -66,8 +67,9 @@ export function App() {
               ~{droppedPartials} partials shed
             </span>
           )}
+          {/* Quiet when healthy: a bare dot. Loud only when it matters. */}
           <span className={`conn ${conn}`} title={`WebSocket: ${conn}`}>
-            {conn === 'open' ? 'connected' : conn}
+            {conn === 'open' ? '' : conn}
           </span>
         </div>
         {view === 'settings' ? (
@@ -82,16 +84,7 @@ export function App() {
             onRenamed={() => setRefreshKey((k) => k + 1)}
           />
         ) : (
-          <div className="home-empty">
-            <h1>
-              auricle<span className="brand-dot">.</span>
-            </h1>
-            <p className="dim">
-              Pick a session from the sidebar, or press <strong>Start Recording</strong> to
-              capture your next meeting — your voice is <em>You</em>, everything your computer
-              plays is <em>Them</em>.
-            </p>
-          </div>
+          <Home onShowEgress={() => setView('egress')} />
         )}
       </main>
     </div>

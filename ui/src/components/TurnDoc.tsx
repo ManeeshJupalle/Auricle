@@ -33,7 +33,7 @@ function TurnBlock({
   onSeek?: (ms: number) => void;
 }) {
   return (
-    <div className="turn">
+    <div className={`turn ${turn.channel}`}>
       <div className="turn-side">
         <span className={`turn-speaker ${turn.channel}`}>{turn.speaker}</span>
         <button

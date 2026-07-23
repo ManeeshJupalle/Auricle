@@ -4,7 +4,12 @@ import { AudioBar, type AudioBarHandle } from '../components/AudioBar';
 import { Markdown } from '../components/Markdown';
 import { TurnDoc } from '../components/TurnDoc';
 import { VuMeter } from '../components/VuMeter';
+import { WaveRibbon } from '../components/WaveRibbon';
 import { buildTurns, useAuricle, type Row } from '../store';
+
+const reducedMotion =
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 import type { LlmProviderInfo, SessionDetail, TemplateInfo } from '../types';
 
 function fmtLongDate(unixSecs: number): string {
@@ -202,10 +207,12 @@ export function SessionView({
                   <span>latency {(latencyMs / 1000).toFixed(1)}s</span>
                 </>
               )}
-              <div className="header-meters">
-                <VuMeter channel="mic" label="You" />
-                <VuMeter channel="loopback" label="Them" />
-              </div>
+              {reducedMotion && (
+                <div className="header-meters">
+                  <VuMeter channel="mic" label="You" />
+                  <VuMeter channel="loopback" label="Them" />
+                </div>
+              )}
             </>
           ) : (
             detail && (
@@ -234,6 +241,7 @@ export function SessionView({
             )
           )}
         </div>
+        {isLive && !reducedMotion && <WaveRibbon />}
         <div className="tabs">
           <button
             className={`tab ${tab === 'transcript' ? 'active' : ''}`}

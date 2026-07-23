@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuricle } from '../store';
 import type { ProviderInfo, SessionSummary } from '../types';
@@ -10,6 +10,19 @@ function fmtDate(unixSecs: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/** Sidebar group heading for a session's start time. */
+function dayBucket(unixSecs: number): string {
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.floor(
+    (startOfDay(new Date()) - startOfDay(new Date(unixSecs * 1000))) / 86_400_000,
+  );
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return 'This week';
+  return 'Earlier';
 }
 
 function fmtDuration(s: SessionSummary): string {
@@ -166,15 +179,17 @@ export function Sidebar({
       </div>
 
       <nav className="session-list">
-        <div className="side-label">Recent sessions</div>
         {sessions.length === 0 && (
           <p className="dim side-empty">
             {search ? 'No matches.' : 'No sessions yet — record your first below.'}
           </p>
         )}
-        {sessions.map((s) => (
+        {sessions.map((s, i) => (
+          <Fragment key={s.id}>
+            {(i === 0 || dayBucket(sessions[i - 1].started_at) !== dayBucket(s.started_at)) && (
+              <div className="side-label">{dayBucket(s.started_at)}</div>
+            )}
           <div
-            key={s.id}
             className={`side-item ${selectedId === s.id && activeNav === 'session' ? 'active' : ''}`}
           >
             {renaming === s.id ? (
@@ -217,6 +232,7 @@ export function Sidebar({
               </>
             )}
           </div>
+          </Fragment>
         ))}
       </nav>
 
@@ -261,20 +277,21 @@ export function Sidebar({
             className={`side-nav-btn ${activeNav === 'settings' ? 'active' : ''}`}
             onClick={() => onNav('settings')}
           >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>
             Settings
           </button>
-          <span className="side-nav-divider" />
           <button
             className={`side-nav-btn ${activeNav === 'egress' ? 'active' : ''}`}
             onClick={() => onNav('egress')}
           >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
             Egress
           </button>
-          <span className="side-nav-divider" />
           <button
             className={`side-nav-btn ${activeNav === 'about' ? 'active' : ''}`}
             onClick={() => onNav('about')}
           >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
             About
           </button>
         </div>
