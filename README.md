@@ -1,5 +1,21 @@
 # Auricle
 
+[![Latest release](https://img.shields.io/github/v/release/ManeeshJupalle/Auricle?label=latest)](https://github.com/ManeeshJupalle/Auricle/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ManeeshJupalle/Auricle/total)](https://github.com/ManeeshJupalle/Auricle/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+### [⬇ Download for Windows](https://github.com/ManeeshJupalle/Auricle/releases/latest)
+
+Windows 10/11, x64. Grab the `Auricle Copilot_…_x64_en-US.msi` from the
+latest release — it installs per-user (no admin prompt) and bundles
+everything: the engine, the dashboard, and the copilot overlay.
+
+> **First install:** the installer isn't code-signed yet, so SmartScreen
+> will say "Windows protected your PC". Click **More info → Run anyway**.
+> After that you're covered: every auto-update the app downloads is
+> signature-verified against the key built into it
+> ([RELEASING.md](RELEASING.md)).
+
 <!-- HERO GIF (copilot): docs/demo_copilot.gif — quick-assist over a real meeting: hotkey → context chips → streaming answer → follow-up → Esc -->
 
 **A local-first meeting engine — not another meeting app — that ships
@@ -14,6 +30,8 @@ local Whisper backend, no audio ever leaves your machine.
 
 > *Auricle: the outer ear — the part of you that listens. It sits on your
 > head, not in the cloud.*
+
+![The Auricle dashboard — home view with the two-voice motif, provider readiness, and the privacy line from the egress ledger](docs/dashboard_home.png)
 
 Three things, one engine:
 
