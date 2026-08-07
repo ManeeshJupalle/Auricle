@@ -14,3 +14,8 @@ overlay/src-tauri/gen
 # The engine exe copied in as the MSI sidecar (33 MB build artifact).
 overlay/src-tauri/binaries
 
+# Updater signing keypair (RELEASING.md) — the private half must never
+# be committed; the public half lives in tauri.conf.json.
+overlay/updater.key
+overlay/updater.key.pub
+
