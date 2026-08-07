@@ -1,10 +1,11 @@
-﻿[package]
+[package]
 name = "auricle-stt"
 description = "STT provider traits and implementations for Auricle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme.workspace = true
 
 [features]
 default = ["cloud"]

@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.0 — 2026-08-07 (one desktop app)
+
+The dashboard moves into the desktop app, and gets redesigned around the
+product's two voices.
+
+### One app
+
+- **The dashboard opens in its own app window.** Tray → Open dashboard now
+  shows the full dashboard (sessions, transcripts, summaries, settings) in
+  a native window instead of launching the browser — one installed app is
+  the whole product. The window waits for the engine's health check before
+  loading, and closing it hides it; the tray and overlay stay resident.
+  The engine still serves the same web UI and API on :4820 for browsers
+  and `curl`.
+- **Fix: the overlay's × button after `Ctrl+Shift+Space`.** When the ask
+  input autofocused, the window's focus-loss handler saw the internal
+  WebView2 focus change as "user switched away" and made the overlay
+  click-through — keyboard worked, every mouse target was dead.
+  Click-through now engages only when another app is actually the
+  foreground window; the bystander behavior is unchanged.
+- Removed the browser-opener plugin the old dashboard link needed.
+
+### Dashboard redesign
+
+- **The listening strip:** the live session header shows a scrolling
+  two-voice waveform of what the engine hears — Them (system audio) above
+  the centerline, You (mic) below — fed by the real VU stream, rendered on
+  canvas outside React's render path. A flat blue line during a call means
+  a dead microphone. `prefers-reduced-motion` falls back to the two bars.
+- **A real home view:** the You/Them model up front, provider readiness
+  chips (what can transcribe and summarize right now), the privacy line
+  straight from the egress ledger ("Nothing has left this machine."), and
+  the copilot hotkeys — none of which duplicates the sidebar.
+- **Two-voice transcript:** each speaker turn carries a colored rail, so a
+  long transcript scans as a conversation.
+- **Sidebar:** sessions grouped by day (Today / Yesterday / This week /
+  Earlier); icon nav for Settings, Egress, and About.
+- **Quality floor:** visible keyboard focus rings, reduced motion
+  respected everywhere, the connection indicator is a quiet dot when
+  healthy and a loud pill only when reconnecting, and full light-theme
+  parity.
+
 ## 0.3.0 — 2026-07-15 (first public release)
 
 One launch, three layers: the local-first transcription engine, the

@@ -71,7 +71,7 @@ summaries (minutes, action items, standup, 1:1) with a local (Ollama) or
 cloud LLM. Devices, providers, and keys are all editable later under
 **Settings**.
 
-**Copilot:** install `Auricle Copilot_0.3.0_x64_en-US.msi` from Releases
+**Copilot:** install `Auricle Copilot_0.4.0_x64_en-US.msi` from Releases
 (per-user, no admin prompt; the engine is bundled and spawns
 automatically). Then `Ctrl+Shift+Space` summons the ask card,
 `Ctrl+Shift+A` asks "what's happening?" in one keystroke, `Esc`
@@ -218,7 +218,7 @@ misses in [benches/RESULTS.md](benches/RESULTS.md) and the phase reports:
 
 ## Roadmap
 
-- **v0.4 — system-wide dictation: speak into any app.** The capture →
+- **v0.5 — system-wide dictation: speak into any app.** The capture →
   VAD → STT pipeline already exists; dictation is pointing it at the
   focused window's input.
 - macOS capture (the capture layer is the only platform-specific engine
