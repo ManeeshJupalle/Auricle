@@ -7,6 +7,10 @@ product's two voices.
 
 ### One app
 
+- **Launching the app opens the dashboard.** A tray-only launch looked
+  like nothing happened, so users launched again — and instances stacked
+  up. The app now enforces a single instance (a relaunch focuses the
+  dashboard), and the copilot overlay stays on its hotkeys.
 - **The dashboard opens in its own app window.** Tray → Open dashboard now
   shows the full dashboard (sessions, transcripts, summaries, settings) in
   a native window instead of launching the browser — one installed app is

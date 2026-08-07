@@ -416,6 +416,12 @@ pub fn run() {
     let handler_quick = quick_sc;
 
     tauri::Builder::default()
+        // Single instance, registered first: without it, users who launch
+        // the app again stack up instances that fight over the hotkeys.
+        // A relaunch focuses the dashboard, same as the first launch.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            open_dashboard(app.clone());
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -511,6 +517,12 @@ pub fn run() {
             // newer signed release is waiting.
             let update_handle = app.handle().clone();
             tauri::async_runtime::spawn(check_for_updates(update_handle, false));
+
+            // Launching the app shows the dashboard (it waits for the
+            // engine spawned above to answer /health). The copilot overlay
+            // stays hotkey-summoned — a tray-only launch looked like
+            // nothing happened.
+            open_dashboard(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| match event {
