@@ -30,16 +30,26 @@ before it runs, so a tampered artifact is rejected.
 
 ## One-time setup
 
-**Updater keypair** (done — regenerate only if the key is lost):
+**Updater keypair** (done for v0.4.0+ — regenerate only if the key is lost):
 
 ```
-cd overlay && npm run tauri signer generate -- -w updater.key
+cd overlay && npm run tauri signer generate -- -w updater.key --ci
 ```
+
+(`--ci` = no password; passing `--password ""` through npm/PowerShell fails.)
+Base64 of nothing extra: the generated `updater.key.pub` file content goes
+into `tauri.conf.json → plugins.updater.pubkey` verbatim (it is already
+base64). Keep `updater.key` OUT of the repo (gitignored) and back it up —
+GitHub secrets cannot be read back, so that file is the only copy.
 
 Then add two repository secrets (Settings → Secrets → Actions):
 
 - `TAURI_SIGNING_PRIVATE_KEY` — contents of `updater.key`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password chosen above (blank is allowed)
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password chosen above (unset is fine for a `--ci` key)
+
+Upload the key with a raw byte redirect (`gh secret set TAURI_SIGNING_PRIVATE_KEY < updater.key`
+from bash/Git Bash) — piping through PowerShell 5.1 prepends a BOM and CI
+fails with "Invalid symbol 239, offset 0".
 
 Keep the private key out of git; if it is ever lost, updates for existing
 installs break (they only trust the matching public key).
@@ -73,3 +83,17 @@ zero-warning trust, higher cost, and token handling in CI.
 4. Smoke-test the MSI, then **publish** the draft. Publishing is what makes it
    the "latest" release the updater endpoint resolves to — existing installs
    pick it up on their next check.
+
+## Publishing to crates.io
+
+Manual (CI does not do this). Needs a token with the `publish-update`
+scope (`cargo login`), and a fresh `ui/ && npm run build` first so the
+server crate packages the current dashboard. Publish in dependency order —
+`cargo publish` waits for the index between crates:
+
+```
+for c in auricle-core auricle-capture auricle-llm auricle-vision \
+         auricle-pipeline auricle-stt; do cargo publish -p $c || break; done
+cargo publish -p auricle-server --allow-dirty   # ui-dist is gitignored by design
+cargo publish -p auricle-cli
+```
