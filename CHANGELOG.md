@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.1 — 2026-08-10
+
+A design pass over the dashboard, and the fixes it turned up.
+
+- **The session map.** A finished session now opens with a band showing who
+  spoke when across the whole recording — Them above the centerline, You
+  below, the same two-voice geometry as the live listening strip. Click any
+  block to jump the transcript there, and the audio with it when the
+  recording was retained. Silence shows as silence.
+- **One reading column.** The title, metadata, tabs, session map, transcript,
+  and summary all resolved to different left edges — the header sat about
+  80 px left of the document under it. They now share one measure, so the
+  page reads as a single document.
+- **Fixed: the sidebar search icon sat on top of its own placeholder.** The
+  generic `input[type='search']` rule outranked `.sidebar-search` on
+  specificity and silently dropped the padding that made room for the icon.
+- **Red means recording again.** Summary headings, list bullets, and the
+  summary card header had all borrowed the accent, which is the colour this
+  product uses for "a session is live". They're neutral now; the record
+  button and the REC dot own red.
+- **Summary controls say what they select** — the two unlabelled dropdowns
+  are now labelled Template and Written by, in a tighter toolbar.
+- Export is a button rather than accent-coloured text buried in the metadata
+  row; action-item checkboxes are styled instead of raw form controls; the
+  tab is "Summary", not "AI Summary".
+
 ## 0.4.0 — 2026-08-07 (one desktop app)
 
 The dashboard moves into the desktop app, and gets redesigned around the

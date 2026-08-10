@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react';
+import { forwardRef, memo, useEffect, useImperativeHandle, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAuricle, type Row, type Turn } from '../store';
 
@@ -79,12 +79,20 @@ interface DocProps {
   emptyHint: string;
 }
 
+export interface TurnDocHandle {
+  /** Scroll a turn into view (session map → transcript). */
+  scrollToTurn: (index: number) => void;
+}
+
 /**
  * Document-style transcript: virtualized speaker turns with a timestamp
  * gutter. `live` reads from the store (per-row subscriptions); otherwise
  * `turns`/`rows` props carry a stored session.
  */
-export function TurnDoc({ turnOrder, turns, rows, live, follow, onSeek, emptyHint }: DocProps) {
+export const TurnDoc = forwardRef<TurnDocHandle, DocProps>(function TurnDoc(
+  { turnOrder, turns, rows, live, follow, onSeek, emptyHint },
+  ref,
+) {
   const parentRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
@@ -110,6 +118,16 @@ export function TurnDoc({ turnOrder, turns, rows, live, follow, onSeek, emptyHin
       virtualizer.scrollToIndex(turnOrder.length - 1, { align: 'end' });
     }
   }, [follow, turnOrder.length, virtualizer]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToTurn: (index: number) => {
+        virtualizer.scrollToIndex(index, { align: 'start', behavior: 'smooth' });
+      },
+    }),
+    [virtualizer],
+  );
 
   if (turnOrder.length === 0) {
     return (
@@ -155,4 +173,4 @@ export function TurnDoc({ turnOrder, turns, rows, live, follow, onSeek, emptyHin
       </div>
     </div>
   );
-}
+});

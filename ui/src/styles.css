@@ -36,6 +36,12 @@
   --card-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   --mono: 'Geist Mono', 'Cascadia Code', 'Consolas', monospace;
   --sans: 'Geist Sans', 'Geist', 'Segoe UI', system-ui, sans-serif;
+  /* One reading column for the whole session view: the header, the
+     session map, the transcript, and the summary all resolve to the same
+     left edge. `scrollbar-gutter: both-edges` on the scrolling panes is
+     what keeps that true once a scrollbar appears. */
+  --measure: 880px;
+  --gutter: 40px;
 }
 
 [data-theme='light'] {
@@ -300,10 +306,14 @@ a {
   pointer-events: none;
 }
 
-.sidebar-search {
+/* Specificity note: the generic `input[type='search']` rule below is
+   (0,1,1) and outranks a bare `.sidebar-search`, which silently ate the
+   left padding and dropped the icon on top of the placeholder. Scoped
+   here to (0,2,0) so the icon well survives. */
+.sidebar-search-wrap .sidebar-search {
   width: 100%;
   height: 38px;
-  padding: 0 12px 0 34px;
+  padding: 0 12px 0 36px;
   border-radius: 10px;
   border: 1px solid var(--edge-strong);
   background: var(--inset-bg);
@@ -601,6 +611,21 @@ a {
   cursor: default;
 }
 
+/* Secondary action: present, not shouting. */
+.btn.quiet {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+  background: transparent;
+  border-color: var(--edge);
+}
+
+.btn.quiet:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--hover);
+  border-color: var(--edge-strong);
+}
+
 .btn.accent {
   border: 1px solid var(--accent-dim);
   background: linear-gradient(
@@ -695,14 +720,22 @@ select option:disabled {
 
 .session-header {
   flex: 0 0 auto;
-  padding: 26px 40px 0;
+  padding: 26px var(--gutter) 0;
+}
+
+/* Every header block resolves to the shared reading column, so the title,
+   the meta row, the tabs, and the transcript below them share one left
+   edge instead of the header sitting 80 px to the left of the document. */
+.session-header > * {
+  max-width: var(--measure);
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .session-title-row {
   display: flex;
   align-items: center;
   gap: 14px;
-  max-width: 880px;
 }
 
 .session-title {
@@ -751,12 +784,18 @@ select option:disabled {
 .session-meta-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   margin-top: 10px;
   font-family: var(--mono);
   font-size: 12.5px;
   color: var(--dim);
   min-height: 26px;
+}
+
+.meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .meta-chip {
@@ -767,19 +806,13 @@ select option:disabled {
   color: var(--dim);
 }
 
+/* The one action in a row of metadata: give it a button's affordance
+   instead of dressing it as accent-colored prose. */
 .header-export {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--accent-text);
-  text-decoration: none;
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.header-export:hover {
-  color: var(--accent);
+  gap: 6px;
 }
 
 .header-meters {
@@ -793,9 +826,8 @@ select option:disabled {
 .tabs {
   display: flex;
   gap: 4px;
-  margin-top: 22px;
+  margin-top: 20px;
   border-bottom: 1px solid var(--edge);
-  max-width: 880px;
 }
 
 .tab {
@@ -840,11 +872,14 @@ select option:disabled {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 26px 40px 96px;
+  padding: 18px var(--gutter) 96px;
+  /* Reserve the scrollbar on both sides so the document stays centered on
+     the same axis as the header whether or not it scrolls. */
+  scrollbar-gutter: stable both-edges;
 }
 
 .doc-inner {
-  max-width: 880px;
+  max-width: var(--measure);
   margin: 0 auto;
   animation: auRise 0.28s ease both;
 }
@@ -1049,9 +1084,9 @@ select option:disabled {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 26px 40px 40px;
-  gap: 22px;
-  max-width: calc(880px + 80px);
+  padding: 24px var(--gutter) 40px;
+  gap: 18px;
+  max-width: calc(var(--measure) + var(--gutter) * 2);
   margin: 0 auto;
   width: 100%;
   animation: auRise 0.28s ease both;
@@ -1059,20 +1094,39 @@ select option:disabled {
 
 .summary-controls {
   display: flex;
-  gap: 12px;
-  align-items: center;
+  gap: 18px;
+  align-items: flex-end;
   flex-wrap: wrap;
 }
 
+/* A select alone doesn't say what it selects. The label carries that, so
+   the control can shrink to the size of its content. */
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.control > span {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim-2);
+}
+
 .summary-controls select {
-  height: 42px;
-  min-width: 132px;
+  height: 36px;
+  min-width: 150px;
+  padding: 0 12px;
+  font-size: 12.5px;
   font-weight: 500;
-  font-size: 13px;
 }
 
 .summary-controls .btn.accent {
-  height: 42px;
+  height: 36px;
+  padding: 0 16px;
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -1099,15 +1153,12 @@ select option:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 15px 22px;
+  padding: 14px 22px;
   border-bottom: 1px solid var(--edge);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--accent) 6%, transparent),
-    transparent 40%
-  );
 }
 
+/* Red means "recording" everywhere else in this product, so a summary
+   header does not get to borrow it. The template name carries the weight. */
 .summary-title {
   display: flex;
   align-items: center;
@@ -1115,17 +1166,8 @@ select option:disabled {
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent-text);
+  color: var(--text-strong);
   letter-spacing: 0.01em;
-}
-
-.summary-title::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 3px;
-  background: var(--accent);
-  box-shadow: 0 0 10px var(--accent-glow);
 }
 
 .summary-model {
@@ -1187,21 +1229,51 @@ select option:disabled {
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: var(--accent);
-  opacity: 0.85;
+  background: var(--dim);
+  opacity: 0.7;
 }
 
 .md-checks > li {
   padding-left: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .md-checks > li::before {
   display: none;
 }
 
+/* Action items read as a checklist, so the box should look like something
+   the export carried over — not a raw form control. */
 .md-checks input {
-  accent-color: var(--accent);
-  vertical-align: -2px;
+  appearance: none;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--edge-strong);
+  border-radius: 4px;
+  background: var(--inset-bg);
+  position: relative;
+  top: 2px;
+}
+
+.md-checks input:checked {
+  border-color: var(--ok-core);
+  background: color-mix(in srgb, var(--ok-core) 18%, transparent);
+}
+
+.md-checks input:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--ok);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .md .md-h {
@@ -1211,7 +1283,9 @@ select option:disabled {
 }
 
 .md .md-h2 {
-  color: var(--accent-text);
+  font-size: 15px;
+  letter-spacing: -0.015em;
+  color: var(--text-strong);
 }
 
 .md .md-h3,
@@ -1922,6 +1996,84 @@ kbd {
   padding: 2px 7px;
   margin-right: 6px;
   white-space: nowrap;
+}
+
+/* ---------- session map (stored sessions) ---------- */
+
+/* The live listening strip, frozen: who spoke when across the whole
+   recording. Same two-voice geometry — Them above the line, You below —
+   so a finished session is recognizably the same object as a live one. */
+/* Shares the reading column with the transcript below it: both resolve to
+   `--measure` centered on the pane, so the map's ends line up with the
+   text ends. */
+.session-map {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: calc(var(--measure) + var(--gutter) * 2);
+  margin: 0 auto;
+  padding: 18px var(--gutter) 0;
+}
+
+.session-map-track {
+  position: relative;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--inset-bg);
+  border: 1px solid var(--edge);
+  overflow: hidden;
+}
+
+.session-map-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--edge-strong);
+}
+
+.map-turn {
+  position: absolute;
+  height: 8px;
+  min-width: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s;
+}
+
+.map-turn.loopback {
+  top: 5px;
+  background: var(--them);
+}
+
+.map-turn.mic {
+  bottom: 5px;
+  background: var(--you);
+}
+
+.map-turn:hover,
+.map-turn:focus-visible {
+  opacity: 1;
+}
+
+/* The track clips overflow, so the shared focus ring would be invisible
+   here; draw it inside the bar instead. */
+.map-turn:focus-visible {
+  outline: 2px solid var(--text-strong);
+  outline-offset: -1px;
+}
+
+.session-map-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim-2);
 }
 
 /* ---------- listening strip ---------- */

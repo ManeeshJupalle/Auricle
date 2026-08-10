@@ -84,12 +84,14 @@ Then press **Start recording**, play your meeting — the system-audio side
 is labeled **Them** (red), your microphone is **You** (blue), and a live
 two-voice waveform shows exactly what the engine hears on each channel.
 Sessions get LLM auto-titles after stop, full-text search in the sidebar,
-synchronized audio playback when raw-audio retention is on, and one-click
-summaries (minutes, action items, standup, 1:1) with a local (Ollama) or
-cloud LLM. Devices, providers, and keys are all editable later under
+and a **session map** across the top of every finished transcript — who
+spoke when, over the whole recording; click anywhere in it to jump the
+transcript (and the audio) to that moment. Add synchronized audio playback
+when raw-audio retention is on, and one-click summaries (minutes, action
+items, standup, 1:1) with a local (Ollama) or cloud LLM. Devices, providers, and keys are all editable later under
 **Settings**.
 
-**Copilot:** install `Auricle Copilot_0.4.0_x64_en-US.msi` from Releases
+**Copilot:** install `Auricle Copilot_0.4.1_x64_en-US.msi` from Releases
 (per-user, no admin prompt; the engine is bundled and spawns
 automatically). Launching the app opens the dashboard in its own window —
 the whole product is one installed app, no browser needed. Mid-meeting,

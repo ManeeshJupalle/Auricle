@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { AudioBar, type AudioBarHandle } from '../components/AudioBar';
 import { Markdown } from '../components/Markdown';
-import { TurnDoc } from '../components/TurnDoc';
+import { buildMapTurns, SessionMap } from '../components/SessionMap';
+import { TurnDoc, type TurnDocHandle } from '../components/TurnDoc';
 import { VuMeter } from '../components/VuMeter';
 import { WaveRibbon } from '../components/WaveRibbon';
 import { buildTurns, useAuricle, type Row } from '../store';
@@ -69,6 +70,7 @@ export function SessionView({
   const [editingTitle, setEditingTitle] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<AudioBarHandle>(null);
+  const docRef = useRef<TurnDocHandle>(null);
 
   // Summary tab state.
   const [llmProviders, setLlmProviders] = useState<LlmProviderInfo[]>([]);
@@ -130,6 +132,18 @@ export function SessionView({
 
   const hasAudio = !isLive && detail?.meta != null && typeof detail.meta === 'object'
     && (detail.meta as Record<string, unknown>)['audio'] != null;
+
+  // The session map spans the recording, so it needs the wall-clock
+  // duration — a transcript that ends early still leaves trailing silence.
+  const mapTurns = useMemo(
+    () => (staticDoc ? buildMapTurns(staticDoc.turnOrder, staticDoc.turns, staticDoc.rows) : []),
+    [staticDoc],
+  );
+  const durationMs = useMemo(() => {
+    if (!detail?.ended_at) return 0;
+    const wall = (detail.ended_at - detail.started_at) * 1000;
+    return Math.max(wall, mapTurns[mapTurns.length - 1]?.endMs ?? 0);
+  }, [detail, mapTurns]);
 
   const title = isLive ? (sessionTitleLive ?? 'Recording…') : (detail?.title ?? '…');
 
@@ -195,17 +209,13 @@ export function SessionView({
         <div className="session-meta-row">
           {isLive ? (
             <>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span className="meta-item">
                 <ClockIcon />
                 <LiveTicker startedAtMs={liveStartedAtMs} />
               </span>
-              <span style={{ opacity: 0.45 }}>·</span>
               <span className="meta-chip">{sessionProvider}</span>
               {latencyMs !== null && (
-                <>
-                  <span style={{ opacity: 0.45 }}>·</span>
-                  <span>latency {(latencyMs / 1000).toFixed(1)}s</span>
-                </>
+                <span className="meta-item">latency {(latencyMs / 1000).toFixed(1)}s</span>
               )}
               {reducedMotion && (
                 <div className="header-meters">
@@ -217,20 +227,17 @@ export function SessionView({
           ) : (
             detail && (
               <>
-                <span>{fmtLongDate(detail.started_at)}</span>
-                <span style={{ opacity: 0.45 }}>·</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span className="meta-item">{fmtLongDate(detail.started_at)}</span>
+                <span className="meta-item">
                   <ClockIcon />
                   {detail.ended_at ? fmtDur(detail.ended_at - detail.started_at) : 'in progress'}
                 </span>
-                <span style={{ opacity: 0.45 }}>·</span>
                 <span className="meta-chip">{detail.stt_provider}</span>
                 {(detail.meta as Record<string, unknown>)['interrupted'] === true && (
                   <span className="tag warn">interrupted</span>
                 )}
-                <span style={{ opacity: 0.45 }}>·</span>
                 <a
-                  className="header-export"
+                  className="btn quiet header-export"
                   href={api.exportUrl(sessionId)}
                   download={`${sessionId}.md`}
                 >
@@ -255,7 +262,7 @@ export function SessionView({
             disabled={isLive}
             title={isLive ? 'Available after the session stops' : undefined}
           >
-            AI Summary
+            Summary
           </button>
         </div>
       </header>
@@ -267,6 +274,16 @@ export function SessionView({
 
       {tab === 'transcript' ? (
         <div className="doc-wrap">
+          {!isLive && (
+            <SessionMap
+              turns={mapTurns}
+              durationMs={durationMs}
+              onPick={(t) => {
+                docRef.current?.scrollToTurn(t.index);
+                if (hasAudio) audioRef.current?.seek(t.startMs);
+              }}
+            />
+          )}
           {isLive ? (
             <TurnDoc
               turnOrder={liveTurnOrder}
@@ -276,6 +293,7 @@ export function SessionView({
             />
           ) : staticDoc ? (
             <TurnDoc
+              ref={docRef}
               turnOrder={staticDoc.turnOrder}
               turns={staticDoc.turns}
               rows={staticDoc.rows}
@@ -293,21 +311,27 @@ export function SessionView({
       ) : (
         <div className="summary-pane">
           <div className="summary-controls">
-            <select value={template} onChange={(e) => setTemplate(e.target.value)}>
-              {templates.map((t) => (
-                <option key={t.name} value={t.name}>
-                  {t.name}
-                  {t.overridden ? ' *' : ''}
-                </option>
-              ))}
-            </select>
-            <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)}>
-              {llmProviders.map((p) => (
-                <option key={p.id} value={p.id} disabled={!p.ready}>
-                  {p.id} ({p.model}){p.ready ? '' : ' — not ready'}
-                </option>
-              ))}
-            </select>
+            <label className="control">
+              <span>Template</span>
+              <select value={template} onChange={(e) => setTemplate(e.target.value)}>
+                {templates.map((t) => (
+                  <option key={t.name} value={t.name}>
+                    {t.name}
+                    {t.overridden ? ' *' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control">
+              <span>Written by</span>
+              <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)}>
+                {llmProviders.map((p) => (
+                  <option key={p.id} value={p.id} disabled={!p.ready}>
+                    {p.id} ({p.model}){p.ready ? '' : ' — not ready'}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               className="btn accent"
               onClick={summarize}
