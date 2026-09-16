@@ -80,6 +80,18 @@ pub fn build_router_with_reader(
         .route("/api/v1/peek", post(peek))
         .route("/api/v1/ask", post(crate::ask::ask))
         .route("/ws/live", get(crate::ws::ws_handler))
+        // MCP (Streamable HTTP) for local agents. Merged as its own router so
+        // the enable gate wraps only this path; the global auth layer below
+        // still applies, so /mcp gets the same origin and loopback checks as
+        // everything else.
+        .merge(
+            Router::new()
+                .nest_service("/mcp", crate::mcp::service(state.clone()))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    mcp_gate,
+                )),
+        )
         // Embedded web UI (ui/dist via rust-embed): everything that isn't
         // an API route serves static files, unknown paths fall back to
         // index.html (SPA).
@@ -181,6 +193,31 @@ async fn shutdown_on_ctrl_c(engine: Arc<Engine>) {
         }
     }
     eprintln!("auricle stopped");
+}
+
+/// Answer 404 on every `/mcp` request while the MCP server is switched off,
+/// so a disabled endpoint is indistinguishable from an absent one.
+///
+/// The setting is read per request rather than at router build time: the
+/// toggle in Settings then takes effect immediately instead of at the next
+/// restart. The settings table is a handful of rows, and MCP is not a hot
+/// path, so the read is not worth caching.
+async fn mcp_gate(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let enabled = state
+        .engine
+        .store()
+        .all_settings()
+        .ok()
+        .and_then(|s| s.get("mcp_enabled").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+    if !enabled {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response();
+    }
+    next.run(request).await
 }
 
 async fn auth_middleware(
@@ -434,13 +471,18 @@ struct EgressQuery {
 /// audio, prompt, and answer are never recorded, only where they went.
 async fn egress(State(state): State<AppState>, Query(q): Query<EgressQuery>) -> Response {
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
-    match state
-        .engine
-        .store()
-        .list_egress(q.session.as_deref(), limit)
-    {
-        Ok(entries) => Json(json!({ "entries": entries })).into_response(),
-        Err(e) => internal(e.to_string()),
+    let store = state.engine.store();
+    // `entries` is one page; `totals` covers the whole ledger, so the UI's
+    // "nothing has left this machine" line never becomes an artifact of how
+    // many rows fit on a page.
+    match (
+        store.list_egress(q.session.as_deref(), limit),
+        store.egress_totals(),
+    ) {
+        (Ok(entries), Ok(totals)) => {
+            Json(json!({ "entries": entries, "totals": totals })).into_response()
+        }
+        (Err(e), _) | (_, Err(e)) => internal(e.to_string()),
     }
 }
 

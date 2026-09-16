@@ -44,6 +44,8 @@ Three things, one engine:
   exactly what was captured.
 - **🔌 API** — everything above is `curl`-able: REST + WebSocket +
   SSE on one localhost port. The UIs are just clients; yours can be too.
+  Turn on the optional MCP server and your coding agent is a client too —
+  Claude Code can read the meeting you're in.
 
 ## Why
 
@@ -59,7 +61,7 @@ and ships them as one lightweight daemon.
 | Capture | local system audio + mic | bot joins the meeting | local system audio + mic |
 | STT | local only | cloud, swappable | **local + cloud, swappable per session** |
 | Interface | the desktop app | REST API | **REST/WS API; dashboard + overlay are just clients** |
-| Runtime | Tauri + Next.js | Django/Postgres/Redis fleet | **one ~31 MB binary, SQLite** |
+| Runtime | Tauri + Next.js | Django/Postgres/Redis fleet | **one ~39 MB binary, SQLite** |
 | Audio leaves your machine | no | yes | **only if you opt into a cloud provider** |
 
 ## Quickstart
@@ -167,6 +169,33 @@ capture never reads the overlay's previous answer back into the next
 one. It talks only to the public API
 ([docs/PHASE9_OVERLAY_REPORT.md](docs/PHASE9_OVERLAY_REPORT.md)).
 
+## Agents (MCP)
+
+Auricle can hand your meeting to a coding agent. Turn on **Settings →
+Privacy → Let local AI agents read your transcripts** and the daemon
+serves an MCP endpoint at `/mcp`; point Claude Code at it:
+
+```
+claude mcp add --transport http auricle http://127.0.0.1:4820/mcp
+```
+
+Then "what did we just decide about the release date?" is answered from
+the meeting you're sitting in, and "summarize last Tuesday's 1:1" from the
+one you're not.
+
+Four tools, all read-only: `auricle.live_transcript` (the rolling window of
+what's being said right now), `auricle.search` (matching lines across every
+recording), `auricle.list_sessions`, and `auricle.get_session`. There is no
+tool to start a recording, capture the screen, or spend money on an LLM —
+an agent gets the transcript and nothing else.
+
+**Off by default, and the ledger tells on it.** Every agent read is
+recorded on the Egress tab as an `AGENT` row naming the client that asked.
+Auricle can attest to what it sent; it cannot attest to what a program
+that read from it did next, and the ledger says exactly that rather than
+filing the read as "stayed local." Full reference:
+[docs/API.md](docs/API.md).
+
 ## Transparency
 
 The copilot's constraints are design rules, not marketing — from the
@@ -179,6 +208,10 @@ architecture doc, verbatim:
 - **No continuous surveillance.** Screen capture happens only on explicit
   hotkey press. There is no background screenshot loop, no keylogging, no
   watching.
+- **Agents only get what you open.** The MCP server is off until you turn
+  it on, read-only when on, and every read lands on the ledger under its
+  own `AGENT` badge — never counted as "stayed local", because where an
+  agent forwards what it read is not something Auricle can see.
 - **Privacy defaults preserved.** OCR text and questions are processed in
   memory; nothing screen-derived is persisted unless
   `copilot.retain_context = true`. Fully-local operation (Windows OCR +

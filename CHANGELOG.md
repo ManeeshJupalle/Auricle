@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+Your coding agent can read your meetings.
+
+- **MCP server, off by default.** Turn on Settings → Privacy → *Let local AI
+  agents read your transcripts* and the daemon serves Model Context Protocol
+  at `/mcp`, so Claude Code or Cursor can answer "what did we just decide?"
+  from the meeting you're in. Four tools, all read-only:
+  `auricle.live_transcript`, `auricle.search`, `auricle.list_sessions`,
+  `auricle.get_session`. Nothing an agent can call starts a recording,
+  captures the screen, or runs a model. While the setting is off, `/mcp`
+  answers 404 — a disabled endpoint looks like an absent one. The toggle
+  takes effect immediately; no restart.
+- **The egress ledger gained a third destination: `AGENT`.** An MCP client is
+  a local process, so classifying its reads by endpoint host would have filed
+  them as "stayed local" while an agent forwarded your transcript to a cloud
+  model. The ledger now records what it actually knows — which client read,
+  how many characters, when — and says plainly that where the agent sent it
+  next is outside Auricle's view. The Home and Egress screens no longer claim
+  "nothing has left this machine" when an agent has been reading.
+- **Transcript search returns lines, not just sessions.** The existing search
+  answers "which meetings mention this"; agents need "which lines", so
+  `search_segments` returns matching lines tagged with their meeting and
+  offset. Used by `auricle.search`; the dashboard's sidebar search is
+  unchanged.
+
 ## 0.4.1 — 2026-08-10
 
 A design pass over the dashboard, and the fixes it turned up.

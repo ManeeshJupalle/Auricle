@@ -15,6 +15,7 @@ mod engine;
 mod events;
 mod export;
 mod lifecycle;
+mod mcp;
 mod redact;
 mod ring;
 mod store;

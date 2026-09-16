@@ -85,6 +85,20 @@ serde_json = "1"
 # Named in the Phase 3 build spec for retry/backoff tests.
 wiremock = "0.6"
 axum = { version = "0.8", features = ["ws"] }
+# MCP server (official Rust SDK). Deliberately default-features = false:
+# the default set pulls the client stack and base64, none of which a
+# server-only surface needs. rmcp depends on tower-service/http, not on
+# axum, so its StreamableHttpService nests into our axum 0.8 router
+# without a version fight.
+rmcp = { version = "3.4", default-features = false, features = [
+    "server",
+    "macros",
+    "transport-streamable-http-server",
+] }
+# Tool input/output schemas for rmcp. A direct dep (rather than the
+# `rmcp::schemars` re-export) so the derive resolves `schemars` by its own
+# name; version tracks rmcp's requirement.
+schemars = "1"
 # Retained-audio serving: ServeFile streams WAVs from disk with Range/206
 # support (hours-long files; <audio> seeking needs byte ranges).
 tower = { version = "0.5", features = ["util"] }

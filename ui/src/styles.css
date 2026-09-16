@@ -1792,6 +1792,15 @@ select option:disabled {
   border: 1px solid color-mix(in srgb, var(--ok-core) 30%, transparent);
 }
 
+/* An agent read the transcript. Neutral, not amber: amber means Auricle
+   itself sent data somewhere and can name the host. Here it only knows a
+   local process read, so the headline carries the caveat, not the badge. */
+.egress-badge.agent {
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--text-soft) 10%, transparent);
+  border: 1px solid var(--edge-strong);
+}
+
 .egress-kind {
   font-weight: 600;
   color: var(--text-soft);

@@ -1,7 +1,7 @@
 import type {
   DeviceInfo,
   DiagnosticsInfo,
-  EgressEntry,
+  EgressLedger,
   Health,
   ProvidersResponse,
   SessionDetail,
@@ -101,8 +101,7 @@ export const api = {
 
   egress: (session?: string) =>
     fetch(`/api/v1/egress${session ? `?session=${encodeURIComponent(session)}` : ''}`)
-      .then((r) => json<{ entries: EgressEntry[] }>(r))
-      .then((b) => b.entries),
+      .then((r) => json<EgressLedger>(r)),
 
   diagnostics: () => fetch('/api/v1/diagnostics').then((r) => json<DiagnosticsInfo>(r)),
 

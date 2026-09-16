@@ -90,21 +90,46 @@ pub struct SegmentRow {
     pub provider: String,
 }
 
+/// One transcript line matching a search, carrying enough context to be
+/// read on its own: which meeting it came from and when inside it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SegmentHit {
+    pub session_id: String,
+    pub session_title: String,
+    pub started_at: i64,
+    pub speaker: String,
+    pub t_start_ms: i64,
+    pub text: String,
+}
+
 /// One egress-ledger row as returned to clients.
 #[derive(Debug, Clone, Serialize)]
 pub struct EgressRow {
     pub id: i64,
     pub ts: i64,
     pub session_id: Option<String>,
-    /// `"cloud"` (data left the machine) or `"local"` (stayed on-device).
+    /// `"cloud"` (Auricle sent it off the machine), `"local"` (stayed
+    /// on-device), or `"agent"` (a local MCP client read it; where that
+    /// client sent it next is not knowable from here).
     pub destination: String,
     pub provider: String,
     pub host: Option<String>,
-    /// What was sent: `"audio"`, `"prompt"`, or `"summary"`.
+    /// What was sent: `"audio"`, `"prompt"`, `"summary"`, or one of the MCP
+    /// read kinds (see `mcp.rs`).
     pub kind: String,
     /// Rough size in provider-natural units (chars for text; null for audio).
     pub items: Option<i64>,
     pub detail: Option<String>,
+}
+
+/// One `(destination, counterparty)` tally over the whole ledger.
+#[derive(Debug, Clone, Serialize)]
+pub struct EgressTotal {
+    pub destination: String,
+    /// The cloud host, or — for `local` and `agent` rows, which have no
+    /// host — the provider or agent client name.
+    pub who: String,
+    pub count: i64,
 }
 
 /// Input to [`Store::record_egress`]. Borrowed to avoid allocations on the
@@ -319,6 +344,43 @@ impl Store {
                 rows
             }
         };
+        Ok(rows)
+    }
+
+    /// Transcript lines matching `query`, newest meeting first.
+    ///
+    /// The line-level counterpart to `list_sessions(Some(q))`, which answers
+    /// "which meetings mention this" and leaves the caller to pull whole
+    /// transcripts to find out where. An MCP client has a bounded context
+    /// window, so it needs the matching lines themselves.
+    pub fn search_segments(&self, query: &str, limit: i64) -> Result<Vec<SegmentHit>> {
+        let Some(q) = Some(query.trim()).filter(|q| !q.is_empty()) else {
+            return Ok(Vec::new());
+        };
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT s.id, s.title, s.started_at, g.speaker, g.t_start_ms, g.text
+                 FROM segments g JOIN sessions s ON s.id = g.session_id
+                 WHERE g.text LIKE ?1 ESCAPE '\\'
+                 ORDER BY s.started_at DESC, g.t_start_ms, g.id
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(rusqlite::params![like_pattern(q), limit], |r| {
+                Ok(SegmentHit {
+                    session_id: r.get(0)?,
+                    session_title: r.get(1)?,
+                    started_at: r.get(2)?,
+                    speaker: r.get(3)?,
+                    t_start_ms: r.get(4)?,
+                    text: r.get(5)?,
+                })
+            })
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
         Ok(rows)
     }
 
@@ -556,6 +618,36 @@ impl Store {
         Ok(rows)
     }
 
+    /// Whole-ledger counts, grouped by destination and by who was on the
+    /// other end — the cloud host, or the agent's client name.
+    ///
+    /// The headline ("nothing has left this machine") must be a fact about
+    /// the ledger, not about whichever page of it the UI happened to fetch.
+    /// Agent reads arrive far faster than session or summary rows — a chatty
+    /// agent can push every cloud row off a fixed-size page — so the counts
+    /// are aggregated in SQL rather than derived from `list_egress`.
+    pub fn egress_totals(&self) -> Result<Vec<EgressTotal>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT destination, COALESCE(host, provider), COUNT(*)
+                 FROM egress GROUP BY destination, COALESCE(host, provider)",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(EgressTotal {
+                    destination: r.get(0)?,
+                    who: r.get(1)?,
+                    count: r.get(2)?,
+                })
+            })
+            .map_err(db_err)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        Ok(rows)
+    }
+
     pub fn set_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -587,6 +679,18 @@ impl Store {
         }
         Ok(out)
     }
+}
+
+/// Wrap a user string as a LIKE contains-pattern, escaping the wildcards so
+/// a literal `%` or `_` in the query matches itself. Pairs with
+/// `ESCAPE '\'` in the statement.
+fn like_pattern(q: &str) -> String {
+    format!(
+        "%{}%",
+        q.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
 }
 
 fn row_to_session(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -772,6 +876,59 @@ mod tests {
         assert_eq!(store.list_sessions(Some("  ")).unwrap().len(), 2);
         // LIKE wildcards in user input are literals, not wildcards.
         assert!(store.list_sessions(Some("%")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn segment_search_returns_the_matching_lines() {
+        let path = temp_db("search-segments");
+        let store = Store::open(&path).unwrap();
+        store
+            .create_session("s1", "Weekly sync", 100, "deepgram", &serde_json::json!({}))
+            .unwrap();
+        store
+            .insert_segment("s1", ChannelId::Mic, "You", 0, 900, "budget approved", "d")
+            .unwrap();
+        store
+            .insert_segment("s1", ChannelId::Mic, "You", 5_000, 6_000, "unrelated", "d")
+            .unwrap();
+        store
+            .create_session(
+                "s2",
+                "1:1 with Sam",
+                200,
+                "deepgram",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .insert_segment(
+                "s2",
+                ChannelId::Loopback,
+                "Them",
+                1_500,
+                2_000,
+                "the budget again",
+                "d",
+            )
+            .unwrap();
+
+        // Newest session first, and the line carries its own context.
+        let hits = store.search_segments("budget", 20).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].session_id, "s2");
+        assert_eq!(hits[0].session_title, "1:1 with Sam");
+        assert_eq!(hits[0].speaker, "Them");
+        assert_eq!(hits[0].t_start_ms, 1_500);
+        assert_eq!(hits[1].session_id, "s1");
+        assert_eq!(hits[1].text, "budget approved");
+
+        // Case-insensitive, and the limit is honoured.
+        assert_eq!(store.search_segments("BUDGET", 1).unwrap().len(), 1);
+        // Blank query is not "match everything".
+        assert!(store.search_segments("   ", 20).unwrap().is_empty());
+        // LIKE wildcards in user input stay literal.
+        assert!(store.search_segments("%", 20).unwrap().is_empty());
+        assert!(store.search_segments("_", 20).unwrap().is_empty());
     }
 
     #[test]

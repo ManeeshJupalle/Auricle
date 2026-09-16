@@ -263,10 +263,10 @@ max 1000).
 |---|---|
 | `ts` | unix seconds |
 | `session_id` | owning session, or null |
-| `destination` | `"cloud"` (left the machine) or `"local"` (stayed on-device) |
-| `provider` | e.g. `deepgram`, `groq`, `whisper-local` |
+| `destination` | `"cloud"` (Auricle sent it off the machine), `"local"` (stayed on-device), or `"agent"` (a local MCP client read it — see `POST /mcp`) |
+| `provider` | e.g. `deepgram`, `groq`, `whisper-local`; for `agent` rows, the client's self-reported name |
 | `host` | destination host for cloud rows, else null/local host |
-| `kind` | `"audio"` (a session's live capture), `"prompt"` (an ask), `"summary"` |
+| `kind` | `"audio"` (a session's live capture), `"prompt"` (an ask), `"summary"`, or an MCP read kind |
 | `items` | rough size — characters for text; null for audio |
 | `detail` | short human note (e.g. `"ask + screen + transcript"`) |
 
@@ -279,8 +279,17 @@ $ curl http://127.0.0.1:4820/api/v1/egress?limit=2
   {"id":7,"ts":1721348010,"session_id":"s_...","destination":"local",
    "provider":"whisper-local","host":null,"kind":"audio","items":null,
    "detail":"live capture"}
-]}
+],
+ "totals":[{"destination":"cloud","who":"api.groq.com","count":14},
+           {"destination":"local","who":"whisper-local","count":31}]}
 ```
+
+`entries` is one page; `totals` groups the **whole** ledger by destination
+and counterparty (the cloud host, or the provider / agent client name where
+there is no host). The dashboard's headline reads from `totals`, so "nothing
+has left this machine" can never be an artifact of the page size — which
+matters once agents are reading, since their rows accrue much faster than
+session or summary rows.
 
 ## GET /api/v1/diagnostics
 
@@ -426,6 +435,128 @@ Event types:
 Slow-consumer policy: finals and lifecycle events ride a deep (1024) buffer;
 partials ride a shallow lossy one. A consumer that can't keep up loses
 partials only and is told how many via `lag`.
+
+## POST /mcp — Model Context Protocol
+
+A read-only view of the transcript for local agents (Claude Code, Cursor,
+anything that speaks MCP), served over the Streamable HTTP transport on the
+same port as everything else. **Off by default**: the endpoint answers `404`
+until `mcp_enabled` is set, so a disabled server is indistinguishable from
+one that was never built. Set it through the same settings route the UI
+uses (Settings → Privacy → *Let local AI agents read your transcripts*):
+
+```
+$ curl -X PUT http://127.0.0.1:4820/api/v1/settings \
+    -H 'Content-Type: application/json' -d '{"mcp_enabled":true}'
+```
+
+The setting is read per request, so the toggle takes effect without a
+restart — including turning it back off. Install into Claude Code with:
+
+```
+claude mcp add --transport http auricle http://127.0.0.1:4820/mcp
+```
+
+### Tools
+
+All four are read-only and carry `readOnlyHint: true`. There is deliberately
+no tool that starts or stops a recording, captures the screen, or calls an
+LLM — an agent gets the transcript and nothing else.
+
+| Tool | Returns |
+|---|---|
+| `auricle.live_transcript` | The rolling window of the session in progress (`[copilot].transcript_window_min`, default 10 min), oldest line first, plus the active `session_id` (null when nothing is recording). Reads the in-memory ring — no database hit. |
+| `auricle.search` | Transcript lines matching `query` across every recording, newest meeting first, each tagged with its session id, title, and offset. `limit` defaults to 20, capped at 200. |
+| `auricle.list_sessions` | Recorded meetings, newest first. Optional `query` filters to meetings whose title or transcript contains that text. |
+| `auricle.get_session` | One meeting: full transcript plus any summaries already generated. Transcripts are cut at 40 000 characters on a segment boundary, with `truncated: true` in the response — never a silent truncation. |
+
+`speaker` is `"You"` (microphone) or `"Them"` (system audio), the same
+two-voice model as the rest of the API. When `redact_pii` is on, the text
+these tools return is already redacted: scrubbing happens at the engine's
+fan-out point, before anything is persisted or served.
+
+### Egress
+
+Every tool call is written to the egress ledger with destination `agent` —
+a third value alongside `cloud` and `local`. The ledger's usual rule is to
+classify by endpoint host, which cannot work here: an MCP client is a local
+process, but a local process may be the front end of a cloud model. Filing
+these reads as `local` would let the dashboard claim "nothing has left this
+machine" while an agent forwarded a transcript to a cloud model, so the
+ledger records what it actually knows instead:
+
+- `provider` — the client's self-reported name from the MCP handshake
+  (`claude-code`, `cursor-vscode`). Self-reported, so it identifies a
+  well-behaved client rather than authenticating anything.
+- `kind` — `live_transcript`, `transcript_search`, `session_list`, or
+  `session_read`.
+- `items` — characters of user content in the response.
+- `host` — always null. There is no remote host to name.
+
+### Captured exchange
+
+Real output from a running daemon seeded with one short meeting. The client
+here is the integration harness, which identifies itself as
+`integration-test`; Claude Code reports `claude-code`.
+
+`initialize` (the handshake — the reply carries an `Mcp-Session-Id` header
+that every later request must echo back):
+
+```
+$ curl -i -X POST http://127.0.0.1:4820/mcp \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+         "protocolVersion":"2025-06-18","capabilities":{},
+         "clientInfo":{"name":"claude-code","version":"1"}}}'
+HTTP/1.1 200 OK
+content-type: text/event-stream
+mcp-session-id: 7f3a…
+
+data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18",
+ "capabilities":{"tools":{}},"serverInfo":{"name":"auricle","version":"0.4.1"},
+ "instructions":"Auricle records the user's meetings locally — …"}}
+```
+
+`tools/call` on `auricle.search`. The result carries both a `content` text
+block and `structuredContent` (schema-typed), which is what an agent reads:
+
+```
+{"jsonrpc":"2.0","id":3,"result":{"isError":false,"structuredContent":{
+  "hits":[{"session_id":"s7c1f0a","session_title":"Pricing review",
+           "speaker":"Them","started_at":1789000000,"t_start_ms":52800,
+           "text":"and the annual discount stays at twenty percent"}]}}}
+```
+
+`auricle.live_transcript` with nothing recording — an empty window, not an
+error. `session_id: null` is how a caller tells "no meeting" from "a meeting
+where nobody has spoken for ten minutes":
+
+```
+{"jsonrpc":"2.0","id":4,"result":{"isError":false,
+  "structuredContent":{"lines":[],"session_id":null,"window_minutes":10}}}
+```
+
+Those two calls, on the ledger afterwards. Note `destination: "agent"`,
+the null `host`, and `items` counting characters of transcript — 47 for the
+one matched line, 0 for the empty live window:
+
+```
+$ curl http://127.0.0.1:4820/api/v1/egress
+{"entries":[
+  {"id":2,"ts":1789523838,"session_id":null,"destination":"agent",
+   "provider":"integration-test","host":null,"kind":"live_transcript",
+   "items":0,"detail":null},
+  {"id":1,"ts":1789523838,"session_id":null,"destination":"agent",
+   "provider":"integration-test","host":null,"kind":"transcript_search",
+   "items":47,"detail":null}],
+ "totals":[{"destination":"agent","who":"integration-test","count":2}]}
+```
+
+`totals` counts the whole ledger while `entries` is one page, so the
+dashboard's "nothing has left this machine" line is a fact about the ledger
+rather than about how many rows fit on a page — agent reads arrive far
+faster than session or summary rows and would otherwise push them off.
 
 ## Crash recovery
 

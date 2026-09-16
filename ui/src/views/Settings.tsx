@@ -251,6 +251,21 @@ export function Settings() {
           before the text is stored or sent to any cloud provider. Applies to future sessions and
           covers transcript text only.
         </p>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={settings['mcp_enabled'] === true}
+            onChange={(e) => save({ mcp_enabled: e.target.checked })}
+          />
+          <span>Let local AI agents read your transcripts (MCP server at /mcp)</span>
+          {saved === 'mcp_enabled' && <span className="saved">saved</span>}
+        </label>
+        <p className="dim note">
+          Off by default. When enabled, any agent on this machine that speaks MCP — Claude Code,
+          Cursor — can read your live and past transcripts. Read-only: agents cannot start a
+          recording, see your screen, or run a model. Every read is listed in the egress ledger,
+          but where an agent sends what it read is outside Auricle&rsquo;s view.
+        </p>
       </section>
     </div>
   );

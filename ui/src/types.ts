@@ -116,13 +116,35 @@ export interface EgressEntry {
   id: number;
   ts: number;
   session_id: string | null;
-  /** 'cloud' = left the machine; 'local' = stayed on-device. */
-  destination: 'cloud' | 'local';
+  /**
+   * 'cloud' = Auricle sent it off the machine; 'local' = stayed on-device;
+   * 'agent' = a local MCP client read it, and where that client sent it next
+   * is outside Auricle's view.
+   */
+  destination: 'cloud' | 'local' | 'agent';
+  /** Provider name, or for 'agent' rows the MCP client's self-reported name. */
   provider: string;
   host: string | null;
-  /** 'audio' | 'prompt' | 'summary' */
+  /** 'audio' | 'prompt' | 'summary' | one of the MCP read kinds */
   kind: string;
   /** Rough size (chars for text; null for audio). */
   items: number | null;
   detail: string | null;
+}
+
+/** One (destination, counterparty) tally over the whole ledger. */
+export interface EgressTotal {
+  destination: 'cloud' | 'local' | 'agent';
+  /** The cloud host, or the provider / agent client name when there is none. */
+  who: string;
+  count: number;
+}
+
+/**
+ * `entries` is one page of the ledger; `totals` counts all of it. Headline
+ * claims read from `totals` so they never depend on the page size.
+ */
+export interface EgressLedger {
+  entries: EgressEntry[];
+  totals: EgressTotal[];
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { EgressEntry, ProvidersResponse } from '../types';
+import type { EgressLedger, ProvidersResponse } from '../types';
 
 // Deterministic duet motif: a still of the listening strip. Them (system
 // audio) above the centerline, You (mic) below — a conversation where
@@ -66,7 +66,7 @@ function DuetMotif() {
  */
 export function Home({ onShowEgress }: { onShowEgress: () => void }) {
   const [prov, setProv] = useState<ProvidersResponse | null>(null);
-  const [egress, setEgress] = useState<EgressEntry[] | null>(null);
+  const [egress, setEgress] = useState<EgressLedger | null>(null);
   const [egressFailed, setEgressFailed] = useState(false);
 
   useEffect(() => {
@@ -77,8 +77,15 @@ export function Home({ onShowEgress }: { onShowEgress: () => void }) {
       .catch(() => setEgressFailed(true));
   }, []);
 
-  const cloud = egress?.filter((e) => e.destination === 'cloud') ?? [];
-  const hosts = [...new Set(cloud.map((e) => e.host).filter((h): h is string => !!h))];
+  // Whole-ledger totals, not the page of entries: the claim this line makes
+  // must not depend on how many rows the API returned.
+  const totals = egress?.totals ?? [];
+  const count = (d: string) =>
+    totals.filter((t) => t.destination === d).reduce((n, t) => n + t.count, 0);
+  const cloud = count('cloud');
+  const agent = count('agent');
+  const local = count('local');
+  const hosts = totals.filter((t) => t.destination === 'cloud').map((t) => t.who);
 
   return (
     <div className="home">
@@ -136,21 +143,33 @@ export function Home({ onShowEgress }: { onShowEgress: () => void }) {
             <span className="home-privacy">
               {egress === null ? (
                 <span className="dim">…</span>
-              ) : cloud.length === 0 ? (
+              ) : cloud === 0 && agent === 0 ? (
                 <>
                   <span className="privacy-ok">Nothing has left this machine.</span>
-                  {egress.length > 0 && (
+                  {local > 0 && (
                     <span className="dim">
                       {' '}
-                      {egress.length} local {egress.length === 1 ? 'action' : 'actions'} on record.
+                      {local} local {local === 1 ? 'action' : 'actions'} on record.
                     </span>
                   )}
                 </>
+              ) : cloud === 0 ? (
+                <span>
+                  Auricle sent nothing off this machine; agents read your transcript{' '}
+                  <strong>{agent}</strong> {agent === 1 ? 'time' : 'times'}.
+                </span>
               ) : (
                 <span>
-                  Data left this machine <strong>{cloud.length}</strong>{' '}
-                  {cloud.length === 1 ? 'time' : 'times'}, to{' '}
+                  Data left this machine <strong>{cloud}</strong>{' '}
+                  {cloud === 1 ? 'time' : 'times'}, to{' '}
                   <span className="mono">{hosts.join(', ')}</span>.
+                  {agent > 0 && (
+                    <>
+                      {' '}
+                      Agents read your transcript <strong>{agent}</strong>{' '}
+                      {agent === 1 ? 'time' : 'times'}.
+                    </>
+                  )}
                 </span>
               )}{' '}
               <button className="link-btn" onClick={onShowEgress}>
