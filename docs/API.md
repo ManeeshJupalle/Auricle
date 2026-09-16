@@ -471,9 +471,27 @@ LLM — an agent gets the transcript and nothing else.
 | `auricle.get_session` | One meeting: full transcript plus any summaries already generated. Transcripts are cut at 40 000 characters on a segment boundary, with `truncated: true` in the response — never a silent truncation. |
 
 `speaker` is `"You"` (microphone) or `"Them"` (system audio), the same
-two-voice model as the rest of the API. When `redact_pii` is on, the text
-these tools return is already redacted: scrubbing happens at the engine's
-fan-out point, before anything is persisted or served.
+two-voice model as the rest of the API.
+
+**What `redact_pii` does and does not cover here.** Redaction runs at the
+engine's fan-out point, so transcript text captured *while the setting was
+on* reaches these tools already scrubbed — in the ring and in the database
+alike. Three things it does not cover, and an agent reading your history
+will see all three:
+
+- **Meetings recorded before you enabled it.** The setting applies to
+  future sessions; it does not rewrite stored transcripts. Turning it on
+  today does not redact last month's meeting.
+- **Session titles.** They are written by an LLM from the transcript and
+  are not passed through the redactor, so a title like
+  `Budget call with alice@example.com` survives.
+- **Summaries.** Also LLM output, also unredacted.
+
+This is the same exposure the dashboard and `GET /api/v1/sessions/{id}`
+have always had — MCP does not widen it — but an agent trawling old
+meetings will surface it far more readily than a human clicking through
+the UI. If that matters to you, keep the MCP server off for accounts with
+unredacted history.
 
 ### Egress
 

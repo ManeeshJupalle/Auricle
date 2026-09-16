@@ -54,6 +54,35 @@ pub(crate) fn llm_egress(id: &str, cfg: &Config) -> (&'static str, Option<String
     }
 }
 
+/// Ledger write that surfaces its error.
+///
+/// For most callers the egress has already happened by the time we log it —
+/// the audio is sent, the prompt is in flight — so a failed write is worth
+/// reporting but not worth failing the request over; those use [`record`].
+/// The MCP tools are the exception: they log *before* disclosing anything,
+/// so that an unwritable ledger stops the disclosure instead of hiding it.
+pub(crate) fn record_checked(
+    store: &Store,
+    session_id: Option<&str>,
+    kind: &str,
+    dest: (&str, Option<String>),
+    provider: &str,
+    items: Option<i64>,
+    detail: Option<&str>,
+) -> auricle_core::Result<()> {
+    let (destination, host) = dest;
+    store.record_egress(&EgressEntry {
+        ts: crate::engine::unix_secs(),
+        session_id,
+        destination,
+        provider,
+        host: host.as_deref(),
+        kind,
+        items,
+        detail,
+    })
+}
+
 /// Best-effort ledger write: a failure here must never break the request
 /// that triggered the egress, so the error is logged and dropped.
 pub(crate) fn record(
@@ -65,17 +94,7 @@ pub(crate) fn record(
     items: Option<i64>,
     detail: Option<&str>,
 ) {
-    let (destination, host) = dest;
-    if let Err(e) = store.record_egress(&EgressEntry {
-        ts: crate::engine::unix_secs(),
-        session_id,
-        destination,
-        provider,
-        host: host.as_deref(),
-        kind,
-        items,
-        detail,
-    }) {
+    if let Err(e) = record_checked(store, session_id, kind, dest, provider, items, detail) {
         eprintln!("recording egress: {e}");
     }
 }

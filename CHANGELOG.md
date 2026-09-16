@@ -26,6 +26,36 @@ Your coding agent can read your meetings.
   offset. Used by `auricle.search`; the dashboard's sidebar search is
   unchanged.
 
+### Fixed (external audit of the above)
+
+- **An MCP read is refused if the ledger can't be written.** The ledger write
+  was best-effort, so a locked database meant the transcript went out with no
+  row recorded — the one failure mode that would make the ledger untrustworthy
+  rather than merely incomplete. MCP reads now log before disclosing and fail
+  the call if that write fails.
+- **Reads are attributed to the meeting actually read.** The ledger recorded
+  whichever session was *recording* at the time, so reading last week's 1:1
+  during today's standup filed the read against today's standup.
+- **Ledger sizes count everything disclosed.** A `get_session` logged only
+  transcript characters while also returning the title and every summary; a
+  short meeting with a long summary understated the disclosure badly.
+- **The ledger names the calling client, not the MCP library.** Client
+  identity now comes from the request's own metadata. Reading it from the
+  handshake meant stateless callers were filed against `rmcp`, which looks
+  like a real client name and is not one.
+- **MCP works on non-loopback binds.** rmcp's default `Host` allowlist accepts
+  only loopback, so a daemon bound to a LAN address with a bearer token
+  answered every MCP request with 403. Auricle's own middleware already does
+  this check, and does it with knowledge of the token.
+- **`live_transcript` no longer implies its lines belong to `session_id`.**
+  The window is a span of time, not a slice of one meeting: it survives a
+  session stopping. Behaviour unchanged (`/ask` depends on it) — the tool now
+  says so instead of implying otherwise.
+- **Documented what `redact_pii` does not cover for agents**: meetings
+  recorded before it was enabled, LLM-written session titles, and summaries.
+  Unchanged from what the dashboard has always exposed, but an agent trawling
+  old meetings surfaces it far more readily than a human clicking through.
+
 ## 0.4.1 — 2026-08-10
 
 A design pass over the dashboard, and the fixes it turned up.

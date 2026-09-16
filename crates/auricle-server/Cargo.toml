@@ -35,6 +35,10 @@ mime_guess = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true }
+# Integration tests hold a write lock on the database from a second
+# connection, to prove an MCP read refuses rather than disclosing content it
+# could not write to the egress ledger.
+rusqlite = { workspace = true }
 tokio-tungstenite = { workspace = true }
 async-trait = { workspace = true }
 wiremock = { workspace = true }

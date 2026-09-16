@@ -17,14 +17,22 @@
 //! client is a local process, but a local process may be the front end of a
 //! cloud model. So the ledger records what it actually knows (something local
 //! read the transcript) rather than guessing at `local` or `cloud`.
+//!
+//! That write happens **before** anything is disclosed, and a failure fails
+//! the call. Elsewhere the ledger is best-effort, because by the time we log
+//! an egress it has already happened and dropping the row is the lesser
+//! harm. Here the order is ours to choose, and letting a read through with no
+//! row would leave the ledger quietly incomplete — which is precisely the
+//! thing that would make the whole surface not worth offering.
 
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorData as McpError, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{tool, tool_handler, tool_router, Peer, RoleServer, ServerHandler};
+use rmcp::{tool, tool_handler, tool_router, RoleServer, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -62,12 +70,19 @@ pub struct Line {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct LiveTranscript {
-    /// The session currently recording, or null when nothing is.
+    /// The session recording *right now*, or null when none is.
+    ///
+    /// This is not a label for `lines`. The window is a span of wall-clock
+    /// time, not a slice of one recording: stopping a meeting does not clear
+    /// it, so a caller can see a null `session_id` beside the previous
+    /// meeting's words, or a new session's id beside words spoken before it
+    /// started. Use `auricle.get_session` when you need lines that provably
+    /// belong to one meeting.
     session_id: Option<String>,
     /// Width of the rolling window, from `[copilot] transcript_window_min`.
     window_minutes: u64,
-    /// Oldest first. Empty when nothing has been said in the window — which
-    /// is not the same as nothing recording; check `session_id`.
+    /// Oldest first. Empty means nothing was said in the window, which is not
+    /// the same as nothing recording.
     lines: Vec<Line>,
 }
 
@@ -165,14 +180,19 @@ impl AuricleMcp {
 
     #[tool(
         name = "auricle.live_transcript",
-        description = "What is being said right now. Returns the rolling window of \
-                       the meeting in progress, oldest line first, labelled by \
-                       speaker: 'You' is the user's microphone, 'Them' is everyone \
-                       else (system audio). Returns an empty line list when nothing \
-                       is being recorded.",
+        description = "What is being said right now. Returns the last N minutes of \
+                       speech, oldest line first, labelled by speaker: 'You' is the \
+                       user's microphone, 'Them' is everyone else (system audio). \
+                       The window is a span of time, not a slice of one meeting — \
+                       just after a recording stops it still holds that meeting's \
+                       words, so do not assume every line belongs to the session \
+                       named by session_id.",
         annotations(title = "Read the live transcript", read_only_hint = true)
     )]
-    fn live_transcript(&self, peer: Peer<RoleServer>) -> Json<LiveTranscript> {
+    fn live_transcript(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<LiveTranscript>, McpError> {
         let lines: Vec<Line> = self
             .state
             .ring
@@ -184,16 +204,18 @@ impl AuricleMcp {
                 text: s.text,
             })
             .collect();
+        let active = self.state.engine.active_session();
         self.note_read(
-            &peer,
+            &ctx,
+            active.as_deref(),
             "live_transcript",
             chars_of(lines.iter().map(|l| &l.text)),
-        );
-        Json(LiveTranscript {
-            session_id: self.state.engine.active_session(),
+        )?;
+        Ok(Json(LiveTranscript {
+            session_id: active,
             window_minutes: self.state.engine.config().copilot.transcript_window_min,
             lines,
-        })
+        }))
     }
 
     #[tool(
@@ -207,7 +229,7 @@ impl AuricleMcp {
     )]
     fn list_sessions(
         &self,
-        peer: Peer<RoleServer>,
+        ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<ListSessionsParams>,
     ) -> Result<Json<SessionList>, McpError> {
         let rows = self
@@ -218,11 +240,13 @@ impl AuricleMcp {
             .map_err(db_error)?;
         // Titles are LLM-written from the transcript, so they are content too:
         // measure them the way the ledger measures every other text payload.
+        // Spans every meeting, so no single session owns this read.
         self.note_read(
-            &peer,
+            &ctx,
+            None,
             "session_list",
             chars_of(rows.iter().map(|r| &r.title)),
-        );
+        )?;
         Ok(Json(SessionList {
             sessions: rows
                 .into_iter()
@@ -246,7 +270,7 @@ impl AuricleMcp {
     )]
     fn get_session(
         &self,
-        peer: Peer<RoleServer>,
+        ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<GetSessionParams>,
     ) -> Result<Json<Session>, McpError> {
         let store = self.state.engine.store();
@@ -274,7 +298,16 @@ impl AuricleMcp {
             });
         }
 
-        self.note_read(&peer, "session_read", Some(chars as i64));
+        // Everything this response discloses, not just the transcript: the
+        // title and the summaries are user content too, and a short meeting
+        // with a long summary would otherwise log as almost nothing.
+        let disclosed = chars
+            + row.title.chars().count()
+            + summaries
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>();
+        self.note_read(&ctx, Some(&p.id), "session_read", Some(disclosed as i64))?;
         Ok(Json(Session {
             id: row.id,
             title: row.title,
@@ -305,7 +338,7 @@ impl AuricleMcp {
     )]
     fn search(
         &self,
-        peer: Peer<RoleServer>,
+        ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SearchParams>,
     ) -> Result<Json<SearchResults>, McpError> {
         let limit = p
@@ -318,11 +351,17 @@ impl AuricleMcp {
             .store()
             .search_segments(&p.query, limit)
             .map_err(db_error)?;
+        // Hits can span several meetings, so no single session owns this read.
         self.note_read(
-            &peer,
+            &ctx,
+            None,
             "transcript_search",
-            chars_of(hits.iter().map(|h| &h.text)),
-        );
+            chars_of(
+                hits.iter()
+                    .map(|h| &h.text)
+                    .chain(hits.iter().map(|h| &h.session_title)),
+            ),
+        )?;
         Ok(Json(SearchResults {
             hits: hits
                 .into_iter()
@@ -366,23 +405,45 @@ impl AuricleMcp {
     /// `items` is the rough size in characters, the unit the rest of the
     /// ledger uses for text. The content itself is never recorded, here or
     /// anywhere else in the ledger.
-    fn note_read(&self, peer: &Peer<RoleServer>, kind: &str, items: Option<i64>) {
-        // The client's self-reported name from the MCP handshake ("claude-code",
-        // "cursor-vscode"). Self-reported, so it identifies a well-behaved client
-        // rather than authenticating anything.
-        let client = peer
-            .peer_info()
-            .map(|i| i.client_info.name.clone())
+    fn note_read(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        session_id: Option<&str>,
+        kind: &str,
+        items: Option<i64>,
+    ) -> Result<(), McpError> {
+        // `client_info()` reads the calling client's identity from this
+        // request's metadata, falling back to the handshake only for legacy
+        // sessions. Reading `peer.peer_info()` directly would be wrong: for a
+        // stateless call rmcp synthesizes peer info from its *own* build
+        // identity, so every such row would be filed against "rmcp" — a
+        // plausible-looking name that is not the client's.
+        //
+        // Still self-reported either way: it names a well-behaved client, it
+        // does not authenticate one.
+        let client = ctx
+            .client_info()
+            .map(|i| i.name)
             .unwrap_or_else(|| "unknown".to_string());
-        crate::egress::record(
+        crate::egress::record_checked(
             &self.state.engine.store(),
-            self.state.engine.active_session().as_deref(),
+            session_id,
             kind,
             ("agent", None),
             &client,
             items,
             None,
-        );
+        )
+        .map_err(|e| {
+            // Fail closed. The ledger is the whole basis on which this server
+            // is allowed to read private meetings; disclosing content we
+            // could not record would make it quietly incomplete, which is
+            // worse than refusing the call.
+            McpError::internal_error(
+                format!("refusing to read: the egress ledger could not be written ({e})"),
+                None,
+            )
+        })
     }
 }
 
@@ -399,13 +460,20 @@ fn db_error(e: auricle_core::Error) -> McpError {
 /// Build the tower service to nest at `/mcp`.
 ///
 /// `LocalSessionManager` keeps sessions in memory: they live and die with the
-/// daemon, like the transcript ring. rmcp's own defaults already restrict the
-/// `Host` header to loopback, which doubles up with `auth_middleware`'s
-/// DNS-rebinding check rather than replacing it.
+/// daemon, like the transcript ring.
+///
+/// rmcp's default `Host` allowlist is disabled deliberately. It permits only
+/// loopback authorities, which silently 403s every request to a daemon bound
+/// to a LAN address — a configuration Auricle supports, and gates behind a
+/// bearer token (see `serve`). `auth_middleware` already covers what that
+/// allowlist is for and covers it better: it rejects non-loopback `Host`
+/// values on tokenless binds (the DNS-rebinding case) and demands the token
+/// everywhere else. Two host checks where one is token-aware and the other is
+/// not just means the blind one decides.
 pub fn service(state: AppState) -> StreamableHttpService<AuricleMcp, LocalSessionManager> {
     StreamableHttpService::new(
         move || Ok(AuricleMcp::new(state.clone())),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
+        StreamableHttpServerConfig::default().disable_allowed_hosts(),
     )
 }
