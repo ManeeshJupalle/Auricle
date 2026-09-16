@@ -189,7 +189,7 @@ impl AuricleMcp {
                        named by session_id.",
         annotations(title = "Read the live transcript", read_only_hint = true)
     )]
-    fn live_transcript(
+    async fn live_transcript(
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<LiveTranscript>, McpError> {
@@ -210,7 +210,8 @@ impl AuricleMcp {
             active.as_deref(),
             "live_transcript",
             chars_of(lines.iter().map(|l| &l.text)),
-        )?;
+        )
+        .await?;
         Ok(Json(LiveTranscript {
             session_id: active,
             window_minutes: self.state.engine.config().copilot.transcript_window_min,
@@ -227,17 +228,14 @@ impl AuricleMcp {
                        instead.",
         annotations(title = "List meetings", read_only_hint = true)
     )]
-    fn list_sessions(
+    async fn list_sessions(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<ListSessionsParams>,
     ) -> Result<Json<SessionList>, McpError> {
-        let rows = self
-            .state
-            .engine
-            .store()
-            .list_sessions(p.query.as_deref())
-            .map_err(db_error)?;
+        let store = self.state.engine.store();
+        let query = p.query.clone();
+        let rows = off_runtime(move || store.list_sessions(query.as_deref())).await?;
         // Titles are LLM-written from the transcript, so they are content too:
         // measure them the way the ledger measures every other text payload.
         // Spans every meeting, so no single session owns this read.
@@ -246,7 +244,8 @@ impl AuricleMcp {
             None,
             "session_list",
             chars_of(rows.iter().map(|r| &r.title)),
-        )?;
+        )
+        .await?;
         Ok(Json(SessionList {
             sessions: rows
                 .into_iter()
@@ -268,18 +267,25 @@ impl AuricleMcp {
                        truncated — check the `truncated` flag.",
         annotations(title = "Read a meeting", read_only_hint = true)
     )]
-    fn get_session(
+    async fn get_session(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<GetSessionParams>,
     ) -> Result<Json<Session>, McpError> {
         let store = self.state.engine.store();
-        let row = store
-            .get_session(&p.id)
-            .map_err(db_error)?
-            .ok_or_else(|| McpError::invalid_params(format!("no session {}", p.id), None))?;
-        let segments = store.get_segments(&p.id).map_err(db_error)?;
-        let summaries = store.get_summaries(&p.id).map_err(db_error)?;
+        let id = p.id.clone();
+        let (row, segments, summaries) = off_runtime(move || {
+            // An unknown id costs one query, not three.
+            let Some(row) = store.get_session(&id)? else {
+                return Ok((None, Vec::new(), Vec::new()));
+            };
+            let segments = store.get_segments(&id)?;
+            let summaries = store.get_summaries(&id)?;
+            Ok((Some(row), segments, summaries))
+        })
+        .await?;
+        let row =
+            row.ok_or_else(|| McpError::invalid_params(format!("no session {}", p.id), None))?;
 
         // Cut on a segment boundary so a line is never half-returned.
         let mut chars = 0usize;
@@ -307,7 +313,8 @@ impl AuricleMcp {
                 .iter()
                 .map(|s| s.content.chars().count())
                 .sum::<usize>();
-        self.note_read(&ctx, Some(&p.id), "session_read", Some(disclosed as i64))?;
+        self.note_read(&ctx, Some(&p.id), "session_read", Some(disclosed as i64))
+            .await?;
         Ok(Json(Session {
             id: row.id,
             title: row.title,
@@ -336,7 +343,7 @@ impl AuricleMcp {
                        answer a question without pulling whole transcripts.",
         annotations(title = "Search transcripts", read_only_hint = true)
     )]
-    fn search(
+    async fn search(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SearchParams>,
@@ -345,12 +352,9 @@ impl AuricleMcp {
             .limit
             .unwrap_or(SEARCH_LIMIT_DEFAULT)
             .clamp(1, SEARCH_LIMIT_MAX);
-        let hits = self
-            .state
-            .engine
-            .store()
-            .search_segments(&p.query, limit)
-            .map_err(db_error)?;
+        let store = self.state.engine.store();
+        let query = p.query.clone();
+        let hits = off_runtime(move || store.search_segments(&query, limit)).await?;
         // Hits can span several meetings, so no single session owns this read.
         self.note_read(
             &ctx,
@@ -361,7 +365,8 @@ impl AuricleMcp {
                     .map(|h| &h.text)
                     .chain(hits.iter().map(|h| &h.session_title)),
             ),
-        )?;
+        )
+        .await?;
         Ok(Json(SearchResults {
             hits: hits
                 .into_iter()
@@ -405,7 +410,7 @@ impl AuricleMcp {
     /// `items` is the rough size in characters, the unit the rest of the
     /// ledger uses for text. The content itself is never recorded, here or
     /// anywhere else in the ledger.
-    fn note_read(
+    async fn note_read(
         &self,
         ctx: &RequestContext<RoleServer>,
         session_id: Option<&str>,
@@ -425,15 +430,22 @@ impl AuricleMcp {
             .client_info()
             .map(|i| i.name)
             .unwrap_or_else(|| "unknown".to_string());
-        crate::egress::record_checked(
-            &self.state.engine.store(),
-            session_id,
-            kind,
-            ("agent", None),
-            &client,
-            items,
-            None,
-        )
+        let store = self.state.engine.store();
+        let session_id = session_id.map(str::to_string);
+        let kind = kind.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::egress::record_checked(
+                &store,
+                session_id.as_deref(),
+                &kind,
+                ("agent", None),
+                &client,
+                items,
+                None,
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("ledger task failed: {e}"), None))?
         .map_err(|e| {
             // Fail closed. The ledger is the whole basis on which this server
             // is allowed to read private meetings; disclosing content we
@@ -455,6 +467,26 @@ fn chars_of<'a>(texts: impl Iterator<Item = &'a String>) -> Option<i64> {
 
 fn db_error(e: auricle_core::Error) -> McpError {
     McpError::internal_error(e.to_string(), None)
+}
+
+/// Run a store operation off the async runtime.
+///
+/// rmcp dispatches tool functions on a Tokio worker and does not offload
+/// them, and these reads are unbounded: `get_session` materializes a whole
+/// meeting before capping it, `search` scans the transcript table. Left
+/// inline they occupy a worker — waiting on the store mutex — while the
+/// capture pipeline on the same runtime is trying to persist segments, so a
+/// slow read can stall recording and unrelated requests alike.
+/// `POST /api/v1/peek` offloads its capture for the same reason.
+async fn off_runtime<T, F>(f: F) -> Result<T, McpError>
+where
+    F: FnOnce() -> auricle_core::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| McpError::internal_error(format!("store task failed: {e}"), None))?
+        .map_err(db_error)
 }
 
 /// Build the tower service to nest at `/mcp`.

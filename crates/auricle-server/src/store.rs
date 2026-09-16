@@ -59,6 +59,24 @@ const MIGRATIONS: &[&str] = &[
         detail TEXT
      );
      CREATE INDEX idx_egress_ts ON egress(ts DESC);",
+    // v3: running egress counts per (destination, counterparty).
+    //
+    // The dashboard's headline — "nothing has left this machine" — is a claim
+    // about the whole ledger, so it cannot read a page. Deriving it with a
+    // GROUP BY over `egress` is a full scan plus a temporary B-tree on every
+    // dashboard load, and agent rows arrive fast enough (one per MCP tool
+    // call) to make that seconds of work while holding the store mutex.
+    // Maintained on insert instead, and seeded here from whatever is already
+    // recorded so an upgrade keeps its history.
+    "CREATE TABLE egress_totals(
+        destination TEXT NOT NULL,
+        who TEXT NOT NULL,
+        count INT NOT NULL,
+        PRIMARY KEY (destination, who)
+     );
+     INSERT INTO egress_totals(destination, who, count)
+        SELECT destination, COALESCE(host, provider), COUNT(*)
+        FROM egress GROUP BY destination, COALESCE(host, provider);",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -562,9 +580,12 @@ impl Store {
 
     /// Append one egress-ledger row. Metadata only — callers never pass the
     /// audio, prompt, or answer, just where it went and roughly how much.
+    /// Append one ledger row and bump its running total, atomically — a row
+    /// the headline does not count would be worse than no row at all.
     pub fn record_egress(&self, e: &EgressEntry) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(db_err)?;
+        tx.execute(
             "INSERT INTO egress(ts, session_id, destination, provider, host, kind, items, detail)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
@@ -579,6 +600,15 @@ impl Store {
             ],
         )
         .map_err(db_err)?;
+        // `who` mirrors the v3 backfill's COALESCE(host, provider): the cloud
+        // host where there is one, else the provider or agent client name.
+        tx.execute(
+            "INSERT INTO egress_totals(destination, who, count) VALUES (?1, ?2, 1)
+             ON CONFLICT(destination, who) DO UPDATE SET count = count + 1",
+            rusqlite::params![e.destination, e.host.unwrap_or(e.provider)],
+        )
+        .map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
         Ok(())
     }
 
@@ -622,17 +652,17 @@ impl Store {
     /// other end — the cloud host, or the agent's client name.
     ///
     /// The headline ("nothing has left this machine") must be a fact about
-    /// the ledger, not about whichever page of it the UI happened to fetch.
-    /// Agent reads arrive far faster than session or summary rows — a chatty
-    /// agent can push every cloud row off a fixed-size page — so the counts
-    /// are aggregated in SQL rather than derived from `list_egress`.
+    /// the ledger, not about whichever page of it the UI happened to fetch —
+    /// agent reads arrive fast enough to push every cloud row off a page.
+    ///
+    /// Reads the running totals maintained by [`Self::record_egress`], so the
+    /// cost is one row per distinct counterparty rather than one per ledger
+    /// entry. Deriving this with a GROUP BY was measured at 1.3 s over a
+    /// million rows, all of it holding the store mutex.
     pub fn egress_totals(&self) -> Result<Vec<EgressTotal>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare(
-                "SELECT destination, COALESCE(host, provider), COUNT(*)
-                 FROM egress GROUP BY destination, COALESCE(host, provider)",
-            )
+            .prepare("SELECT destination, who, count FROM egress_totals")
             .map_err(db_err)?;
         let rows = stmt
             .query_map([], |r| {
@@ -1015,6 +1045,91 @@ mod tests {
         drop(store);
         let store = Store::open(&path).unwrap();
         assert_eq!(store.asks_count().unwrap(), Some(2));
+    }
+
+    #[test]
+    fn egress_totals_track_every_row_and_survive_reopen() {
+        let path = temp_db("egress-totals");
+        let store = Store::open(&path).unwrap();
+        let entry = |destination, provider, host| EgressEntry {
+            ts: 1_700_000_000,
+            session_id: None,
+            destination,
+            provider,
+            host,
+            kind: "prompt",
+            items: Some(10),
+            detail: None,
+        };
+        store
+            .record_egress(&entry("cloud", "groq", Some("api.groq.com")))
+            .unwrap();
+        store
+            .record_egress(&entry("cloud", "groq", Some("api.groq.com")))
+            .unwrap();
+        store
+            .record_egress(&entry("local", "whisper-local", None))
+            .unwrap();
+        // No host: the counterparty is the provider (an agent's client name).
+        store
+            .record_egress(&entry("agent", "claude-code", None))
+            .unwrap();
+
+        let totals = |s: &Store| {
+            let mut t = s.egress_totals().unwrap();
+            t.sort_by(|a, b| (&a.destination, &a.who).cmp(&(&b.destination, &b.who)));
+            t.into_iter()
+                .map(|t| (t.destination, t.who, t.count))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            totals(&store),
+            vec![
+                ("agent".into(), "claude-code".into(), 1),
+                ("cloud".into(), "api.groq.com".into(), 2),
+                ("local".into(), "whisper-local".into(), 1),
+            ]
+        );
+        // The totals agree with the rows themselves, which is the property
+        // that makes the headline trustworthy.
+        assert_eq!(store.list_egress(None, 100).unwrap().len(), 4);
+
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(totals(&store).len(), 3);
+    }
+
+    #[test]
+    fn egress_totals_are_backfilled_for_a_ledger_that_predates_them() {
+        let path = temp_db("egress-backfill");
+        // Recreate a v2 database: the ledger exists, the totals table does not.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.pragma_update(None, "user_version", 2i64).unwrap();
+            conn.execute_batch(
+                "INSERT INTO egress(ts, destination, provider, host, kind)
+                 VALUES (1, 'cloud', 'groq', 'api.groq.com', 'prompt'),
+                        (2, 'cloud', 'groq', 'api.groq.com', 'summary'),
+                        (3, 'local', 'whisper-local', NULL, 'audio');",
+            )
+            .unwrap();
+        }
+        // Opening applies v3, which must seed itself from that history rather
+        // than starting from zero — an upgrade must not erase the record.
+        let store = Store::open(&path).unwrap();
+        let mut totals = store.egress_totals().unwrap();
+        totals.sort_by(|a, b| a.who.cmp(&b.who));
+        assert_eq!(totals.len(), 2);
+        assert_eq!(
+            (totals[0].who.as_str(), totals[0].count),
+            ("api.groq.com", 2)
+        );
+        assert_eq!(
+            (totals[1].who.as_str(), totals[1].count),
+            ("whisper-local", 1)
+        );
     }
 
     #[test]

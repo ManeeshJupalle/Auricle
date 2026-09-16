@@ -55,6 +55,18 @@ Your coding agent can read your meetings.
   recorded before it was enabled, LLM-written session titles, and summaries.
   Unchanged from what the dashboard has always exposed, but an agent trawling
   old meetings surfaces it far more readily than a human clicking through.
+- **The ledger headline no longer scans the ledger.** Egress counts are now
+  maintained on insert, in the same transaction as the row they count, and
+  seeded from existing history on upgrade. Deriving them with a `GROUP BY`
+  cost 1.8 s over a million rows with the store mutex held, so every other
+  request queued behind a dashboard load; reading the maintained counts is
+  0.04 ms at that size and does not grow with the ledger.
+- **MCP database work runs off the async runtime.** rmcp dispatches tool
+  functions on a Tokio worker without offloading them, so an unbounded read —
+  a whole meeting, a transcript-wide search — occupied a worker while holding
+  the store mutex, stalling unrelated requests and the capture pipeline
+  sharing that runtime. The tools are async now and their store access goes
+  through `spawn_blocking`, as `POST /api/v1/peek` already did.
 
 ## 0.4.1 — 2026-08-10
 

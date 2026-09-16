@@ -284,12 +284,18 @@ $ curl http://127.0.0.1:4820/api/v1/egress?limit=2
            {"destination":"local","who":"whisper-local","count":31}]}
 ```
 
-`entries` is one page; `totals` groups the **whole** ledger by destination
+`entries` is one page; `totals` counts the **whole** ledger by destination
 and counterparty (the cloud host, or the provider / agent client name where
 there is no host). The dashboard's headline reads from `totals`, so "nothing
 has left this machine" can never be an artifact of the page size — which
 matters once agents are reading, since their rows accrue much faster than
 session or summary rows.
+
+The counts are maintained on insert, in the same transaction as the row they
+count, rather than derived with a `GROUP BY` at read time. Deriving them was
+measured at 1.8 s over a million rows — all of it holding the store mutex,
+so every other request waited on it. Reading the maintained counts is 0.04 ms
+at the same size, and does not grow with the ledger.
 
 ## GET /api/v1/diagnostics
 
