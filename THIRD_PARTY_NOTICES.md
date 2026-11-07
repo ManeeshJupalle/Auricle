@@ -9,6 +9,12 @@ The repetition-loop collapse in `crates/auricle-stt/src/repetition.rs` is a
 Rust port of `collapse_repetitive_artifacts` from voicebox's
 `backend/services/refinement.py`, with changes described in that file.
 
+The dictation paste layer in `overlay/src-tauri/src/dictate.rs` adapts the
+Windows half of voicebox's `tauri/src-tauri/src/clipboard.rs`, the Windows
+Ctrl+V of `synthetic_keys.rs`, the Windows window activation of
+`focus_capture.rs`, and the paste sequence in `main.rs`, with changes
+described in that file.
+
 ```
 MIT License
 
