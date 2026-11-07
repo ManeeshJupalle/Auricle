@@ -14,8 +14,11 @@
 
 mod ask;
 mod config;
+mod dictate;
+mod dictation;
 mod engine;
 mod sse;
+mod ws;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,7 +31,7 @@ use tauri::ipc::Channel;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
 use config::{Corner, OverlayConfig};
@@ -805,8 +808,24 @@ pub fn run() {
         }
     };
 
+    let dictate_sc: Option<Shortcut> = match cfg.hotkeys.dictate.parse() {
+        Ok(sc) => Some(sc),
+        Err(e) => {
+            warnings.push(format!(
+                "dictate hotkey \"{}\" is invalid: {e}",
+                cfg.hotkeys.dictate
+            ));
+            None
+        }
+    };
+    // Registered only while a dictation runs (dictation::run).
+    let esc_sc = Shortcut::new(None, Code::Escape);
+
     let handler_summon = summon_sc;
     let handler_quick = quick_sc;
+    let handler_dictate = dictate_sc;
+    let (dictation_tx, dictation_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handler_dictation = dictation_tx.clone();
 
     let app = tauri::Builder::default()
         // Single instance, registered first: without it, users who launch
@@ -821,8 +840,25 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
+                // This runs with the plugin's shortcut table locked, so it
+                // must never register or unregister one itself.
                 .with_handler(move |app, shortcut, event| {
+                    if handler_dictate.as_ref() == Some(shortcut) {
+                        let input = match event.state() {
+                            // First, before anything can move focus.
+                            ShortcutState::Pressed => {
+                                dictation::Input::Press(dictate::foreground_target())
+                            }
+                            ShortcutState::Released => dictation::Input::Release,
+                        };
+                        let _ = handler_dictation.send(input);
+                        return;
+                    }
                     if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if *shortcut == esc_sc {
+                        let _ = handler_dictation.send(dictation::Input::Escape);
                         return;
                     }
                     if handler_summon.as_ref() == Some(shortcut) {
@@ -850,6 +886,7 @@ pub fn run() {
             for (label, sc, text) in [
                 ("summon", summon_sc, cfg.hotkeys.summon.clone()),
                 ("quick-assist", quick_sc, cfg.hotkeys.quick.clone()),
+                ("dictate", dictate_sc, cfg.hotkeys.dictate.clone()),
             ] {
                 if let Some(sc) = sc {
                     if let Err(e) = app.global_shortcut().register(sc) {
@@ -908,6 +945,17 @@ pub fn run() {
             // (managed child; not lifetime-tied — an overlay crash must
             // never kill a recording).
             tauri::async_runtime::spawn(watch_engine(app.handle().clone()));
+
+            let state = app.state::<AppState>();
+            tauri::async_runtime::spawn(dictation::run(
+                app.handle().clone(),
+                cfg.dictation.mode,
+                state.http.clone(),
+                state.base_url().to_string(),
+                esc_sc,
+                dictation_rx,
+                dictation_tx,
+            ));
 
             // Silent update check on launch: nudge (never auto-install) if a
             // newer signed release is waiting.
