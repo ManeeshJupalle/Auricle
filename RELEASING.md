@@ -69,20 +69,66 @@ zero-warning trust, higher cost, and token handling in CI.
 
 ## Cutting a release
 
-1. Bump the version across the workspace and `overlay/src-tauri/tauri.conf.json`,
-   update `CHANGELOG.md`, and fold user-facing changes into `README.md`.
+1. Bump the version in all of these, update `CHANGELOG.md`, and fold
+   user-facing changes into `README.md`:
+
+   - `Cargo.toml` (`[workspace.package]` and the `auricle-*` entries in
+     `[workspace.dependencies]`)
+   - `overlay/src-tauri/Cargo.toml`
+   - `overlay/src-tauri/tauri.conf.json`
+   - `ui/package.json` and `overlay/package.json`
+
+   Then refresh the lockfiles: `cargo build` at the root and in
+   `overlay/src-tauri`, and `npm install --package-lock-only` in `ui/` and
+   `overlay/`.
 2. Tag and push:
 
    ```
    git tag v0.4.0 && git push origin v0.4.0
    ```
 
-3. `.github/workflows/release.yml` builds the dashboard, the engine sidecar,
-   and the overlay; signs the updater artifacts; generates `latest.json`; and
-   opens a **draft** release with the MSI + `latest.json` attached.
+3. `.github/workflows/release.yml` waits for approval on the `release`
+   environment, then runs the release gate below. It builds the dashboard, the
+   engine sidecar, and the overlay; signs the updater artifacts; generates
+   `latest.json`; and opens a **draft** release with the MSI + `latest.json`
+   attached.
 4. Smoke-test the MSI, then **publish** the draft. Publishing is what makes it
    the "latest" release the updater endpoint resolves to — existing installs
    pick it up on their next check.
+
+To re-run a release by hand, start the workflow from the tag (Actions → Release
+→ Run workflow → "Use workflow from" → **Tags**). From a branch it fails.
+
+## The release gate
+
+The release job stops before anything is signed if any of these fail:
+
+- **Tag and versions.** The run must be from a tag, and the tag must equal
+  `v` + the version in all five files listed above.
+- **Tests.** Both vitest suites and `cargo test`.
+- **ggml flags.** The job sets `GGML_NATIVE=OFF`, then reads whisper-rs-sys's
+  `CMakeCache.txt` and requires `GGML_NATIVE` and `GGML_AVX512` to be `OFF`.
+  ggml has no runtime CPU dispatch, so a native build bakes in whatever the
+  runner's CPU supports: the v0.4.1 draft came out with AVX-512 code that
+  crashes on CPUs without it. Off selects ggml's portable AVX2 set. The job
+  deliberately has no build cache, because whisper-rs-sys's build script doesn't
+  rerun when `GGML_*` changes, so cached objects could outlive a flag change.
+- **Smoke test.** `auricle.exe --version` has to run.
+
+## The `release` environment
+
+The release job runs in a GitHub environment named `release`, because it is what
+touches the updater signing key. The workflow can only name the environment;
+protecting it is a repo setting, and until that is done the job runs unattended.
+GitHub creates the environment on the first run if it doesn't exist.
+
+Set this once, under Settings → Environments → `release`:
+
+- **Required reviewers** — add whoever may approve a release.
+- **Deployment branches and tags** — restrict to the tag pattern `v*`.
+
+The two `TAURI_SIGNING_*` secrets can stay repository secrets. Moving them into
+this environment is stronger: only jobs that passed the reviewers can read them.
 
 ## Publishing to crates.io
 

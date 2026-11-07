@@ -12,18 +12,57 @@ on:
 jobs:
   release:
     runs-on: windows-latest
+    # Required reviewers for this environment are set in the repo settings;
+    # see RELEASING.md.
+    environment: release
     permissions:
       contents: write # create the GitHub Release
+    env:
+      # ggml has no runtime CPU dispatch and GGML_NATIVE defaults on, so the
+      # engine would be compiled for whatever CPU the runner happens to have.
+      # An AVX-512 runner ships a binary that crashes on CPUs without AVX-512.
+      # Off selects ggml's portable AVX2 set. whisper-rs-sys forwards GGML_*
+      # to CMake.
+      GGML_NATIVE: 'OFF'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Nothing here pushes with git (tauri-action uses the REST API), so
+          # don't leave the write token in .git/config during npm and cargo.
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      # A workflow_dispatch from a branch would use the branch name as the tag.
+      - name: Check the tag matches every version file
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            Write-Output "::error::Releases run from a tag, not the $env:GITHUB_REF_TYPE '$env:GITHUB_REF_NAME'."
+            exit 1
+          }
+          $tomlVersion = '(?m)^version\s*=\s*"([^"]+)"'
+          $versions = [ordered]@{
+            'Cargo.toml'                        = [regex]::Match((Get-Content -Raw Cargo.toml), $tomlVersion).Groups[1].Value
+            'overlay/src-tauri/Cargo.toml'      = [regex]::Match((Get-Content -Raw overlay/src-tauri/Cargo.toml), $tomlVersion).Groups[1].Value
+            'overlay/src-tauri/tauri.conf.json' = (Get-Content -Raw overlay/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+            'ui/package.json'                   = (Get-Content -Raw ui/package.json | ConvertFrom-Json).version
+            'overlay/package.json'              = (Get-Content -Raw overlay/package.json | ConvertFrom-Json).version
+          }
+          $failed = $false
+          foreach ($file in $versions.Keys) {
+            if ("v$($versions[$file])" -cne $env:GITHUB_REF_NAME) {
+              Write-Output "::error file=$file::Version '$($versions[$file])' does not match tag '$env:GITHUB_REF_NAME'."
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      # Version and components come from rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
 
       # whisper-rs-sys (an engine dependency) needs CMake + libclang, same as CI.
       - name: Point CMAKE and LIBCLANG_PATH at the runner's tools
@@ -40,6 +79,21 @@ jobs:
           npm ci
           npm run build
 
+      - name: Dashboard tests (vitest)
+        working-directory: ui
+        run: npm test
+
+      - name: Install overlay dependencies
+        working-directory: overlay
+        run: npm ci
+
+      - name: Overlay tests (vitest)
+        working-directory: overlay
+        run: npm test
+
+      - name: Engine tests
+        run: cargo test
+
       # 2. Engine binary (embeds the dashboard) staged as the overlay's sidecar.
       #    Tauri resolves externalBin `binaries/auricle` to the target-triple name.
       - name: Build engine and stage the sidecar
@@ -50,14 +104,40 @@ jobs:
           Copy-Item target/release/auricle.exe `
             overlay/src-tauri/binaries/auricle-x86_64-pc-windows-msvc.exe -Force
 
-      - name: Install overlay dependencies
-        working-directory: overlay
-        run: npm ci
+      # Reads what CMake actually configured, so this also catches GGML_NATIVE
+      # being dropped from the job or no longer reaching CMake. GGML_AVX512 says
+      # nothing here: it defaults off and native detection only sets a plain
+      # variable, so the cache reads OFF either way. GGML_AVX2 does tell them
+      # apart. It is ON for the portable set, and OFF on a native build or on
+      # one with no SIMD at all, which would run far too slowly to ship.
+      - name: Check ggml was not built for the runner's CPU
+        shell: pwsh
+        run: |
+          $caches = @(Get-ChildItem target/release/build/whisper-rs-sys-*/out/build/CMakeCache.txt)
+          if ($caches.Count -eq 0) {
+            Write-Output '::error::No whisper-rs-sys CMakeCache.txt found, so the ggml flags cannot be checked.'
+            exit 1
+          }
+          $wanted = [ordered]@{ GGML_NATIVE = 'OFF'; GGML_AVX2 = 'ON' }
+          $failed = $false
+          foreach ($cache in $caches) {
+            foreach ($flag in $wanted.Keys) {
+              $value = $wanted[$flag]
+              if (-not (Select-String -Path $cache.FullName -Pattern "^${flag}:\w+=$value$" -CaseSensitive -Quiet)) {
+                Write-Output "::error::$flag is not $value in $($cache.FullName)."
+                $failed = $true
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Smoke-test the engine binary
+        run: ./target/release/auricle.exe --version
 
       # 3. Build the overlay, sign the updater artifacts, generate latest.json,
       #    and open a draft Release with the MSI + latest.json attached.
       - name: Build overlay and publish draft release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signature (integrity of the update payload). Generate once
