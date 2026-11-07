@@ -7,7 +7,7 @@
 
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { deriveChips, type AskStartedInfo } from './chips';
-import type { OverlayEvent } from './state';
+import type { AskStreamEvent, OverlayEvent } from './state';
 
 /** One parsed `data:` JSON payload from the ask's SSE stream. */
 export type AskSseEvent = Record<string, unknown>;
@@ -21,7 +21,7 @@ export function applyAskEvent(
   ev: AskSseEvent,
   windowMin: number,
   now: number,
-): OverlayEvent | null {
+): AskStreamEvent | null {
   switch (ev.type) {
     case 'ask_started': {
       const info: AskStartedInfo = {
@@ -58,22 +58,24 @@ export interface AskRequest {
 
 /**
  * Run one ask through the Rust bridge. `onEvent` receives reducer events
- * in stream order; a transport failure (engine down, HTTP error status)
+ * in stream order, each tagged with `gen` so the reducer can tell this run
+ * from a newer one; a transport failure (engine down, HTTP error status)
  * surfaces as a final ERROR event.
  */
 export async function streamAsk(
   req: AskRequest,
+  gen: number,
   windowMin: number,
   onEvent: (ev: OverlayEvent) => void,
 ): Promise<void> {
   const channel = new Channel<AskSseEvent>();
   channel.onmessage = (ev) => {
     const mapped = applyAskEvent(ev, windowMin, performance.now());
-    if (mapped) onEvent(mapped);
+    if (mapped) onEvent({ ...mapped, gen });
   };
   try {
     await invoke('ask_stream', { req, onEvent: channel });
   } catch (e) {
-    onEvent({ type: 'ERROR', message: String(e) });
+    onEvent({ type: 'ERROR', message: String(e), gen });
   }
 }

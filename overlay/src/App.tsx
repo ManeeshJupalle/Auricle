@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { initialState, reduce, QUICK_ASSIST_QUESTION, type OverlayEvent } from './state';
+import { initialState, reduce, toastMs, type OverlayEvent } from './state';
 import { streamAsk } from './ask';
 import { nextPollDelay } from './connection';
-import { Markdown } from './Markdown';
+import { Markdown } from '@shared/Markdown';
 
 interface InitInfo {
   hotkey_warnings: string[];
+  /** Messages raised before this webview was listening. */
+  notices: string[];
   window_min: number;
   theme: string;
   summon_hotkey: string;
   quick_hotkey: string;
 }
+
+type AskStart = { type: 'SUBMIT'; question: string; at: number } | { type: 'QUICK_ASSIST'; at: number };
 
 // Clipboard fallback for webviews where the async clipboard API is
 // unavailable (tauri.localhost is not always a secure context).
@@ -38,6 +42,10 @@ export function App() {
   const [recording, setRecording] = useState(false);
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [includeScreen, setIncludeScreen] = useState(true);
+  const includeScreenRef = useRef(includeScreen);
+  includeScreenRef.current = includeScreen;
+  const genRef = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const answerRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -46,40 +54,71 @@ export function App() {
   const windowMinRef = useRef(windowMin);
   windowMinRef.current = windowMin;
 
-  const runAsk = useCallback((question: string, followUp: boolean) => {
+  // The one way an ask starts. The reducer decides whether it may; a stream
+  // only starts if it did, because the Rust side cancels whatever ran
+  // before, and a stream the reducer refused would take the live one down
+  // with it. stateRef advances now, not at the next render, so a second
+  // press in the same frame is judged against this ask.
+  const startAsk = useCallback((start: AskStart, followUp: boolean): boolean => {
+    const gen = ++genRef.current;
+    const ev: OverlayEvent = { ...start, gen };
+    const next = reduce(stateRef.current, ev);
+    if (next === stateRef.current) return false;
+    stateRef.current = next;
+    dispatch(ev);
     void streamAsk(
-      { question, include_screen: true, include_transcript: true, follow_up: followUp },
+      {
+        question: next.question,
+        include_screen: includeScreenRef.current,
+        include_transcript: true,
+        follow_up: followUp,
+      },
+      gen,
       windowMinRef.current,
-      (ev: OverlayEvent) => dispatch(ev),
+      (streamEv: OverlayEvent) => dispatch(streamEv),
     );
+    return true;
   }, []);
 
   // Init + hotkey events from the Rust side.
   useEffect(() => {
-    void invoke<InitInfo>('get_init').then((info) => {
-      setInit(info);
-      document.documentElement.dataset.theme = info.theme;
-    });
+    let toastTimer: number | undefined;
+    const showToast = (message: string) => {
+      setToast(message);
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => setToast(null), toastMs(message));
+    };
     const unSummon = listen('summon', () => {
       dispatch({ type: 'SUMMON' });
     });
     const unQuick = listen('quick-assist', () => {
-      const phase = stateRef.current.phase;
-      if (phase === 'asking' || phase === 'streaming') return; // busy: reducer would ignore it too
-      dispatch({ type: 'QUICK_ASSIST', at: performance.now() });
-      runAsk(QUICK_ASSIST_QUESTION, false); // fresh situational ask, not a follow-up
+      // A fresh situational ask, not a follow-up.
+      startAsk({ type: 'QUICK_ASSIST', at: performance.now() }, false);
     });
     const unToast = listen<string>('tray-error', (e) => {
       dispatch({ type: 'SUMMON' });
-      setToast(e.payload);
-      window.setTimeout(() => setToast(null), 6000);
+      showToast(e.payload);
     });
+    // After the listeners, so nothing falls between get_init handing over
+    // the early messages and the live events taking over. Rust has already
+    // shown the window for these, and only this tells the reducer.
+    void Promise.all([unSummon, unQuick, unToast])
+      .then(() => invoke<InitInfo>('get_init'))
+      .then((info) => {
+        setInit(info);
+        document.documentElement.dataset.theme = info.theme;
+        if (info.notices.length > 0) showToast(info.notices.join(' · '));
+        if (info.notices.length > 0 || info.hotkey_warnings.length > 0) {
+          dispatch({ type: 'SUMMON' });
+        }
+      });
     return () => {
+      window.clearTimeout(toastTimer);
       void unSummon.then((f) => f());
       void unQuick.then((f) => f());
       void unToast.then((f) => f());
     };
-  }, [runAsk]);
+  }, [startAsk]);
 
   // The window is sized to the rendered card: a transparent window region
   // would still swallow clicks, so there must not be one. +20 covers the
@@ -151,16 +190,17 @@ export function App() {
   }, [state.answer]);
 
   const submit = () => {
-    // Gate on the pre-dispatch state (dispatch is async; the reducer
-    // applies the same rules — this decides whether to start the stream).
-    const q = (inputRef.current?.value ?? '').trim();
-    const s = stateRef.current;
-    if (q === '' || s.phase === 'asking' || s.phase === 'streaming' || s.phase === 'hidden') {
-      return;
-    }
-    dispatch({ type: 'SUBMIT', question: q, at: performance.now() });
-    runAsk(q, s.hasHistory);
-    if (inputRef.current) inputRef.current.value = '';
+    const question = inputRef.current?.value ?? '';
+    const started = startAsk(
+      { type: 'SUBMIT', question, at: performance.now() },
+      stateRef.current.hasHistory,
+    );
+    if (started && inputRef.current) inputRef.current.value = '';
+  };
+
+  const newChat = () => {
+    dispatch({ type: 'NEW_CHAT' });
+    inputRef.current?.focus();
   };
 
   const copyAnswer = () => {
@@ -182,6 +222,7 @@ export function App() {
   // Round 2: actions belong to the displayed answer, not to a phase —
   // dismiss → re-summon keeps the answer, so it keeps Copy too.
   const showActions = state.answer !== '' && !busy && state.phase !== 'error';
+  const showNewChat = !busy && (state.hasHistory || state.answer !== '' || state.error !== null);
 
   return (
     <div className="overlay" ref={cardRef}>
@@ -196,6 +237,25 @@ export function App() {
           Auricle Copilot
         </span>
         {!connected && <span className="ov-badge ov-badge-warn">engine offline</span>}
+        {showNewChat && (
+          <button className="ov-icon-btn" title="New chat" aria-label="New chat" onClick={newChat}>
+            +
+          </button>
+        )}
+        {/* What the next ask may capture; the chips report what one did. */}
+        <button
+          className="ov-icon-btn ov-toggle"
+          title={
+            includeScreen
+              ? 'Screen on: the next ask reads the active window'
+              : 'Screen off: the next ask will not read your screen'
+          }
+          aria-label="Include screen"
+          aria-pressed={includeScreen}
+          onClick={() => setIncludeScreen((on) => !on)}
+        >
+          🖥
+        </button>
         <button
           className="ov-icon-btn"
           title="Dismiss (Esc)"
@@ -287,7 +347,9 @@ export function App() {
               ? 'answering…'
               : state.hasHistory
                 ? 'Follow up… (Enter · Esc)'
-                : 'Ask about the meeting or your screen… (Enter · Esc)'
+                : includeScreen
+                  ? 'Ask about the meeting or your screen… (Enter · Esc)'
+                  : 'Ask about the meeting… (Enter · Esc)'
           }
           disabled={busy}
           onKeyDown={(e) => {

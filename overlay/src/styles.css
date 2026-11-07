@@ -177,6 +177,14 @@ body {
   background: var(--hover);
 }
 
+.ov-toggle {
+  font-size: 11px;
+}
+
+.ov-toggle[aria-pressed='false'] {
+  opacity: 0.35;
+}
+
 /* warning banner (hotkey conflicts) */
 .ov-warning {
   margin: 0 10px 8px;
