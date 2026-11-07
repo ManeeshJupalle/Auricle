@@ -24,6 +24,11 @@ pub enum VadEvent {
     SpanAudio {
         samples: Vec<f32>,
     },
+    /// Speech probability of the frame in the [`SpanAudio`](Self::SpanAudio)
+    /// that follows, so the chunker can cut at a pause. Pre-roll has none.
+    FrameProb {
+        p: f32,
+    },
     SpanClosed {
         t_end_ms: u64,
     },
@@ -32,7 +37,7 @@ pub enum VadEvent {
 /// Speech-span detector with pre-roll and hangover padding.
 ///
 /// Feed contiguous batches via [`push`](Self::push); set `gap_before` when
-/// the [`crate::Timeline`] flagged a stream gap — the open span (if any) is
+/// the [`crate::Timeline`] flagged a stall — the open span (if any) is
 /// force-closed at the pre-gap clock and the detector state is reset, so a
 /// gap never produces phantom silence inside a span.
 pub struct VadGate<D: SpeechDetector> {
@@ -52,7 +57,6 @@ pub struct VadGate<D: SpeechDetector> {
     /// Milliseconds of continuous sub-threshold audio inside an open span.
     silence_ms: u64,
     open: bool,
-    started: bool,
 }
 
 impl<D: SpeechDetector> VadGate<D> {
@@ -71,7 +75,6 @@ impl<D: SpeechDetector> VadGate<D> {
             pre_roll: VecDeque::new(),
             silence_ms: 0,
             open: false,
-            started: false,
         }
     }
 
@@ -79,16 +82,17 @@ impl<D: SpeechDetector> VadGate<D> {
     pub fn push(&mut self, samples: &[f32], t_start_ms: u64, gap_before: bool) -> Vec<VadEvent> {
         let mut events = Vec::new();
 
-        if gap_before || !self.started {
-            if gap_before {
-                self.close_open_span(&mut events);
-                self.pending.clear();
-                self.pre_roll.clear();
-                self.detector.reset();
-            }
-            // Sync the frame clock to the (re-)anchored batch time.
+        if gap_before {
+            self.close_open_span(&mut events);
+            self.pending.clear();
+            self.pre_roll.clear();
+            self.detector.reset();
+        }
+        // An open span's audio is contiguous, so it keeps its own clock.
+        // Between spans the frame clock follows the batch time, which is
+        // where a correction for device clock drift reaches it.
+        if !self.open {
             self.clock_ms = t_start_ms as f64 - self.pending_ms();
-            self.started = true;
         }
 
         self.pending.extend_from_slice(samples);
@@ -103,6 +107,7 @@ impl<D: SpeechDetector> VadGate<D> {
             };
 
             if self.open {
+                events.push(VadEvent::FrameProb { p });
                 events.push(VadEvent::SpanAudio {
                     samples: self.pending[offset..offset + frame_len].to_vec(),
                 });
@@ -154,6 +159,15 @@ impl<D: SpeechDetector> VadGate<D> {
         self.close_open_span(&mut events);
         self.pending.clear();
         self.pre_roll.clear();
+        events
+    }
+
+    /// Close any open span and touch nothing else: if the stream really
+    /// stopped, the next batch's gap resets the rest, and if the batch was
+    /// only late, its audio must stay contiguous with the frames before it.
+    pub fn close_span(&mut self) -> Vec<VadEvent> {
+        let mut events = Vec::new();
+        self.close_open_span(&mut events);
         events
     }
 
@@ -339,6 +353,21 @@ mod tests {
     }
 
     #[test]
+    fn a_clock_correction_waits_for_the_span_to_end() {
+        let mut g = gate();
+        let mut events = g.push(&speech(1000), 0, false);
+        // The timeline re-anchored 300 ms forward without a stall.
+        events.extend(g.push(&silence(1000), 1300, false));
+        let closed = closed_at(&events);
+        assert_eq!(closed.len(), 1, "{events:?}");
+        assert!(closed[0] <= 1600, "stayed on its own clock: {}", closed[0]);
+
+        let reopened = opened_at(&g.push(&speech(500), 2300, false));
+        assert_eq!(reopened.len(), 1);
+        assert!(reopened[0] >= 2000, "joined the timeline: {}", reopened[0]);
+    }
+
+    #[test]
     fn flush_closes_open_span() {
         let mut g = gate();
         let mut events = g.push(&speech(1000), 0, false);
@@ -351,5 +380,24 @@ mod tests {
         let mut g = gate();
         g.push(&silence(1000), 0, false);
         assert!(g.flush().is_empty());
+    }
+
+    #[test]
+    fn open_span_reports_each_frame_probability_just_before_its_audio() {
+        let mut g = gate();
+        // 10 frames: the first opens the span, the other 9 fall inside it.
+        let events = g.push(&speech(320), 0, false);
+        let probs: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e, VadEvent::FrameProb { .. }))
+            .collect();
+        assert_eq!(probs.len(), 9, "{events:?}");
+        for (i, event) in probs {
+            assert_eq!(event, &VadEvent::FrameProb { p: 0.9 });
+            assert!(
+                matches!(&events[i + 1], VadEvent::SpanAudio { samples } if samples.len() == 512)
+            );
+        }
     }
 }

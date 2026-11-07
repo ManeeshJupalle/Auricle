@@ -32,9 +32,9 @@ impl CaptureHandle {
             .map_err(|e| Error::Audio(format!("pausing stream: {e}")))
     }
 
-    /// First stream error reported by the backend (e.g. device unplugged),
-    /// if any. The capture session keeps running on the surviving channel.
-    // PHASE-2: promote this to a DeviceLost event on the pipeline bus.
+    /// First fatal stream error reported by the backend (e.g. device
+    /// unplugged), if any. The capture session keeps running on the surviving
+    /// channel. Notices from a stream that is still running never appear.
     pub fn stream_error(&self) -> Option<String> {
         self.error.lock().ok().and_then(|g| g.clone())
     }
@@ -174,12 +174,91 @@ where
             },
             // Error callback: runs on a non-real-time backend thread, so a
             // mutex is fine here (this is not the capture data path).
-            move |e| {
-                if let Ok(mut guard) = error.lock() {
-                    guard.get_or_insert_with(|| e.to_string());
-                }
-            },
+            move |e| record_stream_error(&error, &e),
             None,
         )
         .map_err(|e| Error::Audio(format!("building input stream: {e}")))
+}
+
+/// Whether the stream is gone. cpal reports through one callback both real
+/// failures and notices from a stream that carries on: a default-device
+/// stream reroutes itself (`DeviceChanged`), a glitch costs a few samples
+/// (`Xrun`), and a refused priority boost changes nothing (`RealtimeDenied`).
+/// Kinds cpal adds later count as fatal until shown otherwise.
+fn is_fatal(kind: cpal::ErrorKind) -> bool {
+    use cpal::ErrorKind::{DeviceChanged, RealtimeDenied, Xrun};
+    !matches!(kind, DeviceChanged | Xrun | RealtimeDenied)
+}
+
+/// Keep the first fatal error, ignoring notices from a stream that is still
+/// running: they would read as a lost device and mask a later real error.
+fn record_stream_error(slot: &Mutex<Option<String>>, e: &cpal::Error) {
+    if !is_fatal(e.kind()) {
+        return;
+    }
+    if let Ok(mut guard) = slot.lock() {
+        guard.get_or_insert_with(|| e.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cpal::ErrorKind;
+
+    #[test]
+    fn notices_from_a_stream_that_keeps_running_are_not_fatal() {
+        for kind in [
+            ErrorKind::DeviceChanged,
+            ErrorKind::Xrun,
+            ErrorKind::RealtimeDenied,
+        ] {
+            assert!(!is_fatal(kind), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn errors_that_end_the_stream_are_fatal() {
+        for kind in [
+            ErrorKind::DeviceNotAvailable,
+            ErrorKind::StreamInvalidated,
+            ErrorKind::BackendError,
+            ErrorKind::Other,
+        ] {
+            assert!(is_fatal(kind), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_reroute_alone_records_nothing() {
+        let slot = Mutex::new(None);
+        record_stream_error(&slot, &cpal::Error::new(ErrorKind::DeviceChanged));
+        assert_eq!(*slot.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn a_reroute_does_not_mask_a_later_real_error() {
+        let slot = Mutex::new(None);
+        record_stream_error(&slot, &cpal::Error::new(ErrorKind::DeviceChanged));
+        record_stream_error(
+            &slot,
+            &cpal::Error::with_message(ErrorKind::DeviceNotAvailable, "unplugged"),
+        );
+        assert_eq!(slot.lock().unwrap().as_deref(), Some("unplugged"));
+    }
+
+    #[test]
+    fn the_first_fatal_error_is_kept() {
+        let slot = Mutex::new(None);
+        record_stream_error(
+            &slot,
+            &cpal::Error::with_message(ErrorKind::DeviceNotAvailable, "unplugged"),
+        );
+        record_stream_error(
+            &slot,
+            &cpal::Error::with_message(ErrorKind::BackendError, "aftermath"),
+        );
+        record_stream_error(&slot, &cpal::Error::new(ErrorKind::DeviceChanged));
+        assert_eq!(slot.lock().unwrap().as_deref(), Some("unplugged"));
+    }
 }
