@@ -10,6 +10,7 @@ mod language;
 mod model;
 mod queue;
 mod registry;
+mod repetition;
 mod whisper_local;
 
 #[cfg(feature = "cloud")]

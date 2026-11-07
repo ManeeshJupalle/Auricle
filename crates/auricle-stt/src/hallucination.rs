@@ -4,6 +4,8 @@
 //! no-speech estimate backs that up, or the audio does for a provider that
 //! gives no estimate.
 
+use crate::repetition::collapse_repetition;
+
 /// Loudest 100 ms window (RMS) below this is a quiet chunk. Speech in
 /// `fixtures/tts_loopback_16k.wav` peaks at 0.08-0.21 per window. Taking the
 /// loudest window rather than the chunk average keeps one short quiet "thank
@@ -51,9 +53,10 @@ pub(crate) fn is_low_energy(samples: &[f32], sample_rate_hz: u32) -> bool {
 
 /// True only for a known phrase on audio that looks like no speech. The
 /// model's estimate outranks energy, since a quiet "thank you" is still speech.
+/// A phrase stuck in a loop counts as the phrase.
 pub(crate) fn is_hallucination(text: &str, low_energy: bool, no_speech_prob: Option<f32>) -> bool {
     let unlikely_speech = no_speech_prob.map_or(low_energy, |p| p >= NO_SPEECH_PROB);
-    unlikely_speech && is_known_phrase(text)
+    unlikely_speech && is_known_phrase(&collapse_repetition(text))
 }
 
 fn is_known_phrase(text: &str) -> bool {
@@ -107,6 +110,14 @@ mod tests {
         // A person really said it: normal energy, confident model.
         assert!(!is_hallucination("Thank you.", false, None));
         assert!(!is_hallucination("Thank you.", false, Some(0.1)));
+    }
+
+    #[test]
+    fn a_stock_phrase_stuck_in_a_loop_is_still_the_stock_phrase() {
+        let looped = "Thanks for watching. ".repeat(12);
+        assert!(is_hallucination(&looped, true, Some(0.9)));
+        // Still needs the evidence: said for real, it collapses but stays.
+        assert!(!is_hallucination(&looped, false, Some(0.1)));
     }
 
     #[test]

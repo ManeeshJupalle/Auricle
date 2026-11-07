@@ -13,6 +13,7 @@ use whisper_rs::{
 use crate::hallucination::{fit_for_prompt, is_hallucination, is_low_energy, is_noise_annotation};
 use crate::language::whisper_language;
 use crate::queue::{SharedQueue, ShedReporter};
+use crate::repetition::collapse_repetition;
 use crate::{SessionCfg, SttDrops, SttKind, SttProvider, SttSession};
 
 /// whisper.cpp skips inputs shorter than ~1 s; pad chunks up to this length.
@@ -229,7 +230,14 @@ async fn worker_loop(
                 let event = match chunk.kind {
                     ChunkKind::Interim => SttEvent::Partial(segment),
                     ChunkKind::Final => {
-                        if fit_for_prompt(&segment.text) {
+                        // Judged before the collapse: a loop, even one cut
+                        // back to a copy, says not to prime the next decode.
+                        let primes = fit_for_prompt(&segment.text);
+                        let segment = Segment {
+                            text: collapse_repetition(&segment.text),
+                            ..segment
+                        };
+                        if primes {
                             // A tail that won't tokenize just means a blind decode.
                             let tail = prompt_tail(&segment.text);
                             let tokens = ctx.tokenize(tail, tail.len() + 1).unwrap_or_default();

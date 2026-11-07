@@ -176,6 +176,14 @@ Your coding agent can read your meetings.
   text alone never drops anything: a phrase goes only when the model's no-speech
   probability is high, or, for a provider that gives none, the audio's energy is
   low.
+- **Repetition loops are cut to one copy,** on local and batch Whisper alike.
+  Whisper sometimes repeats a word or phrase until it runs out of tokens, and
+  that used to reach the transcript. A finished line now keeps one copy of a
+  word repeated 10 or more times, or of a phrase repeated 6 or more, including
+  Chinese, Japanese and Korean written without spaces. Shorter runs are left
+  alone because people say them ("no no no", "ha ha ha ha"), and so are runs
+  inside a word ("hahaha", "1000000"). Ported from voicebox (MIT; see
+  THIRD_PARTY_NOTICES.md).
 - **Deepgram reconnects without losing speech.** Up to 10 s of audio no final has
   covered yet is re-sent after a reconnect, so that audio can reach Deepgram
   twice. Auth errors stop the retries instead of looping. Audio that goes

@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use crate::hallucination::{is_hallucination, is_low_energy, is_noise_annotation};
 use crate::language::batch_language;
 use crate::queue::{SharedQueue, ShedReporter};
+use crate::repetition::collapse_repetition;
 use crate::{http_error, SessionCfg, SttDrops, SttKind, SttProvider, SttSession};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -256,6 +257,10 @@ async fn worker_loop(
                 let event = match chunk.kind {
                     ChunkKind::Interim => SttEvent::Partial(seg),
                     ChunkKind::Final => {
+                        let seg = Segment {
+                            text: collapse_repetition(&seg.text),
+                            ..seg
+                        };
                         shared.finals.lock().unwrap().push(seg.clone());
                         SttEvent::Final(seg)
                     }
@@ -634,6 +639,23 @@ mod tests {
     #[tokio::test]
     async fn interims_resume_after_finals_that_failed() {
         assert_interims_resume_after_finals_answered_with(ResponseTemplate::new(400)).await;
+    }
+
+    #[tokio::test]
+    async fn a_final_stuck_in_a_loop_keeps_one_copy() {
+        let server = MockServer::start().await;
+        let looped = format!("We ship Friday. {}", "Thanks for watching. ".repeat(10));
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": looped})),
+            )
+            .mount(&server)
+            .await;
+        let mut session = session_on(&server, "en").await;
+        session.feed(final_chunk()).await.unwrap();
+
+        let finals = session.finish().await.unwrap();
+        assert_eq!(finals[0].text, "We ship Friday. Thanks for watching.");
     }
 
     #[tokio::test]
