@@ -1127,7 +1127,7 @@ impl Engine {
             MicFeed::Device(mic) => Some(spawn_drain(
                 mic,
                 control.stop.clone(),
-                clock,
+                move || clock.elapsed().as_millis() as u64,
                 batch_tx,
                 None::<RetainedAudio>,
                 // No levels: the dashboard's meters belong to meetings, and
