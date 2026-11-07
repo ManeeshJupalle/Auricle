@@ -69,6 +69,55 @@ fn seed_session(engine: &Engine, id: &str) {
 }
 
 #[tokio::test]
+async fn session_deleted_during_the_llm_call_is_a_404() {
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(1500))
+                .set_body_json(serde_json::json!({
+                    "id": "chatcmpl-x", "object": "chat.completion", "model": "mock-model",
+                    "choices": [{"index": 0, "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "- Too late."}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}
+                })),
+        )
+        .mount(&llm)
+        .await;
+    let mut cfg = Config::default();
+    cfg.llm.ollama.base_url = llm.uri();
+    cfg.llm.ollama.model = "mock-model".to_string();
+    let (base, engine) = spawn_server(cfg, "deleted").await;
+    seed_session(&engine, "s1");
+
+    let client = reqwest::Client::new();
+    let summarize = tokio::spawn({
+        let request = client
+            .post(format!("{base}/api/v1/sessions/s1/summarize"))
+            .json(&serde_json::json!({}));
+        async move { request.send().await.unwrap() }
+    });
+
+    // Delete only once the transcript is with the LLM.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while llm.received_requests().await.unwrap().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no summarize request");
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let deleted = client
+        .delete(format!("{base}/api/v1/sessions/s1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 200);
+
+    let resp = summarize.await.unwrap();
+    assert_eq!(resp.status(), 404, "there is no session left to summarize");
+    assert!(engine.store().get_summaries("s1").unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn summarize_persists_and_exports() {
     let llm = MockServer::start().await;
     Mock::given(method("POST"))

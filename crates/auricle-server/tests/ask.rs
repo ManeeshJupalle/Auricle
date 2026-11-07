@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use auricle_core::{AudioChunk, ChannelId, ChunkKind, Config, Result, Segment, SttEvent};
-use auricle_server::{build_router_with_reader, AudioSource, Engine, EngineOptions, StartParams};
+use auricle_server::{
+    build_router_with_reader, AudioSource, Engine, EngineOptions, StartParams, WsEvent,
+};
 use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
 use auricle_vision::{ScreenContext, ScreenReader, VisionError};
 use futures_util::StreamExt;
@@ -18,9 +20,12 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------- fake STT provider (as in integration.rs) ----------
 
-struct FakeProvider;
+struct FakeProvider {
+    words: &'static str,
+}
 
 struct FakeSession {
+    words: &'static str,
     finals: Vec<Segment>,
     tx: mpsc::UnboundedSender<SttEvent>,
     rx: mpsc::UnboundedReceiver<SttEvent>,
@@ -37,6 +42,7 @@ impl SttProvider for FakeProvider {
     async fn start_session(&self, _cfg: &SessionCfg) -> Result<Box<dyn SttSession>> {
         let (tx, rx) = mpsc::unbounded_channel();
         Ok(Box::new(FakeSession {
+            words: self.words,
             finals: Vec::new(),
             tx,
             rx,
@@ -51,7 +57,7 @@ impl SttSession for FakeSession {
             channel: chunk.channel,
             t_start_ms: chunk.t_start_ms,
             t_end_ms: chunk.t_end_ms,
-            text: format!("spoken words {}", chunk.seq),
+            text: format!("{} {}", self.words, chunk.seq),
         };
         let ev = match chunk.kind {
             ChunkKind::Interim => SttEvent::Partial(seg),
@@ -148,10 +154,20 @@ fn temp_root(name: &str) -> std::path::PathBuf {
 }
 
 async fn spawn_server(cfg: Config, name: &str, reader: Arc<MockReader>) -> (String, Arc<Engine>) {
+    spawn_server_hearing(cfg, name, reader, "spoken words").await
+}
+
+/// `spawn_server` whose fake STT transcribes `words` from every chunk.
+async fn spawn_server_hearing(
+    cfg: Config,
+    name: &str,
+    reader: Arc<MockReader>,
+    words: &'static str,
+) -> (String, Arc<Engine>) {
     let engine = Engine::new(EngineOptions {
         cfg,
         data_root: temp_root(name),
-        provider_override: Some(Arc::new(FakeProvider)),
+        provider_override: Some(Arc::new(FakeProvider { words })),
     })
     .unwrap();
     let app = build_router_with_reader(engine.clone(), None, reader);
@@ -242,6 +258,54 @@ async fn wait_for_ws_event(
     }
 }
 
+async fn start_fixture_session(engine: &Arc<Engine>, title: &str) -> String {
+    let wav = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/tts_loopback_16k.wav");
+    engine
+        .start_session(StartParams {
+            title: Some(title.into()),
+            stt_provider: None,
+            mic_device: None,
+            loopback_device: None,
+            audio: Some(AudioSource::WavFile {
+                path: wav,
+                channel: ChannelId::Loopback,
+            }),
+        })
+        .await
+        .unwrap()
+}
+
+async fn stop_and_wait(engine: &Arc<Engine>, id: &str) {
+    engine.stop_session(id).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while engine.active_session().is_some() {
+        assert!(std::time::Instant::now() < deadline, "stop did not finish");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn ask_to_completion(base: &str, body: serde_json::Value) {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/ask"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let events = read_sse(resp).await;
+    assert_eq!(events.last().unwrap()["type"], "answer_done", "{events:?}");
+}
+
+/// The user prompt of the `i`th request the mock LLM received.
+async fn prompt_sent(llm: &MockServer, i: usize) -> String {
+    let reqs = llm.received_requests().await.unwrap();
+    serde_json::from_slice::<serde_json::Value>(&reqs[i].body).unwrap()["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 // ---------- tests ----------
 
 #[tokio::test]
@@ -297,6 +361,11 @@ async fn ask_streams_sse_mirrors_ws_and_carries_screen_context() {
             .map(|e| e["text"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(ws_deltas.concat(), "The answer is 42.");
+        let last_of = |kind: &str| evs.iter().rposition(|e| e["type"] == kind).unwrap();
+        assert!(
+            last_of("answer_delta") < last_of("answer_done"),
+            "done must not overtake the answer it ends: {evs:?}"
+        );
     }
 
     // The overlay-exclusion HWND reached the reader (plumbed, Phase 9 arms it).
@@ -388,6 +457,70 @@ async fn transcript_window_reaches_the_prompt_even_after_the_session_stops() {
     assert!(user.contains("Them: spoken words"), "{user}");
 }
 
+/// A stopped session whose words are in the ring: a first ask proves they
+/// reach the prompt, so what the caller then asserts can't pass by accident.
+async fn recorded_meeting(llm: &MockServer, base: &str, engine: &Arc<Engine>) -> String {
+    let id = start_fixture_session(engine, "board meeting").await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    stop_and_wait(engine, &id).await;
+    let recap = serde_json::json!({"question": "recap?", "include_transcript": true});
+    ask_to_completion(base, recap).await;
+    assert!(
+        prompt_sent(llm, 0).await.contains(SECRET),
+        "nothing to lose"
+    );
+    id
+}
+
+const SECRET: &str = "the merger closes friday";
+
+#[tokio::test]
+async fn a_deleted_meeting_stops_reaching_asks() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let cfg = cfg_with_llm(&llm.uri());
+    let (base, engine) = spawn_server_hearing(cfg, "ring-deleted", reader, SECRET).await;
+    let id = recorded_meeting(&llm, &base, &engine).await;
+
+    let deleted = reqwest::Client::new()
+        .delete(format!("{base}/api/v1/sessions/{id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 200);
+
+    let recap = serde_json::json!({"question": "recap?", "include_transcript": true});
+    ask_to_completion(&base, recap).await;
+    let prompt = prompt_sent(&llm, 1).await;
+    assert!(!prompt.contains(SECRET), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_meeting_retention_took_stops_reaching_asks() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let cfg = cfg_with_llm(&llm.uri());
+    let (base, engine) = spawn_server_hearing(cfg, "ring-expired", reader, SECRET).await;
+    let id = recorded_meeting(&llm, &base, &engine).await;
+
+    // The ring's window is minutes and retention's is days, so only a moved
+    // clock lets a meeting expire with its words still in the ring. Two days
+    // is a step a sweep believes.
+    let store = engine.store();
+    store
+        .set_setting("retention_days", &serde_json::json!(1))
+        .unwrap();
+    let now = store.get_session(&id).unwrap().unwrap().ended_at.unwrap();
+    assert_eq!(engine.sweep_retention_at(now).unwrap().deleted, 0);
+    let sweep = engine.sweep_retention_at(now + 2 * 86_400).unwrap();
+    assert_eq!(sweep.deleted, 1, "{:?}", sweep.notice);
+
+    let recap = serde_json::json!({"question": "recap?", "include_transcript": true});
+    ask_to_completion(&base, recap).await;
+    let prompt = prompt_sent(&llm, 1).await;
+    assert!(!prompt.contains(SECRET), "{prompt}");
+}
+
 #[tokio::test]
 async fn empty_transcript_window_still_answers() {
     let llm = mock_llm(MOCK_SSE).await;
@@ -472,6 +605,268 @@ async fn follow_up_includes_prior_qa_and_plain_asks_do_not() {
 }
 
 #[tokio::test]
+async fn a_plain_ask_starts_a_new_conversation_that_stays_new() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let (base, _engine) = spawn_server(cfg_with_llm(&llm.uri()), "new-chat", reader).await;
+
+    ask_to_completion(&base, serde_json::json!({"question": "about falcon?"})).await;
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "tell me more?", "follow_up": true}),
+    )
+    .await;
+    // The overlay's New chat: its next ask simply is not a follow-up.
+    ask_to_completion(&base, serde_json::json!({"question": "about osprey?"})).await;
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "and then?", "follow_up": true}),
+    )
+    .await;
+
+    let after_new_chat = prompt_sent(&llm, 3).await;
+    assert!(
+        after_new_chat.contains("Q: about osprey?"),
+        "{after_new_chat}"
+    );
+    assert!(
+        !after_new_chat.contains("falcon") && !after_new_chat.contains("tell me more"),
+        "the old conversation came back: {after_new_chat}"
+    );
+}
+
+#[tokio::test]
+async fn a_plain_ask_clears_only_its_own_meeting() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let (base, engine) = spawn_server(cfg_with_llm(&llm.uri()), "new-chat-scope", reader).await;
+    for id in ["a", "b"] {
+        engine
+            .store()
+            .create_session(id, id, 1_700_000_000, "fake", &serde_json::json!({}))
+            .unwrap();
+    }
+
+    fn ask(question: &str, session: &str, follow_up: bool) -> serde_json::Value {
+        serde_json::json!({"question": question, "session_id": session, "follow_up": follow_up})
+    }
+    ask_to_completion(&base, ask("kept in a?", "a", false)).await;
+    ask_to_completion(&base, ask("new chat in b?", "b", false)).await;
+    ask_to_completion(&base, ask("still there?", "a", true)).await;
+
+    let back_in_a = prompt_sent(&llm, 2).await;
+    assert!(back_in_a.contains("Q: kept in a?"), "{back_in_a}");
+}
+
+#[tokio::test]
+async fn an_ask_abandoned_mid_stream_leaves_no_history() {
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(500))
+                .set_body_raw(MOCK_SSE.as_bytes().to_vec(), "text/event-stream"),
+        )
+        .mount(&llm)
+        .await;
+    let reader = MockReader::with_script(vec![]);
+    let mut cfg = cfg_with_llm(&llm.uri());
+    cfg.copilot.retain_context = true;
+    let (base, engine) = spawn_server(cfg, "abandoned", reader).await;
+    let ws_events = spawn_ws_collector(&base);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // WS attach
+
+    // Dismissing the overlay: the stream is dropped once the ask has started.
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/ask"))
+        .json(&serde_json::json!({"question": "never mind this one"}))
+        .send()
+        .await
+        .unwrap();
+    let mut body = resp.bytes_stream();
+    let first = body.next().await.unwrap().unwrap();
+    assert!(std::str::from_utf8(&first).unwrap().contains("ask_started"));
+    drop(body);
+
+    // The engine still finishes it for anyone on the socket...
+    wait_for_ws_event(&ws_events, "answer_done").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // ...but it was never answered as far as the user is concerned.
+    assert_eq!(engine.store().asks_count().unwrap(), 0);
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "a real one", "follow_up": true}),
+    )
+    .await;
+    let next = prompt_sent(&llm, 1).await;
+    assert!(!next.contains("never mind this one"), "{next}");
+}
+
+#[tokio::test]
+async fn follow_ups_stay_inside_their_meeting() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let (base, engine) = spawn_server(cfg_with_llm(&llm.uri()), "followup-scope", reader).await;
+
+    // The overlay never sends session_id: the server has to tell meetings
+    // apart by whichever one is live when the ask arrives.
+    let meeting_a = start_fixture_session(&engine, "meeting a").await;
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "what is project falcon?"}),
+    )
+    .await;
+    stop_and_wait(&engine, &meeting_a).await;
+
+    let meeting_b = start_fixture_session(&engine, "meeting b").await;
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "who owns the budget?", "follow_up": true}),
+    )
+    .await;
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "and the deadline?", "follow_up": true}),
+    )
+    .await;
+    stop_and_wait(&engine, &meeting_b).await;
+
+    let first_in_b = prompt_sent(&llm, 1).await;
+    assert!(
+        !first_in_b.contains("project falcon"),
+        "meeting a's Q&A leaked into meeting b: {first_in_b}"
+    );
+    // Follow-ups still work inside one meeting.
+    let second_in_b = prompt_sent(&llm, 2).await;
+    assert!(
+        second_in_b.contains("Q: who owns the budget?"),
+        "{second_in_b}"
+    );
+    assert!(!second_in_b.contains("project falcon"), "{second_in_b}");
+
+    // An explicit session id reaches the same history as the live ask did.
+    ask_to_completion(
+        &base,
+        serde_json::json!({
+            "question": "remind me?", "follow_up": true, "session_id": meeting_a
+        }),
+    )
+    .await;
+    let back_in_a = prompt_sent(&llm, 3).await;
+    assert!(back_in_a.contains("project falcon"), "{back_in_a}");
+    assert!(!back_in_a.contains("who owns the budget"), "{back_in_a}");
+}
+
+#[tokio::test]
+async fn a_long_answer_cannot_evict_finals_from_a_stalled_consumer() {
+    // More fragments than the important lane has slots.
+    let mut body = String::new();
+    for _ in 0..1500 {
+        body.push_str(
+            "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"mock-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}\n\n",
+        );
+    }
+    body.push_str("data: [DONE]\n\n");
+    let llm = mock_llm(&body).await;
+    let reader = MockReader::with_script(vec![]);
+    let (base, engine) = spawn_server(cfg_with_llm(&llm.uri()), "lanes", reader).await;
+
+    // Subscribed but never reading: the slowest possible client. Anything
+    // sharing its lane counts against the finals it has yet to read.
+    let mut stalled = engine.subscribe_important();
+
+    ask_to_completion(&base, serde_json::json!({"question": "go on"})).await;
+
+    let mut received = Vec::new();
+    loop {
+        match stalled.try_recv() {
+            Ok(ev) => received.push(ev),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+            Err(e) => panic!("the important lane must not lag on an answer: {e:?}"),
+        }
+    }
+    assert!(
+        !received
+            .iter()
+            .any(|e| matches!(e, WsEvent::AnswerDelta { .. })),
+        "answer fragments must ride their own lane"
+    );
+    assert!(
+        received
+            .iter()
+            .any(|e| matches!(e, WsEvent::AnswerDone { .. })),
+        "the end of the answer is not lossy: {received:?}"
+    );
+}
+
+#[tokio::test]
+async fn redact_pii_scrubs_the_database_the_live_view_and_the_ring() {
+    const SAID: &str = "mail bob@example.com card 4111 1111 1111 1111 123 key \
+                        gsk_Ab3dEfGh1jKlMnOpQrStUvWxYz0123456789abcd end";
+    const LEAKS: [&str; 3] = ["bob@example.com", "4111", "gsk_"];
+
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let (base, engine) =
+        spawn_server_hearing(cfg_with_llm(&llm.uri()), "redact", reader, SAID).await;
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{base}/api/v1/settings"))
+        .json(&serde_json::json!({"redact_pii": true}))
+        .send()
+        .await
+        .unwrap();
+    let ws_events = spawn_ws_collector(&base);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // WS attach
+
+    let id = start_fixture_session(&engine, "redacted").await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    stop_and_wait(&engine, &id).await;
+
+    // The database row.
+    let session: serde_json::Value = client
+        .get(format!("{base}/api/v1/sessions/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let transcript = session["transcript"].as_array().unwrap();
+    assert!(!transcript.is_empty());
+    for segment in transcript {
+        let text = segment["text"].as_str().unwrap();
+        assert!(
+            text.contains("[email]") && text.contains("[card]"),
+            "{text}"
+        );
+        assert!(text.contains("[secret]"), "{text}");
+        assert!(!LEAKS.iter().any(|l| text.contains(l)), "{text}");
+    }
+
+    // The live view: finals and partials alike.
+    wait_for_ws_event(&ws_events, "final").await;
+    for event in ws_events.lock().await.iter() {
+        if event["type"] == "final" || event["type"] == "partial" {
+            let text = event["text"].as_str().unwrap();
+            assert!(!LEAKS.iter().any(|l| text.contains(l)), "{event}");
+        }
+    }
+
+    // The ring, seen through the only thing that reads it for a prompt.
+    ask_to_completion(
+        &base,
+        serde_json::json!({"question": "recap?", "include_transcript": true}),
+    )
+    .await;
+    let prompt = prompt_sent(&llm, 0).await;
+    assert!(prompt.contains("[email]"), "{prompt}");
+    assert!(!LEAKS.iter().any(|l| prompt.contains(l)), "{prompt}");
+}
+
+#[tokio::test]
 async fn retain_context_off_by_default_persists_nothing() {
     let llm = mock_llm(MOCK_SSE).await;
     let reader = MockReader::with_script(vec![Ok(jira_screen())]);
@@ -493,9 +888,9 @@ async fn retain_context_off_by_default_persists_nothing() {
     // Give the post-stream persistence path (which must not run) a beat.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    // The guarantee: not "no rows" but *no table at all* — the schema
-    // carries no trace of questions or screen content.
-    assert_eq!(engine.store().asks_count().unwrap(), None);
+    // The guarantee: the table exists from the migrations on, and not one
+    // question or screen capture reached it.
+    assert_eq!(engine.store().asks_count().unwrap(), 0);
 }
 
 #[tokio::test]
@@ -517,7 +912,7 @@ async fn retain_context_on_persists_question_screen_and_answer() {
 
     // Persistence happens after the stream completes; poll briefly.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while engine.store().asks_count().unwrap() != Some(1) {
+    while engine.store().asks_count().unwrap() != 1 {
         assert!(
             std::time::Instant::now() < deadline,
             "ask row not persisted"

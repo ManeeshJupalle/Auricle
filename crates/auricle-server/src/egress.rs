@@ -56,11 +56,12 @@ pub(crate) fn llm_egress(id: &str, cfg: &Config) -> (&'static str, Option<String
 
 /// Ledger write that surfaces its error.
 ///
-/// For most callers the egress has already happened by the time we log it —
-/// the audio is sent, the prompt is in flight — so a failed write is worth
-/// reporting but not worth failing the request over; those use [`record`].
-/// The MCP tools are the exception: they log *before* disclosing anything,
-/// so that an unwritable ledger stops the disclosure instead of hiding it.
+/// Every caller records just before the data leaves, so a send that then fails
+/// leaves a row for something that never went. The ledger can over-report, and
+/// that is the safe direction for it: a row too many misleads nobody about what
+/// might have left. For most callers a failed write is worth reporting but not
+/// worth failing the request over; those use [`record`]. The MCP tools are the
+/// exception: an unwritable ledger stops the disclosure instead of hiding it.
 pub(crate) fn record_checked(
     store: &Store,
     session_id: Option<&str>,

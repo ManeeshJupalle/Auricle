@@ -28,6 +28,12 @@ pub enum WsEvent {
         /// (chunk→final latency as seen by the engine).
         latency_ms: u64,
     },
+    /// The partial on `channel` will get no final, because the assembler
+    /// dropped it as a duplicate: clients should remove it (important lane).
+    PartialCleared {
+        session: String,
+        channel: String,
+    },
     /// Per-channel RMS level, ~10 Hz while capturing (lossy lane).
     Vu {
         session: String,
@@ -40,6 +46,15 @@ pub enum WsEvent {
     ModelDownloadStarted {
         session: String,
         model: String,
+        size_mb: u64,
+    },
+    /// How far that download has got, about once a second while it grows, so
+    /// someone waiting to record can tell ten seconds from five minutes.
+    /// `done_mb` reaching `size_mb` means the file is being verified.
+    ModelDownloadProgress {
+        session: String,
+        model: String,
+        done_mb: u64,
         size_mb: u64,
     },
     SessionStarted {
@@ -81,9 +96,11 @@ pub enum WsEvent {
         session: String,
         message: String,
     },
-    /// Emitted to a slow consumer after partials were dropped for it.
+    /// Emitted to a slow consumer after partials or answer fragments were
+    /// dropped for it. Both counts are running totals for the connection.
     Lag {
         dropped_partials: u64,
+        dropped_answer_deltas: u64,
     },
 }
 
@@ -239,11 +256,13 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(
             &WsEvent::Lag {
                 dropped_partials: 7,
+                dropped_answer_deltas: 3,
             }
             .to_json(),
         )
         .unwrap();
         assert_eq!(v["type"], "lag");
         assert_eq!(v["dropped_partials"], 7);
+        assert_eq!(v["dropped_answer_deltas"], 3);
     }
 }

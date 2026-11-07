@@ -21,8 +21,9 @@ use crate::assemble::{assemble_user_prompt, AskPromptParts, QaPair, TranscriptWi
 use crate::engine::{unix_ms, unix_secs};
 use crate::events::WsEvent;
 
-/// Follow-up memory per history key (the ask's session id, or one global
-/// bucket for session-less asks). In-memory only, bounded, process-lifetime.
+/// Follow-up memory per history key (the session the ask resolved to, or one
+/// global bucket when there is none). In-memory only, bounded,
+/// process-lifetime.
 #[derive(Default)]
 pub struct AskHistory {
     inner: Mutex<HashMap<String, Vec<QaPair>>>,
@@ -51,6 +52,10 @@ impl AskHistory {
             let excess = entries.len() - HISTORY_KEEP;
             entries.drain(..excess);
         }
+    }
+
+    pub(crate) fn clear(&self, key: &str) {
+        self.inner.lock().unwrap().remove(key);
     }
 }
 
@@ -171,19 +176,22 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
         },
     };
 
-    let history_key = body
-        .session_id
-        .clone()
-        .unwrap_or_else(|| GLOBAL_HISTORY_KEY.to_string());
+    // Keyed on the resolved session, not the request: the overlay never sends
+    // session_id, and one meeting's Q&A must not reach the next one's prompt.
+    let history_key = resolved_session
+        .as_ref()
+        .map_or(GLOBAL_HISTORY_KEY, |s| s.id.as_str())
+        .to_string();
     let history = if body.follow_up {
         state.ask_history.get(&history_key)
     } else {
+        // A new conversation, so the old one must not come back with the
+        // next follow-up: this is what the overlay's New chat relies on.
+        state.ask_history.clear(&history_key);
         Vec::new()
     };
 
-    let templates_dir = crate::default_data_root()
-        .unwrap_or_default()
-        .join("templates");
+    let templates_dir = state.engine.data_root().join("templates");
     let system = match auricle_llm::load_template(&templates_dir, "copilot") {
         Ok(t) => t,
         Err(e) => return internal(format!("loading copilot template: {e}")),
@@ -259,6 +267,7 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
     };
 
     let engine = state.engine.clone();
+    let answers = state.answers.clone();
     let ask_history = state.ask_history.clone();
     let retain = cfg.copilot.retain_context;
     let screen_json = screen.as_ref().and_then(|s| serde_json::to_string(s).ok());
@@ -267,7 +276,8 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
         let mut answer = String::new();
         while let Some(delta) = delta_rx.recv().await {
             answer.push_str(&delta);
-            engine.publish_important(WsEvent::AnswerDelta {
+            // No receivers is not an error: nobody may be on the socket.
+            let _ = answers.send(WsEvent::AnswerDelta {
                 ask_id: ask_id.clone(),
                 text: delta.clone(),
             });
@@ -283,9 +293,16 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
                     usage: usage.clone(),
                 });
                 let frame = json!({"type": "answer_done", "ask_id": ask_id, "usage": usage});
-                let _ = event_tx
+                // A client that hung up abandoned the ask. It still finishes
+                // for anyone on /ws/live, but it was never answered as far as
+                // the user goes: no follow-up may cite it, and no row keeps it.
+                let abandoned = event_tx
                     .send(Event::default().data(frame.to_string()))
-                    .await;
+                    .await
+                    .is_err();
+                if abandoned {
+                    return;
+                }
                 ask_history.push(
                     &history_key,
                     QaPair {

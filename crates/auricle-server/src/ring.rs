@@ -4,7 +4,7 @@
 //! active session (the window is simply empty). Never persisted — the
 //! ring lives and dies with the daemon process.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ use crate::events::WsEvent;
 /// window is "the last N minutes of real time", not transcript time).
 #[derive(Debug, Clone)]
 pub struct RingSegment {
+    session: String,
     pub speaker: String,
     pub t_start_ms: u64,
     pub text: String,
@@ -31,6 +32,7 @@ impl RingSegment {
         received_at: Instant,
     ) -> RingSegment {
         RingSegment {
+            session: String::new(),
             speaker: speaker.into(),
             t_start_ms,
             text: text.into(),
@@ -39,16 +41,24 @@ impl RingSegment {
     }
 }
 
+#[derive(Default)]
+struct Window {
+    segments: VecDeque<RingSegment>,
+    /// Sessions deleted so far. The feeder runs behind the broadcast, so a
+    /// final can still be on its way in when its session is deleted.
+    purged: HashSet<String>,
+}
+
 pub struct TranscriptRing {
     window: Duration,
-    inner: Mutex<VecDeque<RingSegment>>,
+    inner: Mutex<Window>,
 }
 
 impl TranscriptRing {
     pub fn new(window_min: u64) -> Arc<TranscriptRing> {
         Arc::new(TranscriptRing {
             window: Duration::from_secs(window_min * 60),
-            inner: Mutex::new(VecDeque::new()),
+            inner: Mutex::new(Window::default()),
         })
     }
 
@@ -62,12 +72,14 @@ impl TranscriptRing {
             loop {
                 match rx.recv().await {
                     Ok(WsEvent::Final {
+                        session,
                         speaker,
                         t_start_ms,
                         text,
                         ..
                     }) => ring.push_at(
                         RingSegment {
+                            session,
                             speaker,
                             t_start_ms,
                             text,
@@ -88,22 +100,32 @@ impl TranscriptRing {
         self.snapshot_at(Instant::now())
     }
 
+    /// Forget a deleted session, including anything of it still to arrive.
+    pub fn purge(&self, session: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.segments.retain(|seg| seg.session != session);
+        inner.purged.insert(session.to_string());
+    }
+
     fn push_at(&self, seg: RingSegment, now: Instant) {
         let mut inner = self.inner.lock().unwrap();
-        inner.push_back(seg);
-        Self::prune(&mut inner, self.window, now);
+        if inner.purged.contains(&seg.session) {
+            return;
+        }
+        inner.segments.push_back(seg);
+        Self::prune(&mut inner.segments, self.window, now);
     }
 
     fn snapshot_at(&self, now: Instant) -> Vec<RingSegment> {
         let mut inner = self.inner.lock().unwrap();
-        Self::prune(&mut inner, self.window, now);
-        inner.iter().cloned().collect()
+        Self::prune(&mut inner.segments, self.window, now);
+        inner.segments.iter().cloned().collect()
     }
 
-    fn prune(inner: &mut VecDeque<RingSegment>, window: Duration, now: Instant) {
-        while let Some(front) = inner.front() {
+    fn prune(segments: &mut VecDeque<RingSegment>, window: Duration, now: Instant) {
+        while let Some(front) = segments.front() {
             if now.duration_since(front.received_at) > window {
-                inner.pop_front();
+                segments.pop_front();
             } else {
                 break;
             }
@@ -117,6 +139,7 @@ mod tests {
 
     fn seg(text: &str, at: Instant) -> RingSegment {
         RingSegment {
+            session: "s1".into(),
             speaker: "Them".into(),
             t_start_ms: 0,
             text: text.into(),
@@ -159,6 +182,38 @@ mod tests {
         // Exactly window-old is kept (strictly-older evicts).
         assert_eq!(ring.snapshot_at(t0 + Duration::from_secs(600)).len(), 1);
         assert!(ring.snapshot_at(t0 + Duration::from_secs(601)).is_empty());
+    }
+
+    fn texts(ring: &TranscriptRing) -> Vec<String> {
+        ring.snapshot().into_iter().map(|s| s.text).collect()
+    }
+
+    #[test]
+    fn a_purge_takes_that_session_and_nothing_else() {
+        let ring = TranscriptRing::new(10);
+        let now = Instant::now();
+        let other = RingSegment {
+            session: "s2".into(),
+            ..seg("keep", now)
+        };
+        ring.push_at(seg("gone", now), now);
+        ring.push_at(other, now);
+        ring.push_at(seg("gone too", now), now);
+
+        ring.purge("s1");
+
+        assert_eq!(texts(&ring), ["keep"]);
+    }
+
+    #[test]
+    fn a_final_still_in_flight_cannot_bring_a_purged_session_back() {
+        let ring = TranscriptRing::new(10);
+        ring.purge("s1");
+
+        let now = Instant::now();
+        ring.push_at(seg("late", now), now);
+
+        assert!(texts(&ring).is_empty());
     }
 
     #[test]

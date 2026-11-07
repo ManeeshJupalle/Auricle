@@ -37,16 +37,18 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
             r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
             None,
         ),
-        // AWS access key id and OpenAI-style secret keys.
+        // AWS access key id, `sk-` keys (including the segmented
+        // `sk-proj-...` shape), and Groq keys.
         p("[secret]", r"\bAKIA[0-9A-Z]{16}\b", None),
-        p("[secret]", r"\bsk-[A-Za-z0-9]{20,}\b", None),
+        p("[secret]", r"\bsk-[A-Za-z0-9_-]{20,}\b", None),
+        p("[secret]", r"\bgsk_[A-Za-z0-9]{20,}\b", None),
         p("[ssn]", r"\b\d{3}-\d{2}-\d{4}\b", None),
         // 13–19 digits ending on a digit (so a trailing separator isn't
         // swallowed), Luhn-gated to reject ordinary long numbers.
         p(
             "[card]",
             r"\b\d(?:[ -]?\d){12,18}\b",
-            Some(luhn_ok as fn(&str) -> bool),
+            Some(card_ok as fn(&str) -> bool),
         ),
         p(
             "[ip]",
@@ -79,6 +81,17 @@ pub fn redact(text: &str) -> String {
             .into_owned();
     }
     out
+}
+
+/// True when a card-shaped span holds a card. The match is greedy, so digits
+/// said right next to a card (its CVV, a room number) widen it, and a Luhn
+/// check of the whole span would wave the card through. Test every run of
+/// whole digit groups instead; a span with no separators is one group, so an
+/// ordinary long number still gets exactly one check.
+fn card_ok(s: &str) -> bool {
+    let groups: Vec<&str> = s.split([' ', '-']).collect();
+    (0..groups.len())
+        .any(|start| (start + 1..=groups.len()).any(|end| luhn_ok(&groups[start..end].concat())))
 }
 
 /// Luhn checksum over the digits of `s` (13–19 of them), the standard
@@ -122,6 +135,42 @@ mod tests {
         assert_eq!(redact("card 4111 1111 1111 1111 end"), "card [card] end");
         assert_eq!(redact("key AKIAIOSFODNN7EXAMPLE here"), "key [secret] here");
         assert!(redact("token sk-abcdefghij0123456789XYZ").contains("[secret]"));
+    }
+
+    #[test]
+    fn redacts_current_llm_key_shapes() {
+        assert_eq!(
+            redact("key sk-proj-Ab3_dE-fGh1jKlMnOpQrStUvWxYz0123 here"),
+            "key [secret] here"
+        );
+        assert_eq!(
+            redact("key sk-ant-api03-Ab3dEfGh1jKlMnOp_QrStUvWx-yz here"),
+            "key [secret] here"
+        );
+        assert_eq!(
+            redact("key gsk_Ab3dEfGh1jKlMnOpQrStUvWxYz0123456789abcd here"),
+            "key [secret] here"
+        );
+        // A hyphenated word that merely contains the prefix is not a key.
+        assert_eq!(
+            redact("the task-force-for-quarterly-planning-review met"),
+            "the task-force-for-quarterly-planning-review met"
+        );
+    }
+
+    #[test]
+    fn digits_next_to_a_card_do_not_hide_it() {
+        // Greedy matching takes all 19 digits: its CVV, read straight after.
+        assert_eq!(redact("card 4111 1111 1111 1111 123"), "card [card]");
+        assert_eq!(redact("card 4111-1111-1111-1111-123 ok"), "card [card] ok");
+        // Leading digits, and the 4-6-5 grouping Amex uses.
+        assert_eq!(redact("room 12 4111 1111 1111 1111"), "room [card]");
+        assert_eq!(redact("amex 3782 822463 10005 123"), "amex [card]");
+        // Still Luhn-gated: same shape, no valid card inside it.
+        assert_eq!(
+            redact("ref 1234 5678 9012 3457 123"),
+            "ref 1234 5678 9012 3457 123"
+        );
     }
 
     #[test]
