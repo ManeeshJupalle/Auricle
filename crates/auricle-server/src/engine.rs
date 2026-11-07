@@ -668,7 +668,7 @@ impl Engine {
                 drain_joins.push(spawn_drain(
                     mc,
                     stop.clone(),
-                    session_clock,
+                    move || session_clock.elapsed().as_millis() as u64,
                     mic_batch_tx,
                     mic_wav,
                     vu.clone(),
@@ -677,7 +677,7 @@ impl Engine {
                 drain_joins.push(spawn_drain(
                     lc,
                     stop.clone(),
-                    session_clock,
+                    move || session_clock.elapsed().as_millis() as u64,
                     loop_batch_tx,
                     loop_wav,
                     vu,
@@ -1722,10 +1722,13 @@ const VU_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Drain thread: ring buffer → resampler → batch channel (+ optional
 /// retained WAV, + VU events). Mirrors the Phase 2 CLI drain.
+// `clock` gives milliseconds since the session started. It is a function and
+// not an `Instant` so a test can begin minutes into a session: backdating an
+// `Instant` panics on a machine that has been up for less time than that.
 fn spawn_drain<W: Write + Seek + Send + 'static>(
     mut c: CaptureConsumer,
     stop: Arc<AtomicBool>,
-    clock: Instant,
+    clock: impl Fn() -> u64 + Send + 'static,
     tx: mpsc::UnboundedSender<(Vec<f32>, u64)>,
     mut wav: Option<RetainedAudio<W>>,
     vu: VuSink,
@@ -1777,7 +1780,7 @@ fn spawn_drain<W: Write + Seek + Send + 'static>(
                     break;
                 }
                 if !out.is_empty() {
-                    let wall_ms = clock.elapsed().as_millis() as u64;
+                    let wall_ms = clock();
                     retain(&mut wav, &report, |w| w.write(&out, wall_ms));
                     if tx.send((out.clone(), wall_ms)).is_err() {
                         break;
@@ -1787,7 +1790,7 @@ fn spawn_drain<W: Write + Seek + Send + 'static>(
                 out.clear();
                 let _ = resampler.finish(&mut out);
                 if !out.is_empty() {
-                    let wall_ms = clock.elapsed().as_millis() as u64;
+                    let wall_ms = clock();
                     retain(&mut wav, &report, |w| w.write(&out, wall_ms));
                     let _ = tx.send((out.clone(), wall_ms));
                 }
@@ -1799,7 +1802,7 @@ fn spawn_drain<W: Write + Seek + Send + 'static>(
             }
         }
         if let Some(w) = wav {
-            if let Err(message) = w.finish(clock.elapsed().as_millis() as u64) {
+            if let Err(message) = w.finish(clock()) {
                 report(message);
             }
         }
@@ -2427,7 +2430,8 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, mut rx) = mpsc::unbounded_channel();
         // Ten minutes in, so the first batch owes 19 MB of silence.
-        let clock = Instant::now() - Duration::from_secs(600);
+        let start = Instant::now();
+        let clock = move || 600_000 + start.elapsed().as_millis() as u64;
         let errors = broadcast::channel(IMPORTANT_CAPACITY).0;
         let drain = spawn_drain(
             capture,
@@ -2462,7 +2466,10 @@ mod tests {
         let drain = spawn_drain(
             capture,
             stop.clone(),
-            Instant::now(),
+            {
+                let start = Instant::now();
+                move || start.elapsed().as_millis() as u64
+            },
             tx,
             Some(wav),
             vu_sink(),
