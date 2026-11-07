@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -6,6 +7,11 @@ import react from '@vitejs/plugin-react';
 // Rust rebuild. Production embeds ui/dist into the binary via rust-embed.
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: { '@shared': fileURLToPath(new URL('../shared', import.meta.url)) },
+    // shared/ has no node_modules, so its React has to come from this app.
+    dedupe: ['react'],
+  },
   // Build output lives inside the server crate so `cargo package` can ship
   // the embedded UI (rust-embed cannot include files outside a crate).
   build: {
@@ -17,7 +23,9 @@ export default defineConfig({
   css: { postcss: {} },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:4820',
+      // changeOrigin stays false, unlike the string shorthand: the daemon only
+      // answers its own origin, so the browser's Host has to reach it intact.
+      '/api': { target: 'http://127.0.0.1:4820', changeOrigin: false },
       '/ws': { target: 'ws://127.0.0.1:4820', ws: true },
     },
   },

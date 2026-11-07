@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBlocks, parseInline } from './components/Markdown';
+import { parseBlocks, parseInline } from '@shared/Markdown';
 
 describe('markdown blocks', () => {
   it('parses the shapes LLM summaries actually produce', () => {
@@ -45,6 +45,45 @@ describe('markdown blocks', () => {
     expect(blocks[0].kind).toBe('para');
     expect(blocks[1]).toEqual({ kind: 'bullet', items: ['Topic A was discussed.'] });
     expect(blocks[2].kind).toBe('para');
+  });
+});
+
+describe('markdown line terminators', () => {
+  it('terminates on a heading holding U+2028', () => {
+    expect(parseBlocks('# a\u2028b')).toEqual([
+      { kind: 'heading', level: 1, text: 'a' },
+      { kind: 'para', text: 'b' },
+    ]);
+  });
+
+  it('treats a bare CR and U+2029 as line breaks too', () => {
+    const blocks = [
+      { kind: 'heading', level: 1, text: 'a' },
+      { kind: 'para', text: 'b' },
+    ];
+    expect(parseBlocks('# a\rb')).toEqual(blocks);
+    expect(parseBlocks('# a\u2029b')).toEqual(blocks);
+  });
+
+  it('keeps a checklist item a checklist item', () => {
+    expect(parseBlocks('- [ ] a\u2028- [x] b')).toEqual([
+      {
+        kind: 'check',
+        items: [
+          { checked: false, text: 'a' },
+          { checked: true, text: 'b' },
+        ],
+      },
+    ]);
+  });
+
+  it('terminates on every structural prefix against every terminator', () => {
+    const prefixes = ['# ', '#### ', '- ', '* ', '1. ', '2) ', '- [ ] ', '- [x] ', '#', '-', ''];
+    for (const prefix of prefixes) {
+      for (const terminator of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+        expect(parseBlocks(`${prefix}a${terminator}b${terminator}`).length).toBeGreaterThan(0);
+      }
+    }
   });
 });
 

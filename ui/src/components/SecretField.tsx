@@ -37,7 +37,7 @@ export function SecretField({
     try {
       await api.putSecret(id, value.trim());
       setValue('');
-      flash('saved');
+      flash('Saved');
       onChanged();
     } catch (e) {
       setErr((e as Error).message);
@@ -51,7 +51,7 @@ export function SecretField({
     setErr(null);
     try {
       await api.deleteSecret(id);
-      flash('removed');
+      flash('Removed');
       onChanged();
     } catch (e) {
       setErr((e as Error).message);
@@ -75,6 +75,7 @@ export function SecretField({
       <div className="secret-row">
         <input
           type="password"
+          aria-label={`${label} API key`}
           value={value}
           placeholder={ready ? 'Replace stored key…' : 'Paste API key…'}
           autoComplete="off"
@@ -84,12 +85,14 @@ export function SecretField({
             if (e.key === 'Enter') void save();
           }}
         />
-        <button className="btn accent" onClick={() => void save()} disabled={busy || !value.trim()}>
+        <button className="btn" onClick={() => void save()} disabled={busy || !value.trim()}>
           {busy ? '…' : 'Save'}
         </button>
         {msg && <span className="saved">{msg}</span>}
       </div>
-      {err && <div className="secret-err">{err}</div>}
+      <div className="status-slot" role="status">
+        {err && <div className="banner compact">{err}</div>}
+      </div>
     </div>
   );
 }

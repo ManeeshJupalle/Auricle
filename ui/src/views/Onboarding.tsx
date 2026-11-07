@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { SecretField } from '../components/SecretField';
+import { TwoVoices } from '../components/TwoVoices';
 import type { DeviceInfo, ProvidersResponse } from '../types';
 
 type Step = 'welcome' | 'devices' | 'mode' | 'keys' | 'done';
@@ -40,17 +41,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const sttReady = (id: string) => prov?.providers.find((p) => p.id === id)?.ready ?? false;
   const llmReady = (id: string) => prov?.llm.find((p) => p.id === id)?.ready ?? false;
   const keySlots = [
-    { id: 'deepgram', label: 'Deepgram', used: 'streaming STT (lowest latency)', ready: sttReady('deepgram') },
+    { id: 'deepgram', label: 'Deepgram', used: 'live transcription, lowest delay', ready: sttReady('deepgram') },
     {
       id: 'groq',
       label: 'Groq',
-      used: 'batch STT + summaries & answers',
+      used: 'transcription, summaries, and answers',
       ready: sttReady('groq-whisper') || llmReady('groq'),
     },
     {
       id: 'openai',
       label: 'OpenAI-compatible',
-      used: 'batch STT + summaries & answers',
+      used: 'transcription, summaries, and answers',
       ready: sttReady('openai-compat') || llmReady('openai-compat'),
     },
   ];
@@ -76,34 +77,42 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     });
 
   const order: Step[] = ['welcome', 'devices', 'mode', ...(mode === 'cloud' ? ['keys' as const] : []), 'done'];
+  // Every step stays on the line, so choosing the cloud doesn't add one mid-way.
+  const allSteps: Step[] = ['welcome', 'devices', 'mode', 'keys', 'done'];
   const idx = order.indexOf(step);
   const back = () => idx > 0 && setStep(order[idx - 1]);
   const next = () => idx < order.length - 1 && setStep(order[idx + 1]);
 
   return (
     <div className="onboarding">
-      <div className="onboarding-card">
-        <div className="steps">
-          {order.map((s, i) => (
-            <span key={s} className={`step-dot ${i === idx ? 'active' : ''} ${i < idx ? 'done' : ''}`} />
+      <div className="onboarding-rule">
+        <div className="steps" role="img" aria-label={`Step ${idx + 1} of ${order.length}`}>
+          {allSteps.map((s, i) => (
+            <span
+              key={s}
+              className={`step-dot ${s === step ? 'active' : ''} ${
+                i < allSteps.indexOf(step) ? 'done' : ''
+              } ${order.includes(s) ? '' : 'skipped'}`}
+            />
           ))}
         </div>
-
-        {err && <div className="banner error">{err}</div>}
+      </div>
+      <div className="onboarding-card">
+        <div className="status-slot" role="status">
+          {err && <div className="banner">{err}</div>}
+        </div>
 
         {step === 'welcome' && (
           <div className="ob-step">
-            <h1>
-              auricle<span className="brand-dot">.</span>
-            </h1>
-            <p className="dim">
-              A local-first meeting engine. Your microphone is <em>You</em>; everything your
-              computer plays is <em>Them</em>. Nothing leaves your machine unless you choose a cloud
-              provider. Let&rsquo;s get you set up.
+            <h1>Auricle writes down your meetings, on your machine</h1>
+            <TwoVoices />
+            <p>
+              No bot joins your calls. Nothing leaves this computer unless you choose a cloud
+              provider. Setup takes a minute.
             </p>
             <div className="onboarding-nav">
               <button className="btn subtle" onClick={() => void commit({})} disabled={saving}>
-                Skip
+                Skip setup
               </button>
               <button className="btn accent" onClick={next}>
                 Get started
@@ -114,9 +123,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === 'devices' && (
           <div className="ob-step">
-            <h2>Choose your audio devices</h2>
+            <h2>What should Auricle listen to?</h2>
             <label className="ob-field">
-              <span>Microphone (“You”)</span>
+              <span>Your microphone is You</span>
               <select value={mic} onChange={(e) => setMic(e.target.value)}>
                 <option value="default">System default</option>
                 {mics.map((d) => (
@@ -127,7 +136,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </select>
             </label>
             <label className="ob-field">
-              <span>System audio (“Them”)</span>
+              <span>What your computer plays is Them</span>
               <select value={loop} onChange={(e) => setLoop(e.target.value)}>
                 <option value="default">System default</option>
                 {loops.map((d) => (
@@ -137,10 +146,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 ))}
               </select>
             </label>
-            <p className="dim note">
-              System audio is captured via WASAPI loopback on your output device — silence while
-              nothing plays is normal.
-            </p>
+            <p>Them stays quiet while nothing is playing. That is normal.</p>
             <div className="onboarding-nav">
               <button className="btn subtle" onClick={back}>
                 Back
@@ -154,26 +160,26 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === 'mode' && (
           <div className="ob-step">
-            <h2>How should Auricle transcribe?</h2>
+            <h2>Where should the transcribing happen?</h2>
             <div className="choice-cards">
               <button
                 className={`choice-card ${mode === 'local' ? 'selected' : ''}`}
                 onClick={() => setMode('local')}
               >
-                <span className="choice-title">Fully local</span>
+                <span className="choice-title">On this machine</span>
                 <span className="dim">
-                  Whisper + Ollama on your machine. Nothing leaves the device. Slower on modest
-                  CPUs.
+                  Whisper and Ollama run here, and nothing leaves this computer. Slower on modest
+                  processors. The speech model downloads the first time you record.
                 </span>
               </button>
               <button
                 className={`choice-card ${mode === 'cloud' ? 'selected' : ''}`}
                 onClick={() => setMode('cloud')}
               >
-                <span className="choice-title">Cloud</span>
+                <span className="choice-title">In the cloud</span>
                 <span className="dim">
-                  Deepgram + Groq for low latency. Audio and prompts go to those providers. Needs
-                  API keys.
+                  Deepgram and Groq, for the lowest delay. Your audio and prompts go to them, and
+                  you need API keys for both.
                 </span>
               </button>
             </div>
@@ -191,8 +197,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 'keys' && (
           <div className="ob-step">
             <h2>Add your cloud keys</h2>
-            <p className="dim">
-              Stored in the OS credential store — never in config files. You can add or change these
+            <p>
+              Keys go in Windows Credential Manager, never in a config file. You can change them
               later in Settings.
             </p>
             <div className="ob-keys">
@@ -221,11 +227,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 'done' && (
           <div className="ob-step">
             <h2>You&rsquo;re ready</h2>
-            <p className="dim">
+            <p>
               {mode === 'cloud'
-                ? 'Cloud transcription with Deepgram and Groq. Add keys anytime in Settings.'
-                : 'Fully local transcription with Whisper and Ollama — nothing leaves your machine.'}{' '}
-              Press <strong>Start Recording</strong> in the sidebar to capture your next meeting.
+                ? 'Deepgram and Groq will transcribe and summarize. You can add keys at any time in Settings.'
+                : 'Whisper and Ollama will transcribe and summarize here, and nothing leaves this computer.'}{' '}
+              Press Start recording when your next meeting begins.
             </p>
             <div className="onboarding-nav">
               <button className="btn subtle" onClick={back}>

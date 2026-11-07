@@ -1,82 +1,127 @@
-/* Auricle — visual identity from the supplied design mock (Auricle.dc.html):
-   near-black radial-washed canvas, glassy gradient sidebar, red accent
-   with glow, Geist / Geist Mono type. Dark is the identity; light theme
-   derives the same structure with adapted tones. */
+/* Auricle is a stenographer's pad: pale eye-ease green paper with one rule
+   down the page. That rule is the only ornament. In a meeting it divides Them
+   from You and carries the tape of who spoke when; on the privacy page it is
+   the edge of your machine.
+
+   Each colour has one job. Red: a session is recording. Blue: the name You.
+   Ochre: something needs you (errors too, because red is taken). Everything
+   else is ink on paper, so primary buttons are ink, links are underlined ink,
+   and your words are ink too: face and indent already say who is talking. */
 
 :root {
   /* Native widgets (select popups, checkboxes, scrollbars) follow this. */
   color-scheme: dark;
-  --bg: #07080a;
-  --bg-wash:
-    radial-gradient(1200px 800px at 78% -8%, rgba(56, 68, 92, 0.22), transparent 60%),
-    radial-gradient(900px 700px at 0% 100%, rgba(60, 44, 52, 0.16), transparent 55%);
-  --panel-grad: linear-gradient(180deg, rgba(19, 22, 28, 0.92), rgba(14, 16, 21, 0.92));
-  --card-grad: linear-gradient(180deg, rgba(22, 25, 32, 0.92), rgba(16, 18, 24, 0.92));
-  --edge: rgba(255, 255, 255, 0.06);
-  --edge-strong: rgba(255, 255, 255, 0.1);
-  --hover: rgba(255, 255, 255, 0.06);
-  --inset-bg: rgba(0, 0, 0, 0.28);
-  --text: #e6e9ef;
-  --text-soft: #cdd2dc;
-  --text-strong: #f5f7fb;
-  --dim: rgba(255, 255, 255, 0.46);
-  --dim-2: rgba(255, 255, 255, 0.34);
-  --accent: #ef4444;
-  --accent-deep: #c0362f;
-  --accent-dim: rgba(239, 68, 68, 0.35);
-  --accent-glow: rgba(239, 68, 68, 0.45);
-  --accent-soft: rgba(239, 68, 68, 0.14);
-  --accent-text: #f2a2a2;
-  --you: #9db7e8;
-  --them: #f2a2a2;
-  --ok: #4ade80;
-  --ok-core: #22c55e;
-  --warn: #e0af68;
-  --error: #f87171;
-  --card-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --mono: 'Geist Mono', 'Cascadia Code', 'Consolas', monospace;
-  --sans: 'Geist Sans', 'Geist', 'Segoe UI', system-ui, sans-serif;
-  /* One reading column for the whole session view: the header, the
-     session map, the transcript, and the summary all resolve to the same
-     left edge. `scrollbar-gutter: both-edges` on the scrolling panes is
-     what keeps that true once a scrollbar appears. */
-  --measure: 880px;
-  --gutter: 40px;
+
+  --paper: #17302a;
+  --binder: #10261f;
+  --sheet: #21403a;
+  --ink: #e6efe6;
+  --ink-2: #c4d6cb;
+  --ink-3: #a6bfb2;
+  /* Edges a person has to find: fields, and anything else at 3:1 or better. */
+  --edge: #6f9483;
+  /* Edges that only separate. */
+  --hair: #2f4e44;
+  --wash: rgba(230, 239, 230, 0.07);
+  --rule: #7fb59c;
+
+  /* Marks on the tape are quiet, about 3:1, so the text keeps the room. */
+  --them: #5f8876;
+  --you: #a9beff;
+  --you-mark: #6a82d2;
+
+  --rec: #ff6a5a;
+  --rec-text: #ff8a7c;
+
+  --attn: #f0c878;
+  --attn-bg: #3a3216;
+  --attn-ink: #f7e3b0;
+
+  --mark-bg: rgba(230, 239, 230, 0.18);
+  --scrim: rgba(8, 24, 19, 0.62);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23c4d6cb' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  --clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6bfb2' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
+
+  --serif: 'Alegreya', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --sans: 'Alegreya Sans', 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --t-meta: 14.5px;
+  --t-ui: 16px;
+  --t-read: 20px;
+  --t-h2: 25px;
+  --t-h1: 34px;
+  --t-hero: 40px;
+
+  --side-w: 288px;
+  /* The tape: scale labels, then Them, the rule, You. */
+  --tape-w: 148px;
+  --rule-x: 96px;
+  --lane: 26px;
+  --tape-top: 66px;
+  --tape-bottom: 26px;
+  /* How far the "you are here" frame stands off the lanes. */
+  --frame: 8px;
+  /* What's left of the tape for the scale, beside the frame. */
+  --scale-w: calc(var(--rule-x) - var(--lane) - var(--frame) - 2px);
+  /* Timestamps hang in the margin, so titles and text share one left edge. */
+  --hang: 66px;
+  --measure: 620px;
+  --col: calc(var(--hang) + var(--measure));
+  --indent: 44px;
+  --pad: 32px;
+}
+
+/* The text stays near the tape instead of centring in what's left, so the two
+   read as one object. The lead takes a share of the spare width: on a very
+   wide window the column drifts in a little, on a narrow one it hugs the tape.
+   Every page shares it, so titles don't jump as you move between them. */
+.main,
+.onboarding {
+  container-type: inline-size;
+}
+
+.main > *,
+.onboarding > * {
+  --lead: clamp(14px, calc((100cqw - var(--tape-w) - var(--col)) * 0.2), 220px);
 }
 
 [data-theme='light'] {
   color-scheme: light;
-  --bg: #f3f4f7;
-  --bg-wash:
-    radial-gradient(1200px 800px at 78% -8%, rgba(90, 110, 150, 0.1), transparent 60%),
-    radial-gradient(900px 700px at 0% 100%, rgba(190, 120, 120, 0.08), transparent 55%);
-  --panel-grad: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 249, 251, 0.94));
-  --card-grad: linear-gradient(180deg, #ffffff, #fbfbfd);
-  --edge: rgba(15, 20, 30, 0.09);
-  --edge-strong: rgba(15, 20, 30, 0.14);
-  --hover: rgba(15, 20, 30, 0.05);
-  --inset-bg: rgba(15, 20, 30, 0.04);
-  --text: #2a3242;
-  --text-soft: #3b4354;
-  --text-strong: #10151f;
-  --dim: rgba(25, 32, 45, 0.55);
-  --dim-2: rgba(25, 32, 45, 0.4);
-  --accent: #dc2626;
-  --accent-deep: #a81f1f;
-  --accent-dim: rgba(220, 38, 38, 0.35);
-  --accent-glow: rgba(220, 38, 38, 0.3);
-  --accent-soft: rgba(220, 38, 38, 0.09);
-  --accent-text: #b03030;
-  --you: #3b5bb5;
-  --them: #b03030;
-  --ok: #15803d;
-  --ok-core: #16a34a;
-  --warn: #a97913;
-  --error: #c93a4c;
-  --card-shadow: 0 18px 44px -24px rgba(30, 40, 60, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  --paper: #e8f0e3;
+  --binder: #dae6d4;
+  --sheet: #f4f8f0;
+  --ink: #14302a;
+  --ink-2: #35504a;
+  --ink-3: #4a645b;
+  --edge: #6d8a7d;
+  --hair: #c3d5c3;
+  --wash: rgba(20, 48, 42, 0.07);
+  --rule: #4f8a70;
+
+  --them: #678b79;
+  --you: #2340a8;
+  --you-mark: #6b80d6;
+
+  --rec: #c81e1a;
+  --rec-text: #b01a16;
+
+  --attn: #8a5a00;
+  --attn-bg: #f6e8c3;
+  --attn-ink: #4f3300;
+
+  --mark-bg: rgba(20, 48, 42, 0.13);
+  --scrim: rgba(52, 84, 72, 0.4);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2335504a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  --clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a645b' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -88,68 +133,284 @@ body,
 }
 
 body {
-  background: var(--bg-wash), var(--bg);
-  color: var(--text);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: var(--t-ui);
+  line-height: 1.45;
+  letter-spacing: 0.006em;
+  /* Times and counts are lining; only reading text keeps old-style figures. */
+  font-variant-numeric: lining-nums;
   -webkit-font-smoothing: antialiased;
 }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+mark {
+  border-radius: 2px;
+  background: var(--mark-bg);
+  box-shadow: inset 0 -2px 0 var(--ink);
+  color: inherit;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+h1,
+h2,
+h3,
+p {
+  margin: 0;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(128, 138, 155, 0.25);
-  border-radius: 999px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 138, 155, 0.45);
-  background-clip: padding-box;
-  border: 3px solid transparent;
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
-@keyframes auPulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.82);
-  }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) transparent;
 }
 
-@keyframes auRise {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+a,
+.link-btn {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
-a {
-  color: var(--accent-text);
+a:hover,
+.link-btn:hover {
+  text-decoration-thickness: 2px;
 }
 
-.mono {
+.link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.mono,
+code,
+kbd {
   font-family: var(--mono);
+  font-size: 0.86em;
+}
+
+kbd {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--sheet);
+  white-space: nowrap;
 }
 
 .dim {
-  color: var(--dim);
+  color: var(--ink-3);
+}
+
+.note {
+  color: var(--ink-2);
+  font-size: var(--t-ui);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A live region must exist before its message does, or it goes unannounced.
+   No box of its own, so holding one open costs the layout nothing. */
+.status-slot {
+  display: contents;
+}
+
+/* ---------- controls ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 15px;
+  border: 1.5px solid var(--edge);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 500;
+  line-height: 1.1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--wash);
+}
+
+.btn.accent {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.btn.accent:hover:not(:disabled) {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+}
+
+/* Text that acts: no box, so nothing to hold it off the column it sits on. */
+.btn.quiet,
+.btn.subtle {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+}
+
+.btn.quiet:hover:not(:disabled),
+.btn.subtle:hover:not(:disabled) {
+  background: none;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--wash);
+  color: var(--ink);
+}
+
+.icon-btn.danger:hover:not(:disabled) {
+  background: var(--attn-bg);
+  color: var(--attn);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+input[type='text'],
+input[type='search'],
+input[type='password'],
+select {
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background-color: var(--sheet);
+  color: var(--ink);
+}
+
+select {
+  appearance: none;
+  padding-right: 32px;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+select:disabled {
+  opacity: 0.55;
+}
+
+input::placeholder {
+  color: var(--ink-3);
+  opacity: 1;
+}
+
+input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--ink);
+}
+
+.saved {
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+/* The one alert. Ochre, with a mark so it isn't colour alone, and the same in
+   both themes: a tint with dark or light ink, never a solid slab. Everything
+   that needs you uses it, whatever the size. */
+.banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--attn-bg);
+  color: var(--attn-ink);
+  line-height: 1.35;
+}
+
+.banner::before {
+  content: '!';
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--attn);
+  color: var(--attn-bg);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+
+.banner .btn {
+  flex: none;
+  min-height: 30px;
+  margin-left: auto;
+  padding: 0 10px;
+  border-color: var(--attn-ink);
+  color: var(--attn-ink);
+}
+
+.banner.compact {
+  display: inline-flex;
+  gap: 7px;
+  padding: 3px 10px 3px 7px;
+  font-size: var(--t-meta);
+}
+
+.banner.compact::before {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  font-size: 11.5px;
+  line-height: 16px;
 }
 
 /* ---------- shell ---------- */
@@ -167,270 +428,195 @@ a {
   position: relative;
 }
 
+/* Healthy is silent. This corner only speaks when there is something to say. */
 .main-status {
   position: absolute;
-  top: 24px;
-  right: 40px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  top: 14px;
+  right: 18px;
   z-index: 5;
-}
-
-.conn {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px 6px 10px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.conn::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-}
-
-/* Healthy is quiet: a bare dot. Trouble states keep the loud pill. */
-.conn.open {
-  padding: 6px;
-  background: transparent;
-  border: none;
-}
-
-.conn.open::before {
-  background: var(--ok-core);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--ok-core) 90%, transparent);
-}
-
-.conn.connecting,
-.conn.reconnecting {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
-  animation: auPulse 1.4s ease-in-out infinite;
-}
-
-.conn.connecting::before,
-.conn.reconnecting::before {
-  background: var(--warn);
+  gap: 8px 12px;
+  max-width: 60%;
+  font-size: var(--t-meta);
 }
 
 /* ---------- sidebar ---------- */
 
 .sidebar {
-  width: 312px;
-  flex: 0 0 312px;
+  width: var(--side-w);
+  flex: 0 0 var(--side-w);
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--panel-grad);
-  border-right: 1px solid var(--edge);
-  backdrop-filter: blur(12px);
-}
-
-.sidebar.collapsed {
-  width: 52px;
-  flex: 0 0 52px;
-  align-items: center;
-  padding-top: 12px;
+  background: var(--binder);
 }
 
 .sidebar-top {
-  height: 60px;
-  flex: 0 0 60px;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--edge);
+  padding: 18px 12px 8px 20px;
 }
 
 .brand {
-  font-family: var(--mono);
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--text-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 800;
+  line-height: 1;
 }
 
-.brand-dot {
-  color: var(--accent);
-  font-size: 20px;
-  line-height: 0;
-}
-
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--dim-2);
-  border-radius: 7px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.icon-btn:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.icon-btn.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--error);
-}
-
-.icon-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
+/* The tally: beside the name only while recording. */
+.tally,
+.rec-dot {
+  flex: none;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--rec);
+  animation: au-tally 500ms ease-out;
 }
 
 .sidebar-search-wrap {
-  padding: 14px 16px 10px;
   position: relative;
+  flex: none;
   display: flex;
   align-items: center;
+  padding: 8px 20px 12px;
 }
 
 .sidebar-search-wrap svg {
   position: absolute;
-  left: 28px;
-  color: var(--dim-2);
+  left: 31px;
+  color: var(--ink-3);
   pointer-events: none;
 }
 
-/* Specificity note: the generic `input[type='search']` rule below is
-   (0,1,1) and outranks a bare `.sidebar-search`, which silently ate the
-   left padding and dropped the icon on top of the placeholder. Scoped
-   here to (0,2,0) so the icon well survives. */
 .sidebar-search-wrap .sidebar-search {
   width: 100%;
-  height: 38px;
-  padding: 0 12px 0 36px;
-  border-radius: 10px;
-  border: 1px solid var(--edge-strong);
-  background: var(--inset-bg);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 13px;
-  outline: none;
+  padding-left: 33px;
 }
 
-.sidebar-search:focus {
-  border-color: var(--accent-dim);
+input[type='search']::-webkit-search-cancel-button {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--clear) center / contain no-repeat;
+  cursor: pointer;
 }
 
 .session-list {
-  flex: 1 1 auto;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 4px 10px 10px;
+  /* Rows run to the sidebar's edge, so the open one joins the page. */
+  padding: 0 0 44px 8px;
+  /* The list dissolves into the footer instead of slicing a row in half. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 60px), transparent);
 }
 
 .side-label {
-  padding: 8px 8px 6px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--dim-2);
+  padding: 16px 12px 4px;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+  font-weight: 500;
+}
+
+.side-count {
+  padding: 4px 12px 0;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
 }
 
 .side-empty {
-  padding: 10px;
-  font-size: 13px;
+  padding: 12px 12px 0 12px;
+  line-height: 1.35;
+}
+
+.sidebar .banner {
+  flex-wrap: wrap;
+  margin: 8px 12px 8px 4px;
+}
+
+.sidebar .banner > span {
+  flex: 1 1 calc(100% - 30px);
+  min-width: 0;
+}
+
+.sidebar .banner .btn {
+  margin-left: 30px;
 }
 
 .side-item {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 3px 0;
-  border-radius: 11px;
-  transition: background 0.12s;
+  border-radius: 7px 0 0 7px;
 }
 
 .side-item:hover {
-  background: var(--hover);
+  background: var(--wash);
 }
 
+/* The open meeting is the same sheet as the page beside it. */
 .side-item.active {
-  background: linear-gradient(
-    90deg,
-    var(--accent-soft),
-    color-mix(in srgb, var(--accent) 3%, transparent)
-  );
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-.side-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 9px;
-  bottom: 9px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--accent);
+  background: var(--paper);
 }
 
 .side-item-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  align-items: flex-start;
-  background: none;
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
   border: none;
-  font: inherit;
-  color: var(--text);
+  background: none;
   text-align: left;
-  padding: 10px 4px 10px 14px;
   cursor: pointer;
 }
 
+.side-item-main:focus-visible {
+  outline-offset: -2px;
+}
+
 .side-title {
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  color: color-mix(in srgb, var(--text) 82%, transparent);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
+  font-weight: 500;
+  line-height: 1.22;
 }
 
-.side-item.active .side-title {
-  color: var(--text-strong);
+.side-title .rec-dot {
+  width: 9px;
+  height: 9px;
+  margin-right: 3px;
+  vertical-align: 0.5px;
 }
 
+/* The room on the right is the actions'. Reserved on every row, so they sit
+   beside the meta line and never land on a title. */
 .side-meta {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--dim-2);
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 2px;
+  padding-right: 54px;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .side-actions {
+  position: absolute;
+  bottom: 5px;
+  right: 6px;
   display: none;
   gap: 2px;
-  flex: 0 0 auto;
-  padding-right: 8px;
-}
-
-.side-item:hover .side-actions,
-.side-item.active .side-actions {
-  display: flex;
 }
 
 .side-actions .icon-btn {
@@ -438,608 +624,704 @@ a {
   height: 24px;
 }
 
-.rename-input {
-  flex: 1;
-  margin: 6px 8px;
+.side-item:hover .side-actions,
+.side-actions:focus-within {
+  display: flex;
 }
 
-.side-error {
-  margin: 6px 16px;
-  font-size: 12px;
-  color: var(--error);
+/* With no hover to reveal them, they have to be there already. */
+@media (hover: none) {
+  .side-actions {
+    display: flex;
+  }
+}
+
+.rename-input {
+  width: calc(100% - 10px);
+  margin: 4px 0 4px 2px;
+}
+
+.show-more {
+  margin: 8px 0 0 4px;
 }
 
 .sidebar-bottom {
-  flex: 0 0 auto;
-  padding: 12px 16px 14px;
-  border-top: 1px solid var(--edge);
-  background: rgba(0, 0, 0, 0.16);
+  flex: none;
+  padding: 2px 20px 10px;
 }
 
-[data-theme='light'] .sidebar-bottom {
-  background: rgba(15, 20, 30, 0.03);
-}
-
+/* One line, in sight of Start: who transcribes, and which side of the line
+   your audio ends up on. Same marks as the ledger. */
 .provider-pick-wrap {
-  position: relative;
-  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
-.provider-pick-wrap > svg {
+.where-mark {
+  position: relative;
+  flex: none;
+  width: 22px;
+  height: 18px;
+}
+
+.where-mark::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--rule);
+}
+
+.where-mark i {
   position: absolute;
   top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: var(--dim-2);
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: var(--ink);
 }
 
-.provider-pick-wrap > svg.left {
-  left: 12px;
+.where-mark.local i {
+  left: 1px;
 }
 
-.provider-pick-wrap > svg.right {
-  right: 12px;
+.where-mark.cloud i {
+  right: 0;
+}
+
+.where-mark.unknown {
+  display: none;
+}
+
+/* In a row of the list: the same mark, kept to the size of the text beside it. */
+.where-mark.small {
+  align-self: center;
+  width: 17px;
+  height: 13px;
+}
+
+.where-mark.small i {
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  background: var(--ink-3);
+}
+
+.where-mark.small.cloud i {
+  background: var(--ink);
+}
+
+.where-mark.small.cloud::after {
+  left: 2px;
+  right: 3px;
+  height: 1.5px;
+  margin-top: -0.75px;
+}
+
+.where-mark.small::before {
+  width: 1.5px;
+  margin-left: -0.75px;
+}
+
+.meta-item.where {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.where-mark.cloud::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  right: 4px;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--ink);
 }
 
 .provider-pick {
-  width: 100%;
-  height: 40px;
-  padding: 0 34px;
-  border-radius: 10px;
-  border: 1px solid var(--edge-strong);
-  background: var(--inset-bg);
-  color: var(--text-soft);
-  font-family: var(--mono);
-  font-size: 12px;
-  outline: none;
-  appearance: none;
-  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 20px 0 0;
+  border: none;
+  background-color: transparent;
+  background-position: right 2px center;
+  color: var(--ink-2);
+  font-size: 15.5px;
 }
 
 .record-btn {
-  width: 100%;
-  height: 46px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
-  color: #fff;
-  font-family: var(--sans);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 17.5px;
+  font-weight: 700;
   cursor: pointer;
-  box-shadow:
-    0 8px 22px -6px var(--accent-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .record-btn:hover:not(:disabled) {
-  filter: brightness(1.06);
-  transform: translateY(-1px);
+  background: var(--ink-2);
+  border-color: var(--ink-2);
 }
 
 .record-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: default;
 }
 
-.record-btn .rec-pulse {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: #fff;
-  box-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-  animation: auPulse 1.6s ease-in-out infinite;
+/* Hollow: nothing is being recorded yet. */
+.rec-ring {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+/* Pressed, and not recording: the ring stays hollow. How far along it is
+   shows on the line, and this is the way out. */
+.record-btn.pending,
+.record-btn.pending:disabled {
+  border-color: var(--edge);
+  background: transparent;
+  color: var(--ink);
+  opacity: 1;
+}
+
+.record-btn.pending:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--wash);
+}
+
+.record-btn.pending .rec-ring {
+  display: none;
+}
+
+.record-short {
+  display: none;
 }
 
 .record-btn.stop {
-  background: var(--inset-bg);
-  color: var(--accent-text);
-  border: 1px solid var(--accent-dim);
-  box-shadow: none;
+  background: transparent;
+  color: var(--ink);
+}
+
+.record-btn.stop:hover:not(:disabled) {
+  background: var(--wash);
+  border-color: var(--ink);
+}
+
+.stop-mark {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--rec);
 }
 
 .side-nav {
   display: flex;
-  align-items: stretch;
-  gap: 6px;
-  margin-top: 14px;
-  font-size: 11px;
-  color: var(--dim);
+  justify-content: space-between;
+  margin-top: 8px;
 }
 
 .side-nav-btn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  padding: 8px 4px 7px;
-  border-radius: 9px;
-  cursor: pointer;
-  background: none;
+  padding: 6px 2px;
   border: none;
-  font: inherit;
-  font-size: inherit;
-  color: inherit;
-}
-
-.side-nav-btn svg {
-  color: var(--dim-2);
-}
-
-.side-nav-btn:hover svg,
-.side-nav-btn.active svg {
-  color: currentColor;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
 }
 
 .side-nav-btn:hover {
-  background: var(--hover);
-  color: var(--text);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .side-nav-btn.active {
-  color: var(--accent-text);
-  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 700;
 }
 
-/* ---------- shared controls ---------- */
+/* The collapsed rail: the way back, and the one button that can't wait. */
+.sidebar.collapsed {
+  width: 60px;
+  flex: 0 0 60px;
+  align-items: center;
+  gap: 10px;
+  padding-top: 14px;
+}
 
-.btn {
-  font: inherit;
-  font-weight: 500;
-  padding: 8px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--edge-strong);
-  background: var(--card-grad);
-  color: var(--text);
+.sidebar.collapsed .brand,
+.sidebar.collapsed .record-label {
+  display: none;
+}
+
+.sidebar.collapsed .record-btn {
+  flex-direction: column;
+  gap: 1px;
+  width: 48px;
+  min-height: 50px;
+  padding: 0;
+}
+
+.sidebar.collapsed .record-short {
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.1;
+}
+
+.sidebar.collapsed .banner {
+  margin: 0;
+  width: 100%;
+  padding: 6px;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+}
+
+.sidebar.collapsed .banner::before {
+  display: none;
+}
+
+/* ---------- the tape ---------- */
+
+/* Time runs down the window, in the direction you read. Them is left of the
+   rule, You right of it. One encoding everywhere: a block is a stretch of
+   speech, its length is time, and its width is how much of that stretch was
+   talk. Live is the same map, unfinished, with a pen at the end of it. */
+.session-tape {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-tape::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--rule-x);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--rule);
+}
+
+/* Recording starting is the one moment that gets motion: the line draws down
+   the page. After that only real audio moves. */
+.session-tape.live::before {
+  transform-origin: top;
+  animation: au-draw 800ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* A first download fills the line as the model arrives. Real progress, so it
+   may move on its own; it only eases between the once-a-second updates. */
+.session-tape.filling::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--rule-x);
+  width: 4px;
+  height: calc(100% * var(--filled, 0));
+  margin-left: -2px;
+  background: var(--ink);
+  transition: height 900ms linear;
+}
+
+/* No transcript showing, so nothing is "on screen" to frame. */
+.session-tape.no-frame .map-window {
+  display: none;
+}
+
+.tape-legend {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  right: 0;
+  height: 22px;
+  z-index: 1;
+  font-size: 17px;
+  line-height: 22px;
+}
+
+.tape-legend span {
+  position: absolute;
+  padding: 0 7px;
+}
+
+.tape-legend .them {
+  right: calc(100% - var(--rule-x));
+  font-family: var(--serif);
+  font-weight: 700;
+}
+
+.tape-legend .you {
+  left: var(--rule-x);
+  color: var(--you);
+  font-weight: 700;
+}
+
+/* A side with no device is struck out at the top of its lane. */
+.tape-legend.lost-mic .you,
+.tape-legend.lost-loopback .them {
+  color: var(--attn);
+  text-decoration: line-through;
+}
+
+.session-map {
+  position: absolute;
+  inset: 0;
+}
+
+.session-map-track {
+  position: absolute;
+  top: var(--tape-top);
+  bottom: var(--tape-bottom);
+  left: 0;
+  right: 0;
+}
+
+.map-turn {
+  position: absolute;
+  top: var(--at);
+  height: var(--span);
+  min-height: 2px;
+  width: calc(var(--lane) * (0.3 + 0.7 * var(--fill, 1)));
+  padding: 0;
+  border: none;
+  background: var(--them);
+  box-shadow: inset 0 -1px 0 var(--paper);
   cursor: pointer;
-  text-decoration: none;
-  display: inline-block;
 }
 
-.btn:hover:not(:disabled) {
-  border-color: var(--accent-dim);
+.map-turn.loopback {
+  right: calc(100% - var(--rule-x) + 4px);
 }
 
-.btn:disabled {
-  opacity: 0.45;
-  cursor: default;
+.map-turn.mic {
+  left: calc(var(--rule-x) + 4px);
+  background: var(--you-mark);
 }
 
-/* Secondary action: present, not shouting. */
-.btn.quiet {
-  padding: 6px 12px;
-  font-size: 12.5px;
-  color: var(--text-soft);
-  background: transparent;
-  border-color: var(--edge);
+.map-turn:hover {
+  z-index: 3;
+  outline: 2px solid var(--ink);
 }
 
-.btn.quiet:hover:not(:disabled) {
-  color: var(--text-strong);
-  background: var(--hover);
-  border-color: var(--edge-strong);
+.map-turn:focus-visible {
+  z-index: 3;
+  outline-offset: 1px;
 }
 
-.btn.accent {
-  border: 1px solid var(--accent-dim);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 16%, transparent),
-    color-mix(in srgb, var(--accent) 6%, transparent)
+/* You are here: a frame round the stretch the transcript has on screen, with
+   the time beside it. The strongest thing on the tape, because it's the only
+   part that answers "where am I?". */
+.map-window,
+.map-playhead,
+.map-cut {
+  position: absolute;
+  left: calc(var(--rule-x) - var(--lane) - var(--frame));
+  width: calc(2 * var(--lane) + 2 * var(--frame));
+  top: var(--at, 0);
+  pointer-events: none;
+}
+
+.map-window {
+  z-index: 2;
+  height: var(--span, 0);
+  min-height: 10px;
+  border: 2px solid var(--ink);
+  border-radius: 3px;
+  background: var(--mark-bg);
+}
+
+/* Nothing to frame until a transcript beside it reports what's on screen. */
+.map-window:not([data-at]) {
+  display: none;
+}
+
+.map-window[data-at]::after,
+.map-playhead[data-at]::before {
+  content: attr(data-at);
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 2px);
+  /* As wide as the scale, so a mark behind it can't peek out. */
+  min-width: var(--scale-w);
+  padding: 0 4px;
+  background: var(--paper);
+  text-align: right;
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: lining-nums tabular-nums;
+  transform: translateY(-50%);
+}
+
+/* One time on the line: while there's a playhead, the time is its. */
+.map-window:has(+ .map-playhead.on)::after {
+  display: none;
+}
+
+.map-playhead {
+  display: none;
+  z-index: 2;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--ink);
+}
+
+.map-playhead.on {
+  display: block;
+}
+
+.map-playhead::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 100%;
+  border: 5px solid transparent;
+  border-right-color: var(--ink);
+  border-left-width: 0;
+}
+
+.map-cut {
+  z-index: 1;
+  border-top: 2px dashed var(--attn);
+}
+
+/* The same break as a cut, on one side only, and the lane stays broken after
+   it: nothing heard from there on can look like silence. */
+.map-lost {
+  position: absolute;
+  z-index: 1;
+  top: var(--at);
+  bottom: 0;
+  width: calc(var(--lane) + 4px);
+  border-top: 2px dashed var(--attn);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--attn) 0 2px,
+    transparent 2px 7px
   );
-  color: var(--accent-text);
-  font-weight: 600;
+  pointer-events: none;
 }
 
-.btn.accent:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 26%, transparent),
-    color-mix(in srgb, var(--accent) 12%, transparent)
-  );
+.map-lost.mic {
+  left: calc(var(--rule-x) + 3px);
 }
 
-select,
-input[type='search'],
-input[type='text'],
-input[type='password'] {
-  font: inherit;
-  background: var(--inset-bg);
-  color: var(--text);
-  border: 1px solid var(--edge-strong);
-  border-radius: 10px;
-  padding: 8px 12px;
+.map-lost.loopback {
+  right: calc(100% - var(--rule-x) + 3px);
 }
 
-select:focus,
-input:focus {
-  outline: none;
-  border-color: var(--accent-dim);
+/* A hit, or a question asked, on its speaker's side, on top of the bars. */
+.map-hit {
+  position: absolute;
+  z-index: 2;
+  top: var(--at);
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--paper);
+  pointer-events: none;
 }
 
-/* The option list is OS-rendered: translucent backgrounds composite into
-   unreadable colors there, so give options solid theme colors. */
-select option {
-  background: #14171d;
-  color: #e6e9ef;
+.map-hit.loopback {
+  left: calc(var(--rule-x) - 4px - var(--lane) / 2 - 4.5px);
 }
 
-select option:disabled {
-  color: rgba(230, 233, 239, 0.35);
+.map-hit.mic {
+  left: calc(var(--rule-x) + 4px + var(--lane) / 2 - 4.5px);
 }
 
-[data-theme='light'] select option {
-  background: #ffffff;
-  color: #2a3242;
+/* The pen: the end of the tape while it's being written. */
+.map-pen {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(var(--tape-bottom) - 8px);
+  left: 0;
+  right: 0;
+  height: 8px;
 }
 
-[data-theme='light'] select option:disabled {
-  color: rgba(42, 50, 66, 0.35);
+.map-pen i {
+  position: absolute;
+  top: 0;
+  height: 8px;
+  min-width: 4px;
+  width: calc(var(--level, 0) * (var(--lane) + 22px));
+  border-radius: 2px;
 }
 
-.banner {
-  margin: 10px 40px 0;
-  padding: 9px 16px;
-  border-radius: 10px;
-  font-family: var(--mono);
-  font-size: 13px;
+.map-pen .them {
+  right: calc(100% - var(--rule-x) + 3px);
+  background: var(--ink);
 }
 
-.banner.error {
-  background: color-mix(in srgb, var(--error) 12%, transparent);
-  color: var(--error);
-  border: 1px solid color-mix(in srgb, var(--error) 40%, transparent);
+.map-pen .you {
+  left: calc(var(--rule-x) + 3px);
+  background: var(--you);
 }
 
-.banner.warn {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--warn);
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+.session-map-scale {
+  position: absolute;
+  top: var(--tape-top);
+  bottom: var(--tape-bottom);
+  left: 0;
+  width: var(--scale-w);
+  pointer-events: none;
 }
 
-.tag.warn {
-  color: var(--warn);
-  font-family: var(--mono);
-  font-size: 12px;
+.session-map-scale span {
+  position: absolute;
+  top: var(--at);
+  right: 4px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+  line-height: 1;
+  font-variant-numeric: lining-nums tabular-nums;
+  transform: translateY(-50%);
 }
 
-/* ---------- session view ---------- */
+.session-map-scale .end {
+  transform: translateY(-100%);
+}
+
+.session-map-scale .cut {
+  color: var(--attn);
+  font-weight: 700;
+}
+
+/* The line is the scrubber: anywhere on it is a moment. */
+.session-map-track {
+  cursor: pointer;
+}
+
+/* ---------- session ---------- */
 
 .session-view {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--tape-w) minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.session-view > *,
+.session-view > .status-slot > * {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.session-tape {
+  grid-column: 1 !important;
+  grid-row: 1 / 5;
 }
 
 .session-header {
-  flex: 0 0 auto;
-  padding: 26px var(--gutter) 0;
+  grid-row: 1;
+  padding: 30px var(--pad) 0 calc(var(--lead) + var(--hang));
 }
 
-/* Every header block resolves to the shared reading column, so the title,
-   the meta row, the tabs, and the transcript below them share one left
-   edge instead of the header sitting 80 px to the left of the document. */
 .session-header > * {
   max-width: var(--measure);
-  margin-left: auto;
-  margin-right: auto;
+}
+
+.back-link {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--ink-2);
+  font-size: var(--t-meta);
+}
+
+.session-title {
+  font-family: var(--serif);
+  font-size: var(--t-h1);
+  font-weight: 800;
+  line-height: 1.12;
 }
 
 .session-title-row {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
 }
 
-.session-title {
-  margin: 0;
-  font-size: 27px;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: var(--text-strong);
+.session-title-btn {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
   cursor: text;
-  border-radius: 8px;
-  padding: 2px 8px;
-  margin-left: -8px;
-}
-
-.session-title:hover {
-  background: var(--hover);
 }
 
 .title-input {
-  font-size: 24px;
-  font-weight: 700;
-  width: min(60ch, 100%);
+  width: 100%;
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 800;
 }
 
 .rec {
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 600;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.rec-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent-glow);
-  animation: auPulse 1.4s ease-in-out infinite;
-  display: inline-block;
-  flex: 0 0 auto;
+  gap: 8px;
+  color: var(--rec-text);
+  font-size: 17.5px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .session-meta-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
-  margin-top: 10px;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--dim);
-  min-height: 26px;
+  gap: 2px 18px;
+  min-height: 38px;
+  margin-top: 6px;
+  color: var(--ink-2);
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
-.meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.session-title-row + .session-meta-row:empty {
+  display: none;
 }
 
-.meta-chip {
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: var(--hover);
-  border: 1px solid var(--edge);
-  color: var(--dim);
-}
-
-/* The one action in a row of metadata: give it a button's affordance
-   instead of dressing it as accent-colored prose. */
 .header-export {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  min-height: 32px;
+  padding: 0 4px;
 }
 
 .header-meters {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-left: 18px;
-  width: 220px;
-}
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin-top: 20px;
-  border-bottom: 1px solid var(--edge);
-}
-
-.tab {
-  position: relative;
-  padding: 11px 16px 13px;
-  border: none;
-  background: transparent;
-  font-family: var(--sans);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  cursor: pointer;
-  color: var(--dim);
-}
-
-.tab:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.tab.active {
-  color: var(--text-strong);
-  font-weight: 600;
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
-.tab:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* ---------- transcript document ---------- */
-
-.doc-wrap {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-.doc-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px var(--gutter) 96px;
-  /* Reserve the scrollbar on both sides so the document stays centered on
-     the same axis as the header whether or not it scrolls. */
-  scrollbar-gutter: stable both-edges;
-}
-
-.doc-inner {
-  max-width: var(--measure);
-  margin: 0 auto;
-  animation: auRise 0.28s ease both;
-}
-
-.turn {
-  position: relative;
-  display: flex;
-  gap: 18px;
-  padding: 12px 14px 12px 18px;
-  border-radius: 12px;
-}
-
-.turn:hover {
-  background: var(--hover);
-}
-
-/* Speaker rail: each turn carries its voice's color down the left edge,
-   so a long transcript scans as a two-color conversation. */
-.turn::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 12px;
-  bottom: 12px;
-  width: 2px;
-  border-radius: 999px;
-  opacity: 0.4;
-}
-
-.turn.mic::before {
-  background: var(--you);
-}
-
-.turn.loopback::before {
-  background: var(--them);
-}
-
-.turn:hover::before {
-  opacity: 0.9;
-}
-
-.turn-side {
-  flex: 0 0 92px;
-  padding-top: 2px;
-}
-
-.turn-speaker {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.turn-speaker.mic {
-  color: var(--you);
-}
-
-.turn-speaker.loopback {
-  color: var(--them);
-}
-
-.turn-time {
-  display: block;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--dim-2);
-  margin-top: 2px;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  border-radius: 5px;
-}
-
-.turn-time:hover:not(:disabled) {
-  color: var(--accent-text);
-}
-
-.turn-time:disabled {
-  cursor: default;
-}
-
-.turn-text {
-  margin: 0;
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 14.5px;
-  line-height: 1.62;
-  color: var(--text-soft);
-}
-
-.seg.partial {
-  color: var(--dim);
-  font-style: italic;
-}
-
-.seg.partial::after {
-  content: '▌';
-  color: var(--accent);
-  animation: auPulse 1s ease-in-out infinite;
-  margin-left: 2px;
-  font-style: normal;
-}
-
-.doc-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-align: center;
-  padding: 0 40px;
-}
-
-/* ---------- audio bar ---------- */
-
-.audio-bar {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 18px;
-  width: min(640px, calc(100% - 80px));
-  display: flex;
-  align-items: center;
   gap: 14px;
-  background: var(--card-grad);
-  border: 1px solid var(--edge-strong);
-  border-radius: 14px;
-  padding: 10px 16px;
-  box-shadow: var(--card-shadow);
-  backdrop-filter: blur(10px);
 }
-
-.audio-play {
-  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
-  color: #fff;
-  border: none;
-  border-radius: 50%;
-  width: 34px;
-  height: 34px;
-  font-size: 12px;
-  cursor: pointer;
-  flex-shrink: 0;
-  box-shadow: 0 4px 14px -4px var(--accent-glow);
-}
-
-.audio-bar input[type='range'] {
-  flex: 1;
-  accent-color: var(--accent);
-}
-
-.audio-time {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--dim);
-  white-space: nowrap;
-}
-
-/* ---------- VU ---------- */
 
 .vu {
   display: flex;
@@ -1048,10 +1330,7 @@ select option:disabled {
 }
 
 .vu-label {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  width: 36px;
-  text-align: right;
+  font-weight: 700;
 }
 
 .vu-label.mic {
@@ -1059,768 +1338,592 @@ select option:disabled {
 }
 
 .vu-label.loopback {
-  color: var(--them);
+  font-family: var(--serif);
 }
 
 .vu-track {
-  flex: 1;
+  width: 60px;
   height: 6px;
-  background: var(--inset-bg);
-  border: 1px solid var(--edge);
-  border-radius: 4px;
+  border-radius: 3px;
+  background: var(--wash);
   overflow: hidden;
 }
 
 .vu-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--ok-core), var(--warn));
-  transition: width 90ms linear;
+  background: var(--ink-2);
 }
 
-/* ---------- summary tab ---------- */
+.tabs {
+  display: flex;
+  gap: 24px;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--hair);
+}
 
-.summary-pane {
-  flex: 1;
-  min-height: 0;
+.tab {
+  margin-bottom: -1px;
+  padding: 8px 0 9px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-2);
+  font-size: 17px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.tab.active {
+  border-bottom-color: var(--ink);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.tab:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.session-view .banner {
+  justify-self: start;
+  max-width: var(--measure);
+  margin: 12px var(--pad) 6px calc(var(--lead) + var(--hang));
+}
+
+/* ---------- the transcript ---------- */
+
+.doc-wrap {
+  grid-row: 4;
   display: flex;
   flex-direction: column;
-  padding: 24px var(--gutter) 40px;
-  gap: 18px;
-  max-width: calc(var(--measure) + var(--gutter) * 2);
-  margin: 0 auto;
-  width: 100%;
-  animation: auRise 0.28s ease both;
+  min-height: 0;
+}
+
+.doc-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--pad) 0 0;
+  /* Text leaves under the tabs and over the player instead of being sliced. */
+  mask-image: linear-gradient(to bottom, transparent, #000 16px, #000 calc(100% - 22px), transparent);
+}
+
+/* No player beneath a live transcript, and the newest words must never be
+   dimmed by anything but being new. */
+.session-tape.live ~ .doc-wrap .doc-scroll {
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
+}
+
+.doc-inner {
+  max-width: var(--col);
+  margin-left: var(--lead);
+}
+
+.doc-empty {
+  flex: 1;
+  padding: 40px var(--pad) 0 calc(var(--lead) + var(--hang));
+  color: var(--ink-2);
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.5;
+}
+
+.doc-empty p {
+  max-width: 34em;
+}
+
+.doc-empty .dim {
+  color: var(--ink-3);
+}
+
+.doc-empty strong {
+  font-weight: 700;
+}
+
+.doc-empty-body {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  max-width: var(--measure);
+}
+
+.doc-empty .btn {
+  min-height: 32px;
+  margin-top: 2px;
+  padding: 0 11px;
+  font-family: var(--sans);
+  font-size: var(--t-ui);
+}
+
+/* Who is talking has to survive greyscale: indent, typeface, and the name.
+   The text's left edge is the shape of the conversation. */
+.turn {
+  --turn-gap: 24px;
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--hang) minmax(0, 1fr);
+  padding-top: var(--turn-gap);
+}
+
+.turn.cont {
+  --turn-gap: 10px;
+}
+
+.turn-side {
+  display: contents;
+}
+
+.turn-time {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  align-self: baseline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.turn-time:not(:disabled) {
+  cursor: pointer;
+}
+
+.turn-time:not(:disabled):hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.turn-speaker {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: baseline;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.turn-speaker.loopback {
+  font-family: var(--serif);
+}
+
+.turn-speaker.mic {
+  color: var(--you);
+}
+
+.turn-text {
+  grid-column: 2;
+  grid-row: 2;
+  overflow-wrap: break-word;
+  font-variant-numeric: oldstyle-nums;
+}
+
+.turn.loopback .turn-text {
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.55;
+}
+
+.turn.mic .turn-text {
+  font-size: 19.5px;
+  line-height: 1.5;
+}
+
+.turn.mic .turn-speaker,
+.turn.mic .turn-text {
+  padding-left: var(--indent);
+}
+
+.turn.cont .turn-speaker {
+  display: none;
+}
+
+.turn.cont .turn-time {
+  grid-row: 2;
+}
+
+/* The line a search opened on: the time goes solid, and the text answers the
+   click once, so the eye lands there. */
+.turn.found .turn-time {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.turn.found .turn-text {
+  animation: au-found 2.2s ease-out;
+}
+
+/* Being played: a rule beside the whole turn, its name included, the same ink
+   as the playhead on the line. */
+.turn.current .turn-time {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.turn.current::before {
+  content: '';
+  position: absolute;
+  top: var(--turn-gap);
+  bottom: 0;
+  left: calc(var(--hang) - 11px);
+  width: 3px;
+  background: var(--ink);
+}
+
+.turn.current.mic::before {
+  left: calc(var(--hang) + var(--indent) - 11px);
+}
+
+@keyframes au-found {
+  from {
+    background: var(--mark-bg);
+    box-shadow: 0 0 0 6px var(--mark-bg);
+  }
+}
+
+/* Words still settling. Dimmer, with the pen tip at the end of the line. */
+.seg.partial {
+  color: var(--ink-3);
+}
+
+.seg.partial::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-left: 1px;
+  background: var(--rec);
+  vertical-align: -0.12em;
+}
+
+.audio-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: var(--measure);
+  margin: 0 var(--pad) 0 calc(var(--lead) + var(--hang));
+  padding: 10px 0 14px;
+  border-top: 1px solid var(--hair);
+}
+
+.audio-play {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+.audio-play:hover {
+  background: var(--ink-2);
+}
+
+.audio-time {
+  flex: none;
+  color: var(--ink-2);
+  font-size: var(--t-meta);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.audio-error:empty {
+  display: none;
+}
+
+.audio-hint {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+.follow-btn {
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0 8px;
+}
+
+/* The line beside the text is the timeline here. The range stays for the
+   keyboard, and shows itself when it gets focus. */
+@media (min-width: 641px) {
+  .audio-bar input[type='range']:not(:focus-visible) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--rule);
+}
+
+input[type='range']::-moz-range-track {
+  height: 2px;
+  background: var(--rule);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+/* ---------- summaries and asks ---------- */
+
+.summary-pane {
+  grid-row: 4;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .summary-controls {
   display: flex;
-  gap: 18px;
-  align-items: flex-end;
   flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hair);
 }
 
-/* A select alone doesn't say what it selects. The label carries that, so
-   the control can shrink to the size of its content. */
 .control {
+  flex: 1 1 150px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
 }
 
-.control > span {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--dim-2);
+.control select {
+  width: 100%;
+  color: var(--ink);
+  font-size: var(--t-ui);
 }
 
-.summary-controls select {
-  height: 36px;
-  min-width: 150px;
-  padding: 0 12px;
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.summary-controls .btn.accent {
-  height: 36px;
-  padding: 0 16px;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.summary-controls .btn {
+  flex: none;
+  white-space: nowrap;
 }
 
 .summary-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+  padding: 0 var(--pad) 40px 0;
+}
+
+.summary-scroll > * {
+  max-width: var(--measure);
+  margin-left: calc(var(--lead) + var(--hang));
+}
+
+.summary-scroll > .note {
+  margin-top: 18px;
+}
+
+.summary-scroll > .summary-check {
+  margin-top: 22px;
+}
+
+.summary-scroll > .show-more {
+  display: block;
+  margin-top: 20px;
 }
 
 .summary {
-  border-radius: 16px;
-  border: 1px solid var(--edge-strong);
-  background: var(--card-grad);
-  box-shadow: var(--card-shadow);
-  overflow: hidden;
+  padding-top: 24px;
 }
 
-.summary-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 22px;
-  border-bottom: 1px solid var(--edge);
+.summary + .summary {
+  margin-top: 30px;
+  border-top: 1px solid var(--hair);
 }
 
-/* Red means "recording" everywhere else in this product, so a summary
-   header does not get to borrow it. The template name carries the weight. */
-.summary-title {
+p.summary-head {
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+div.summary-head {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-strong);
-  letter-spacing: 0.01em;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+.summary-title::first-letter {
+  text-transform: uppercase;
 }
 
 .summary-model {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--dim);
-  padding: 4px 9px;
-  border-radius: 6px;
-  background: var(--hover);
-  border: 1px solid var(--edge);
+  font-variant-numeric: lining-nums;
 }
 
-.summary-body {
-  margin: 0;
-  padding: 24px 26px 26px;
-  font-size: 14px;
-  line-height: 1.62;
-  color: var(--text-soft);
-  word-break: break-word;
+.ask-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
 }
 
-.md p {
-  margin: 0 0 14px;
-  font-size: 15px;
-  line-height: 1.6;
-  letter-spacing: -0.005em;
-  color: color-mix(in srgb, var(--text) 96%, transparent);
+/* In an ask the question is your own voice, and the answer is read like the
+   rest of the record. */
+.ask .summary-title {
+  flex: 1 1 60%;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 500;
+  line-height: 1.3;
 }
 
-.md p:last-child {
-  margin-bottom: 0;
+/* Asked at this moment in the meeting: hung in the margin like any other time. */
+.ask .turn-time {
+  position: absolute;
+  margin-left: calc(-1 * var(--hang));
+  margin-top: 5px;
+}
+
+.summary-body > .note {
+  margin-top: 10px;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+.md {
+  margin-top: 6px;
+  font-family: var(--serif);
+  font-size: var(--t-read);
+  line-height: 1.55;
+  font-variant-numeric: oldstyle-nums;
+}
+
+.md p,
+.md ul,
+.md ol {
+  margin: 0 0 12px;
 }
 
 .md ul,
 .md ol {
-  margin: 6px 0 14px;
-  padding-left: 4px;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  padding-left: 1.3em;
 }
 
-.md ol {
-  padding-left: 22px;
-  list-style: decimal;
+.md li {
+  margin-bottom: 5px;
+  padding-left: 3px;
 }
 
-.md ul > li {
-  position: relative;
-  padding-left: 18px;
-}
-
-.md ul > li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 9px;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--dim);
-  opacity: 0.7;
-}
-
-.md-checks > li {
-  padding-left: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.md-checks > li::before {
-  display: none;
-}
-
-/* Action items read as a checklist, so the box should look like something
-   the export carried over — not a raw form control. */
-.md-checks input {
-  appearance: none;
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  border: 1px solid var(--edge-strong);
-  border-radius: 4px;
-  background: var(--inset-bg);
-  position: relative;
-  top: 2px;
-}
-
-.md-checks input:checked {
-  border-color: var(--ok-core);
-  background: color-mix(in srgb, var(--ok-core) 18%, transparent);
-}
-
-.md-checks input:checked::after {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 1px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--ok);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-
-.md .md-h {
-  font-weight: 700;
-  margin: 16px 0 6px;
-  color: var(--text-strong);
-}
-
-.md .md-h2 {
-  font-size: 15px;
-  letter-spacing: -0.015em;
-  color: var(--text-strong);
-}
-
-.md .md-h3,
-.md .md-h4 {
-  font-size: 12px;
-  color: var(--dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.md li::marker {
+  color: var(--ink-3);
 }
 
 .md strong {
-  color: var(--text-strong);
   font-weight: 700;
 }
 
 .md code {
-  background: var(--hover);
-  border: 1px solid var(--edge);
-  border-radius: 5px;
-  padding: 1px 5px;
-  font-family: var(--mono);
-  font-size: 0.9em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--sheet);
+  font-size: 0.78em;
 }
 
-/* ---------- settings & about ---------- */
-
-.settings,
-.about {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 760px;
-  width: 100%;
-  margin: 0 auto;
-  overflow-y: auto;
-  padding: 76px 40px 40px;
-  animation: auRise 0.28s ease both;
+.md-h {
+  font-weight: 800;
+  line-height: 1.2;
 }
 
-.panel {
-  background: var(--card-grad);
-  border: 1px solid var(--edge);
-  border-radius: 16px;
-  padding: 18px 22px;
-  box-shadow: var(--card-shadow);
+.md-h1 {
+  margin: 4px 0 10px;
+  font-size: 28px;
 }
 
-.settings h2,
-.about h2 {
-  margin: 0 0 14px;
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--dim-2);
-  font-weight: 600;
+.md-h2 {
+  margin: 24px 0 8px;
+  font-size: 23px;
 }
 
-.about h2 {
-  font-family: var(--mono);
-  font-size: 18px;
-  text-transform: none;
-  letter-spacing: -0.02em;
-  color: var(--text-strong);
-}
-
-.about p {
-  line-height: 1.7;
-}
-
-.settings label {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 7px 0;
-}
-
-.settings label > span:first-child {
-  flex: 0 0 190px;
-  font-size: 13px;
-}
-
-.settings select,
-.settings input[type='text'] {
-  flex: 1;
-  max-width: 380px;
-}
-
-.theme-toggle {
-  display: flex;
-  gap: 8px;
-}
-
-.saved {
-  color: var(--ok);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-.note {
-  font-size: 12.5px;
-  margin: 8px 0 0;
-}
-
-.keys > span {
-  display: block;
-  padding: 6px 0;
-  font-size: 13px;
-}
-
-.keys ul {
-  list-style: none;
-  margin: 4px 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.keys li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--mono);
-  font-size: 13px;
-}
-
-.key-id {
-  flex: 0 0 130px;
-}
-
-.dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-}
-
-.dot.ok {
-  background: var(--ok-core);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--ok-core) 70%, transparent);
-}
-
-.dot.missing {
-  background: var(--error);
-}
-
-.toggle {
-  cursor: pointer;
-}
-
-.toggle input {
-  accent-color: var(--accent);
-  width: 16px;
-  height: 16px;
-}
-
-/* ---------- secret field ---------- */
-
-.secret-field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 11px 0;
-  border-top: 1px solid var(--edge);
-}
-
-.keys .secret-field:first-of-type,
-.ob-keys .secret-field:first-of-type {
-  border-top: none;
-}
-
-.secret-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.secret-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-strong);
-}
-
-.secret-use {
-  font-size: 12px;
-}
-
-.secret-remove {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--dim);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
-}
-
-.secret-remove:hover:not(:disabled) {
-  color: var(--error);
-  background: color-mix(in srgb, var(--error) 12%, transparent);
-}
-
-.secret-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.secret-row input {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-
-.secret-row .btn.accent {
-  flex: 0 0 auto;
-}
-
-.secret-err {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--error);
-}
-
-/* ---------- onboarding ---------- */
-
-.onboarding {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.onboarding-card {
-  width: 100%;
-  max-width: 560px;
-  background: var(--card-grad);
-  border: 1px solid var(--edge-strong);
-  border-radius: 20px;
-  box-shadow: var(--card-shadow);
-  padding: 30px 34px 26px;
-  animation: auRise 0.3s ease both;
-}
-
-.onboarding .banner {
-  margin: 0 0 4px;
-}
-
-.steps {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  margin-bottom: 22px;
-}
-
-.step-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--edge-strong);
-  transition:
-    background 0.2s,
-    width 0.2s;
-}
-
-.step-dot.done {
-  background: var(--accent-dim);
-}
-
-.step-dot.active {
-  width: 22px;
-  background: var(--accent);
-  box-shadow: 0 0 10px var(--accent-glow);
-}
-
-.ob-step {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  animation: auRise 0.24s ease both;
-}
-
-.ob-step h1 {
-  margin: 0;
-  font-family: var(--mono);
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--text-strong);
-}
-
-.ob-step h2 {
-  margin: 0;
-  font-size: 20px;
+.md-h3,
+.md-h4 {
+  margin: 20px 0 6px;
+  font-size: var(--t-read);
   font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-strong);
 }
 
-.ob-step p {
-  margin: 0;
-  line-height: 1.65;
-  max-width: 52ch;
+.md-checks {
+  padding-left: 0 !important;
+  list-style: none;
 }
 
-.ob-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.md-checks li {
+  padding-left: 0;
 }
 
-.ob-field > span {
-  font-size: 13px;
-  color: var(--text-soft);
+.md-checks input {
+  margin-right: 4px;
+  vertical-align: -2px;
 }
 
-.ob-field select {
-  width: 100%;
+.ask-screen {
+  margin-top: 8px;
+  font-family: var(--sans);
+  font-size: var(--t-ui);
+  color: var(--ink-2);
 }
 
-.onboarding-nav {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 10px;
-}
-
-.onboarding-nav .btn.accent {
-  margin-left: auto;
-}
-
-.btn.subtle {
-  background: transparent;
-  border-color: var(--edge-strong);
-  color: var(--dim);
-}
-
-.btn.subtle:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--hover);
-}
-
-.choice-cards {
-  display: flex;
-  gap: 12px;
-}
-
-.choice-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  text-align: left;
-  padding: 16px;
-  border-radius: 14px;
-  border: 1px solid var(--edge-strong);
-  background: var(--inset-bg);
-  color: var(--text);
+.ask-screen summary {
   cursor: pointer;
-  font: inherit;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
 }
 
-.choice-card:hover {
-  border-color: var(--accent-dim);
-}
-
-.choice-card.selected {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent-dim);
-}
-
-.choice-card .dim {
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.choice-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-strong);
-}
-
-.ob-keys {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-/* ---------- diagnostics (About) ---------- */
-
-.diag-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 6px;
-}
-
-.diag-row .mono {
-  font-size: 12px;
-}
-
-.diag-list {
-  list-style: none;
-  margin: 14px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.diag-list li {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 12px;
-  align-items: baseline;
-  padding: 8px 0;
-  border-top: 1px solid var(--edge);
-  font-size: 13px;
-}
-
-.diag-when {
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.diag-msg {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-soft);
-}
-
-.diag-at {
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-/* ---------- egress ledger ---------- */
-
-.egress-headline {
-  font-size: 17px;
-  line-height: 1.55;
-  letter-spacing: -0.01em;
-  color: var(--text);
-}
-
-.egress-headline.ok {
-  color: var(--ok);
-}
-
-.egress-headline strong {
-  color: var(--text-strong);
-}
-
-.egress-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.egress-row {
-  display: grid;
-  grid-template-columns: 62px 74px 1fr auto auto;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 2px;
-  border-top: 1px solid var(--edge);
-  font-size: 13px;
-}
-
-.egress-row:first-child {
-  border-top: none;
-}
-
-.egress-badge {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-align: center;
-  padding: 3px 0;
+.ask-screen pre {
+  overflow-x: auto;
+  margin: 8px 0 0;
+  padding: 10px 12px;
   border-radius: 6px;
-}
-
-.egress-badge.cloud {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
-}
-
-.egress-badge.local {
-  color: var(--ok);
-  background: color-mix(in srgb, var(--ok-core) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ok-core) 30%, transparent);
-}
-
-/* An agent read the transcript. Neutral, not amber: amber means Auricle
-   itself sent data somewhere and can name the host. Here it only knows a
-   local process read, so the headline carries the caveat, not the badge. */
-.egress-badge.agent {
-  color: var(--text-soft);
-  background: color-mix(in srgb, var(--text-soft) 10%, transparent);
-  border: 1px solid var(--edge-strong);
-}
-
-.egress-kind {
-  font-weight: 600;
-  color: var(--text-soft);
-}
-
-.egress-dest {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.egress-size {
-  font-size: 12px;
-  text-align: right;
-}
-
-.egress-time {
-  font-size: 11.5px;
-  white-space: nowrap;
+  background: var(--sheet);
+  font-family: var(--mono);
+  font-size: 14px;
+  white-space: pre-wrap;
 }
 
 /* ---------- home ---------- */
@@ -1828,312 +1931,1647 @@ select option:disabled {
 .home {
   flex: 1;
   min-height: 0;
+  display: grid;
+  grid-template-columns: var(--tape-w) minmax(0, 1fr);
+}
+
+.home-scroll {
+  grid-column: 2;
+  min-width: 0;
   overflow-y: auto;
-  display: flex;
-  justify-content: center;
+  padding: 0 var(--pad) 40px 0;
 }
 
 .home-inner {
-  width: min(680px, calc(100% - 80px));
-  margin: auto;
-  padding: 48px 0;
-  animation: auRise 0.3s ease both;
+  max-width: var(--measure);
+  margin-left: calc(var(--lead) + var(--hang));
+  padding-top: 88px;
 }
 
-.home-brand {
-  margin: 0;
-  font-family: var(--mono);
-  font-size: 40px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  color: var(--text-strong);
-}
-
-.home-tagline {
-  margin: 6px 0 26px;
-  font-size: 15px;
-  color: var(--dim);
-}
-
-.duet-motif {
-  display: block;
-  max-width: 100%;
-  margin-bottom: 26px;
-}
-
-.duet-line {
-  stroke: var(--dim-2);
-  stroke-width: 1;
-  opacity: 0.5;
-}
-
-.duet-them {
-  fill: var(--them);
-}
-
-.duet-you {
-  fill: var(--you);
-}
-
-.home-model {
-  margin: 0 0 34px;
-  max-width: 56ch;
-  line-height: 1.7;
-  color: var(--text-soft);
-}
-
-.home-model strong {
-  color: var(--text-strong);
-}
-
-.voice-you {
-  color: var(--you) !important;
-}
-
-.voice-them {
-  color: var(--them) !important;
-}
-
-.home-rows {
-  display: flex;
-  flex-direction: column;
-}
-
-.home-row {
+/* The product's own form, teaching the model: a real exchange, large. */
+.exchange {
   display: grid;
-  grid-template-columns: 118px 1fr;
-  gap: 16px;
-  align-items: baseline;
-  padding: 14px 0;
-  border-top: 1px solid var(--edge);
+  gap: 18px;
 }
 
-.home-eyebrow {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--dim-2);
+.exchange-line {
+  line-height: 1.25;
 }
 
-.home-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ready-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--dim);
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--edge);
-  background: var(--inset-bg);
-}
-
-.ready-chip.ok {
-  color: var(--text-soft);
-  border-color: var(--edge-strong);
-}
-
-.ready-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--dim-2);
-  opacity: 0.5;
-}
-
-.ready-chip.ok .ready-dot {
-  background: var(--ok-core);
-  opacity: 1;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--ok-core) 70%, transparent);
-}
-
-.ready-model {
-  color: var(--dim-2);
-  font-size: 10.5px;
-}
-
-.home-privacy {
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--text-soft);
-}
-
-.privacy-ok {
-  color: var(--ok);
-  font-weight: 500;
-}
-
-.link-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--accent-text);
-  cursor: pointer;
-}
-
-.link-btn:hover {
-  color: var(--accent);
-}
-
-.home-keys {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-soft);
-}
-
-kbd {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-soft);
-  background: var(--inset-bg);
-  border: 1px solid var(--edge-strong);
-  border-bottom-width: 2px;
-  border-radius: 6px;
-  padding: 2px 7px;
-  margin-right: 6px;
-  white-space: nowrap;
-}
-
-/* ---------- session map (stored sessions) ---------- */
-
-/* The live listening strip, frozen: who spoke when across the whole
-   recording. Same two-voice geometry — Them above the line, You below —
-   so a finished session is recognizably the same object as a live one. */
-/* Shares the reading column with the transcript below it: both resolve to
-   `--measure` centered on the pane, so the map's ends line up with the
-   text ends. */
-.session-map {
-  flex: 0 0 auto;
-  width: 100%;
-  max-width: calc(var(--measure) + var(--gutter) * 2);
-  margin: 0 auto;
-  padding: 18px var(--gutter) 0;
-}
-
-.session-map-track {
-  position: relative;
-  height: 28px;
-  border-radius: 7px;
-  background: var(--inset-bg);
-  border: 1px solid var(--edge);
-  overflow: hidden;
-}
-
-.session-map-track::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  background: var(--edge-strong);
-}
-
-.map-turn {
-  position: absolute;
-  height: 8px;
-  min-width: 2px;
-  padding: 0;
-  border: none;
-  border-radius: 1px;
-  cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.12s;
-}
-
-.map-turn.loopback {
-  top: 5px;
-  background: var(--them);
-}
-
-.map-turn.mic {
-  bottom: 5px;
-  background: var(--you);
-}
-
-.map-turn:hover,
-.map-turn:focus-visible {
-  opacity: 1;
-}
-
-/* The track clips overflow, so the shared focus ring would be invisible
-   here; draw it inside the bar instead. */
-.map-turn:focus-visible {
-  outline: 2px solid var(--text-strong);
-  outline-offset: -1px;
-}
-
-.session-map-scale {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 5px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--dim-2);
-}
-
-/* ---------- listening strip ---------- */
-
-.wave-ribbon {
-  position: relative;
-  max-width: 880px;
-  height: 64px;
-  margin-top: 16px;
-}
-
-.wave-ribbon canvas {
-  width: 100%;
-  height: 100%;
+.voice-label {
   display: block;
-  /* Old samples dissolve at the left edge instead of hitting a wall. */
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%);
-  mask-image: linear-gradient(90deg, transparent, #000 14%);
+  margin-bottom: 2px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
-/* Tags live at the quiet left edge — fresh samples land on the right. */
-.wave-tag {
-  position: absolute;
-  left: 2px;
-  font-family: var(--mono);
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  pointer-events: none;
+.exchange-line.them {
+  font-family: var(--serif);
+  font-size: var(--t-hero);
+  font-weight: 400;
 }
 
-.wave-tag.them {
-  top: 0;
-  color: var(--them);
+.exchange-line.you {
+  padding-left: var(--indent);
+  font-size: 38px;
 }
 
-.wave-tag.you {
-  bottom: 0;
+.exchange-line.you .voice-label {
   color: var(--you);
 }
 
-/* ---------- quality floor ---------- */
+/* On the home page the line explains itself: each sentence has its block, on
+   its side, the way it would in a real meeting. */
+.home .exchange-line {
+  position: relative;
+}
 
-button:focus-visible,
-a:focus-visible,
-select:focus-visible,
-input:focus-visible,
-[tabindex]:focus-visible {
-  outline: 2px solid var(--accent-dim);
-  outline-offset: 2px;
+.home .exchange-line::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 6px;
+  width: var(--lane);
+  background: var(--them);
+  --rule-offset: calc(var(--rule-x) - var(--tape-w) - var(--lead) - var(--hang));
+}
+
+.home .exchange-line.them::before {
+  left: calc(var(--rule-offset) - 4px - var(--lane));
+}
+
+.home .exchange-line.you::before {
+  left: calc(var(--rule-offset) + 4px);
+  background: var(--you-mark);
+}
+
+.home-title {
+  font-family: var(--serif);
+  font-size: var(--t-hero);
+  font-weight: 800;
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+/* The last meeting stays in reach without being the loudest thing on the page,
+   and comes up to full strength when a hand or the keyboard goes to it. */
+.home .session-map {
+  opacity: 0.4;
+}
+
+.home .session-map:hover,
+.home .session-map:focus-within {
+  opacity: 1;
+}
+
+.figures {
+  font-family: var(--sans);
+  font-weight: 700;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.home-lede {
+  margin-top: 18px;
+  color: var(--ink-2);
+  font-size: 19px;
+  line-height: 1.4;
+}
+
+.home-last {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 19px;
+  line-height: 1.4;
+}
+
+.facts {
+  display: grid;
+  gap: 14px;
+  margin: 44px 0 0;
+}
+
+.fact {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  gap: 2px 16px;
+}
+
+.fact dt {
+  color: var(--ink-3);
+}
+
+.fact dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.ready-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ready-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Filled is ready, hollow is not: shape first, so it isn't colour alone. */
+.ready-mark {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.ready-item.missing {
+  color: var(--ink-3);
+}
+
+.ready-item.missing .ready-mark {
+  border-color: var(--ink-3);
+  background: none;
+}
+
+.keys-list {
+  display: grid;
+  gap: 5px;
+}
+
+/* ---------- first run ---------- */
+
+.onboarding {
+  height: 100%;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: var(--tape-w) minmax(0, 1fr);
+  background: var(--paper);
+}
+
+.onboarding-rule {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.onboarding-rule::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--rule-x);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--rule);
+}
+
+.steps {
+  position: absolute;
+  top: 96px;
+  left: var(--rule-x);
+  display: grid;
+  gap: 26px;
+  transform: translateX(-50%);
+}
+
+/* Where you are on the line. A real sequence, so it earns its marks. */
+.step-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--rule);
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+.step-dot.done {
+  background: var(--rule);
+}
+
+.step-dot.active {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.step-dot.skipped {
+  opacity: 0.4;
+}
+
+.onboarding-card {
+  max-width: var(--measure);
+  margin-left: calc(var(--lead) + var(--hang));
+  padding: 88px var(--pad) 40px 0;
+}
+
+.ob-step {
+  display: grid;
+  gap: 16px;
+  max-width: var(--measure);
+}
+
+.ob-step h1 {
+  font-family: var(--serif);
+  font-size: var(--t-hero);
+  font-weight: 800;
+  line-height: 1.12;
+}
+
+.ob-step h2 {
+  font-family: var(--serif);
+  font-size: var(--t-h1);
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.ob-step > p {
+  font-size: 19px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.ob-step .exchange {
+  margin: 10px 0 8px;
+}
+
+.ob-step .exchange-line.them {
+  font-size: 28px;
+}
+
+.ob-step .exchange-line.you {
+  font-size: 27px;
+}
+
+.ob-field {
+  display: grid;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.ob-field select {
+  width: 100%;
+  font-weight: 400;
+}
+
+.choice-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.choice-card {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 2px 12px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--edge);
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice-card:hover {
+  background: var(--wash);
+}
+
+.choice-card::before {
+  content: '';
+  grid-row: 1;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--ink-2);
+  border-radius: 50%;
+}
+
+.choice-card.selected {
+  border-color: var(--ink);
+  background: var(--sheet);
+}
+
+.choice-card.selected::before {
+  border: 5px solid var(--ink);
+}
+
+.choice-title {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.choice-card .dim {
+  grid-column: 2;
+  color: var(--ink-2);
+  line-height: 1.35;
+}
+
+.ob-keys {
+  display: grid;
+  gap: 18px;
+}
+
+.onboarding-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.token-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-width: none;
+  margin: auto;
+  padding: 26px 28px 24px;
+  border: none;
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 24px 60px rgba(5, 18, 14, 0.5);
+}
+
+.token-dialog::backdrop {
+  background: var(--scrim);
+}
+
+.token-dialog form {
+  display: grid;
+  gap: 12px;
+}
+
+.token-dialog h2 {
+  font-family: var(--serif);
+  font-size: var(--t-h2);
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.token-dialog input {
+  width: 100%;
+}
+
+.token-dialog .onboarding-nav {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+/* ---------- pages: settings, privacy, about ---------- */
+
+.settings,
+.about {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 30px var(--pad) 56px 0;
+}
+
+/* No tape here, so no column for one: these pages sit by the sidebar. */
+.settings > *,
+.about > * {
+  max-width: 720px;
+  margin-left: clamp(24px, 6cqw, 72px);
+}
+
+.page-title {
+  font-family: var(--serif);
+  font-size: var(--t-h1);
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.settings .banner {
+  max-width: 720px;
+  margin: 16px 0 0 clamp(24px, 6cqw, 72px);
+}
+
+.panel {
+  margin-top: 40px;
+}
+
+.panel h2 {
+  margin-bottom: 12px;
+  font-family: var(--serif);
+  font-size: var(--t-h2);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.panel p + p {
+  margin-top: 10px;
+}
+
+/* A setting: what it is on the left, its control on the right. */
+.settings .panel > label:not(.toggle) {
+  position: relative;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 16px;
+  margin-bottom: 10px;
+}
+
+/* Inside the field, so a save never shifts the page. */
+.settings .panel > label .saved {
+  position: absolute;
+  right: 34px;
+  bottom: 10px;
+  padding: 0 4px;
+  background: var(--sheet);
+}
+
+.settings .panel > label > select,
+.settings .panel > label > input[type='text'] {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings .panel > .note {
+  margin: 0 0 16px 206px;
+  line-height: 1.35;
+}
+
+.settings .panel > label.has-suffix {
+  grid-template-columns: 190px auto minmax(0, 1fr);
+}
+
+.settings .panel > label.has-suffix .saved,
+.theme-toggle + .saved {
+  right: 0;
+  background: none;
+}
+
+.retention-days {
+  width: 72px !important;
+  text-align: right;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.settings .panel > label.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 3px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.settings .panel > label.toggle > input {
+  margin-top: 2px;
+}
+
+.settings .panel > label.toggle + .note {
+  margin-left: 30px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.keys {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 14px 16px;
+  margin-top: 18px;
+}
+
+.keys > span {
+  grid-row: 1 / 5;
+  padding-top: 1px;
+}
+
+.keys > .secret-field,
+.keys > .note {
+  grid-column: 2;
+}
+
+.keys > .note {
+  line-height: 1.35;
+}
+
+.secret-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.secret-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 50%;
+}
+
+.dot.ok {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.secret-label {
+  font-weight: 500;
+}
+
+.secret-use {
+  font-size: var(--t-meta);
+}
+
+.secret-remove {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--t-meta);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secret-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.backup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+
+.backup-row .mono {
+  overflow-wrap: anywhere;
+}
+
+.settings .panel > .backup-row + .note {
+  margin-left: 0;
+}
+
+/* ---------- privacy ledger ---------- */
+
+/* Pages that hang off the rule without a tape: the search results and the
+   ledger. The rule stays put in the same place as a meeting's while the rows
+   scroll past it, and the text comes in close, so a mark and its words read
+   as one row. --lane-x is where the rule falls, measured from a row. */
+.ruled {
+  --rule-paint: linear-gradient(var(--rule), var(--rule));
+  --text-x: calc(var(--tape-w) + 18px);
+  --lane-x: calc(var(--rule-x) - var(--text-x));
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 30px var(--pad) 56px 0;
+  background: var(--rule-paint) no-repeat calc(var(--rule-x) - 1px) 0 / 2px 100%;
+}
+
+.ruled > * {
+  max-width: 720px;
+  margin-left: var(--text-x);
+}
+
+.ruled > .tape-legend {
+  position: sticky;
+  top: 4px;
+  max-width: none;
+  margin: 0 0 -22px;
+}
+
+/* ---- search ---- */
+
+/* Text on the transcript's edge, so opening a line doesn't shift the reading. */
+.search-view {
+  --text-x: calc(var(--tape-w) + var(--lead));
+}
+
+.search-view > * {
+  max-width: var(--col);
+}
+
+.search-view > .page-title,
+.search-view > .search-lede,
+.search-view > .hit-group > h2 {
+  padding-left: var(--hang);
+}
+
+.search-view .banner {
+  margin: 12px 0 0 calc(var(--text-x) + var(--hang));
+  max-width: var(--measure);
+}
+
+.search-lede {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 19px;
+  line-height: 1.4;
+}
+
+.hit-group {
+  margin-top: 30px;
+}
+
+.hit-group h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  font-family: var(--serif);
+  font-size: 21px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.hit-group h2 .link-btn {
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+.hit-group h2 .link-btn:hover {
+  text-decoration: underline;
+}
+
+.hit-when {
+  color: var(--ink-3);
+  font-family: var(--sans);
+  font-size: var(--t-meta);
+  font-weight: 400;
+}
+
+.hit-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hit-row {
+  position: relative;
+}
+
+/* Only which side of the rule the line came from, so a mark and not a block. */
+.hit-lane {
+  position: absolute;
+  top: 17px;
+  height: 11px;
+  width: var(--lane);
+  background: var(--them);
+}
+
+.hit-lane.loopback {
+  left: calc(var(--lane-x) - 4px - var(--lane));
+}
+
+.hit-lane.mic {
+  left: calc(var(--lane-x) + 4px);
+  background: var(--you-mark);
+}
+
+button.hit {
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.hit:hover {
+  background: var(--wash);
+}
+
+.hit .turn-time {
+  display: block;
+}
+
+.hit .turn-speaker,
+.hit .turn-text {
+  display: block;
+}
+
+/* ---- the ledger ---- */
+
+.settings.egress > * {
+  margin-left: var(--text-x);
+}
+
+.settings.egress > .tape-legend {
+  margin-left: 0;
+}
+
+/* Which side of the line, not whose voice: so no blue, and one face. */
+.egress .tape-legend span {
+  color: var(--ink);
+  font-family: var(--sans);
+  font-weight: 700;
+}
+
+.settings.egress .banner {
+  margin-left: var(--text-x);
+}
+
+.egress-headline {
+  font-family: var(--serif);
+  font-size: 25px;
+  line-height: 1.32;
+  font-variant-numeric: oldstyle-nums;
+}
+
+.egress-hero .egress-headline {
+  margin-top: 12px;
+}
+
+.egress-hero {
+  margin-top: 0;
+}
+
+.settings.egress .egress-hero > .note {
+  margin: 16px 0 0;
+  line-height: 1.35;
+}
+
+.egress-activity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+
+.egress-activity-head h2 {
+  margin-bottom: 0;
+}
+
+.egress-activity-head select {
+  max-width: 300px;
+  min-width: 0;
+}
+
+.egress-list,
+.egress-key {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.egress-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 20px;
+  margin-bottom: 8px;
+  color: var(--ink-2);
+  font-size: var(--t-meta);
+}
+
+.egress-key li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding-left: 46px;
+}
+
+/* In the key each mark brings a short piece of the rule with it. */
+.egress-key .egress-lane {
+  top: 50%;
+  left: 19px;
+}
+
+.egress-key .egress-lane::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: -1px;
+  width: 2px;
+  height: 20px;
+  background: var(--rule);
+}
+
+.egress-key .egress-lane.local i {
+  left: -14px;
+}
+
+.egress-key .egress-lane.cloud i {
+  left: 6px;
+}
+
+.egress-key .egress-lane.cloud::after {
+  left: -9px;
+  width: 18px;
+}
+
+.egress-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  line-height: 1.3;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.egress-lane {
+  position: absolute;
+  top: 18px;
+  left: var(--lane-x);
+  width: 0;
+  height: 0;
+}
+
+.egress-lane i {
+  position: absolute;
+  top: -4.5px;
+  left: -24px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+/* It crossed: a line from your side, through the rule, to the far side. */
+.egress-lane.cloud i {
+  top: -7px;
+  left: 16px;
+  width: 14px;
+  height: 14px;
+  background: var(--ink);
+}
+
+.egress-lane.cloud::after {
+  content: '';
+  position: absolute;
+  top: -1.5px;
+  left: -15px;
+  width: 33px;
+  height: 3px;
+  background: var(--ink);
+}
+
+/* It sits on the line: read locally, and out of sight from there on. */
+.egress-lane.agent i {
+  top: -7.5px;
+  left: -7.5px;
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+}
+
+.egress-what {
+  grid-column: 1;
+  grid-row: 1;
+  overflow-wrap: anywhere;
+}
+
+.egress-kind {
+  font-weight: 500;
+}
+
+.egress-meeting {
+  grid-column: 1;
+  grid-row: 2;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+}
+
+.egress-time {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.egress-size {
+  grid-column: 2;
+  grid-row: 2;
+  color: var(--ink-3);
+  font-size: var(--t-meta);
+  text-align: right;
+}
+
+/* What left is the reason anyone opens this page, so it reads first. What
+   stayed is the quiet majority. */
+.egress-row.cloud {
+  padding: 12px 0;
+}
+
+.egress-row.cloud .egress-lane {
+  top: 24px;
+}
+
+.egress-row.cloud .egress-what {
+  font-size: 19px;
+}
+
+.egress-row.cloud .egress-kind {
+  font-weight: 700;
+}
+
+.egress-row.cloud .egress-meeting {
+  color: var(--ink-2);
+}
+
+.egress-row.local {
+  padding: 5px 0;
+}
+
+.egress-row.local .egress-lane {
+  top: 15px;
+}
+
+.egress-row.local .egress-what {
+  color: var(--ink-2);
+  font-size: 15.5px;
+}
+
+.egress-more {
+  margin-top: 12px;
+}
+
+/* ---------- about ---------- */
+
+.about .panel:first-child {
+  margin-top: 0;
+}
+
+.about-lede {
+  font-family: var(--serif);
+  font-size: 25px;
+  line-height: 1.32;
+}
+
+.about p + p {
+  margin-top: 12px;
+  line-height: 1.4;
+}
+
+.diag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-top: 14px;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.diag-list {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diag-list li {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  gap: 0 14px;
+}
+
+.diag-when {
+  grid-row: 1 / 3;
+  font-family: var(--sans);
+  font-size: var(--t-meta);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.diag-msg {
+  overflow-wrap: anywhere;
+}
+
+.diag-at {
+  overflow-wrap: anywhere;
+}
+
+/* ---------- narrower windows ---------- */
+
+/* Half a laptop screen: the tape keeps its place but drops its scale. */
+@media (max-width: 1080px) {
+  :root {
+    --side-w: 272px;
+    --tape-w: 126px;
+    --rule-x: 78px;
+    --lane: 20px;
+    --frame: 6px;
+    --hang: 58px;
+    --pad: 20px;
+    --indent: 30px;
+  }
+
+  .side-meta {
+    gap: 0 8px;
+  }
+
+  .session-map-scale span,
+  .map-window[data-at]::after,
+  .map-playhead[data-at]::before {
+    font-size: 13px;
+  }
+
+  .tape-legend {
+    font-size: 15.5px;
+  }
+
+  .home-inner {
+    padding-top: 64px;
+  }
+
+  .exchange-line.them,
+  .home-title,
+  .ob-step h1 {
+    font-size: 33px;
+  }
+
+  .exchange-line.you {
+    font-size: 31px;
+  }
+
+  .settings .panel > label:not(.toggle) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings .panel > label.has-suffix {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .settings .panel > label:not(.toggle) > span:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .settings .panel > .note {
+    margin-left: 0;
+  }
+
+  .settings .panel > label .saved {
+    bottom: 10px;
+  }
+
+  .keys {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .keys > span {
+    grid-row: auto;
+  }
+
+  .keys > .secret-field,
+  .keys > .note {
+    grid-column: 1;
+  }
+}
+
+/* Too narrow for two panes. Start and Stop stay on screen in a top bar, the
+   list opens as a sheet, and the tape lies down across the page. */
+@media (max-width: 640px) {
+  .main > *,
+  .onboarding > * {
+    --lead: var(--pad);
+  }
+
+  .settings > *,
+  .about > *,
+  .settings .banner {
+    margin-left: var(--pad);
+  }
+
+  :root {
+    --pad: 16px;
+    --hang: 0px;
+    --indent: 22px;
+    --t-h1: 27px;
+    --t-hero: 30px;
+    --t-read: 19px;
+    --tape-top: 0px;
+    --tape-bottom: 0px;
+    --lane: 18px;
+    --tape-w: 0px;
+  }
+
+  .app {
+    flex-direction: column;
+  }
+
+  .main {
+    min-height: 0;
+  }
+
+  .sidebar:not(.collapsed) {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    width: 100%;
+    height: 100%;
+  }
+
+  .sidebar-bottom {
+    padding-bottom: 16px;
+  }
+
+  /* While searching, the box stays and the results take the page below it. */
+  .sidebar.searching:not(.collapsed) {
+    position: static;
+    height: auto;
+    flex: none;
+  }
+
+  .sidebar.searching .session-list,
+  .sidebar.searching .sidebar-bottom {
+    display: none;
+  }
+
+  .sidebar.collapsed {
+    width: 100%;
+    flex: none;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 8px 8px 16px;
+  }
+
+  .sidebar.collapsed .brand {
+    display: inline-flex;
+    margin-right: auto;
+  }
+
+  .sidebar.collapsed .record-label {
+    display: inline;
+  }
+
+  .sidebar.collapsed .record-short {
+    display: none;
+  }
+
+  .sidebar.collapsed .record-btn {
+    flex-direction: row;
+    gap: 8px;
+    width: auto;
+    min-height: 40px;
+    padding: 0 12px;
+    font-size: 16px;
+  }
+
+  .main-status {
+    position: static;
+    max-width: none;
+    padding: 6px 16px 0;
+    justify-content: flex-start;
+  }
+
+  .main-status:empty {
+    display: none;
+  }
+
+  .session-view {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .session-header {
+    order: 1;
+    padding: 16px var(--pad) 0;
+    max-width: none;
+  }
+
+  /* The transcript is the product. Once you're in it, only the tabs and the
+     map stay: the title and details give their room to the text. A device
+     alert doesn't, because that one needs you while it's true. */
+  .session-view.reading .session-header {
+    padding-top: 0;
+  }
+
+  .session-view.reading .session-title-row,
+  .session-view.reading .session-meta-row,
+  .session-view.reading .back-link,
+  .session-view.reading .banner.passing {
+    display: none;
+  }
+
+  .session-view.reading .tabs {
+    margin-top: 2px;
+  }
+
+  .session-view .banner {
+    order: 2;
+    max-width: none;
+    margin: 10px var(--pad) 0;
+  }
+
+  /* The same element as the tall tape, turned on its side. */
+  .session-tape {
+    order: 3;
+    flex: none;
+    height: 66px;
+    margin: 10px var(--pad) 0;
+  }
+
+  .session-tape::before {
+    top: 50%;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 2px;
+    margin: -1px 0 0;
+  }
+
+  .session-tape.live::before {
+    transform-origin: left;
+    animation-name: au-draw-across;
+  }
+
+  .tape-legend {
+    top: 0;
+    bottom: 0;
+    height: auto;
+    width: 42px;
+    font-size: 15px;
+    line-height: 1;
+    z-index: 2;
+  }
+
+  .tape-legend span {
+    left: 0 !important;
+    right: auto !important;
+    padding: 2px 6px 2px 0;
+    background: var(--paper);
+  }
+
+  .tape-legend .them {
+    bottom: calc(50% + 6px);
+  }
+
+  .tape-legend .you {
+    top: calc(50% + 6px);
+  }
+
+  .session-map-track {
+    top: 0;
+    bottom: 0;
+    left: 44px;
+  }
+
+  .map-turn {
+    top: auto;
+    right: auto !important;
+    left: var(--at) !important;
+    width: var(--span);
+    min-width: 2px;
+    min-height: 0;
+    height: calc(var(--lane) * (0.3 + 0.7 * var(--fill, 1)));
+    box-shadow: inset -1px 0 0 var(--paper);
+  }
+
+  .map-turn.loopback {
+    bottom: calc(50% + 3px);
+  }
+
+  .map-turn.mic {
+    top: calc(50% + 3px);
+  }
+
+  .map-window,
+  .map-playhead,
+  .map-cut {
+    top: 0;
+    bottom: 0;
+    left: var(--at, 0);
+    height: auto;
+  }
+
+  .map-window {
+    width: var(--span, 0);
+    min-width: 10px;
+    min-height: 0;
+  }
+
+  /* Nowhere to put a label here without covering the line, and the player
+     right below says the same thing. */
+  .map-window[data-at]::after,
+  .map-playhead[data-at]::before {
+    display: none;
+  }
+
+  .map-playhead {
+    width: 2px;
+    margin: 0 0 0 -1px;
+  }
+
+  .map-playhead::after {
+    display: none;
+  }
+
+  .map-cut {
+    width: 0;
+    border-top: none;
+    border-left: 2px dashed var(--attn);
+  }
+
+  .map-lost {
+    top: auto;
+    left: var(--at) !important;
+    right: 0 !important;
+    bottom: auto;
+    width: auto;
+    height: var(--lane);
+    border-top: none;
+    border-left: 2px dashed var(--attn);
+  }
+
+  .map-lost.mic {
+    top: calc(50% + 3px);
+  }
+
+  .map-lost.loopback {
+    bottom: calc(50% + 3px);
+  }
+
+  .map-hit {
+    top: auto;
+    left: var(--at) !important;
+    margin: 0 0 0 -4.5px;
+  }
+
+  .map-hit.loopback {
+    top: 0;
+  }
+
+  .map-hit.mic {
+    bottom: 0;
+  }
+
+  .map-pen {
+    top: 0;
+    bottom: 0;
+    left: auto;
+    right: -3px;
+    width: 5px;
+    height: auto;
+  }
+
+  .map-pen i {
+    left: 0 !important;
+    right: 0 !important;
+    width: 5px;
+    min-width: 0;
+    min-height: 3px;
+    height: calc(var(--level, 0) * (var(--lane) + 8px));
+  }
+
+  .map-pen .them {
+    top: auto;
+    bottom: calc(50% + 3px);
+  }
+
+  .map-pen .you {
+    top: calc(50% + 3px);
+  }
+
+  .session-map-scale {
+    display: none;
+  }
+
+  .doc-wrap,
+  .summary-pane {
+    order: 4;
+    flex: 1;
+  }
+
+
+  .doc-empty {
+    padding: 28px var(--pad) 0;
+  }
+
+  .turn {
+    --turn-gap: 18px;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .turn.cont {
+    --turn-gap: 8px;
+  }
+
+  .turn.current::before,
+  .turn.current.mic::before {
+    left: -9px;
+  }
+
+  .turn-speaker {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .turn-time {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .turn-text {
+    grid-column: 1 / -1;
+  }
+
+  .turn.cont .turn-time {
+    display: none;
+  }
+
+  .turn.mic .turn-text {
+    font-size: 18.5px;
+  }
+
+  .audio-bar {
+    padding: 8px 0 10px;
+    gap: 10px;
+  }
+
+  .audio-hint {
+    display: none;
+  }
+
+  .control {
+    flex: 1 1 40%;
+  }
+
+  .summary-controls .btn {
+    flex: 1 1 100%;
+  }
+
+  /* No margin to hang it in here, so it joins the head of the ask. */
+  .ask .turn-time {
+    position: static;
+    flex-basis: 100%;
+    margin: 0;
+    justify-self: start;
+    text-align: left;
+  }
+
+  .header-export {
+    margin-left: 0;
+  }
+
+  .home {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .home > .session-tape {
+    display: none;
+  }
+
+  /* The last meeting's line, lying down like every other at this width. */
+  .home > .session-tape.filling {
+    display: block;
+    margin-top: 14px;
+  }
+
+  .session-tape.filling::after {
+    top: 50%;
+    left: 44px;
+    width: calc((100% - 44px) * var(--filled, 0));
+    height: 4px;
+    margin: -2px 0 0;
+    transition-property: width;
+  }
+
+  /* No column for the demo marks to sit in, and they'd land on the words. */
+  .home .exchange-line::before {
+    display: none;
+  }
+
+  .home-scroll {
+    overflow: visible;
+  }
+
+  .home-inner {
+    margin-right: var(--pad);
+    padding-top: 28px;
+  }
+
+  .exchange-line.them,
+  .home-title,
+  .ob-step h1 {
+    font-size: 30px;
+  }
+
+  .exchange-line.you {
+    font-size: 28px;
+  }
+
+  .ob-step h2 {
+    font-size: 27px;
+  }
+
+  .fact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onboarding {
+    display: block;
+  }
+
+  .onboarding-rule {
+    position: static;
+    height: auto;
+    padding: 18px var(--pad) 0;
+  }
+
+  .onboarding-rule::before {
+    display: none;
+  }
+
+  .steps {
+    position: relative;
+    top: auto;
+    left: auto;
+    display: flex;
+    gap: 16px;
+    transform: none;
+  }
+
+  .step-dot {
+    width: 12px;
+    height: 12px;
+  }
+
+  .onboarding-card {
+    padding-top: 20px;
+    padding-bottom: 28px;
+  }
+
+  .settings,
+  .about {
+    padding: 22px var(--pad) 40px 0;
+  }
+
+  .egress-headline,
+  .about-lede {
+    font-size: 22px;
+  }
+
+  /* No tape column here, so the rule runs down the list alone, and the key
+     says what the two sides are. */
+  .ruled {
+    --text-x: var(--pad);
+    --lane-x: 28px;
+    background: none;
+  }
+
+  .ruled > .tape-legend {
+    display: none;
+  }
+
+  .search-view .hit-lane {
+    display: none;
+  }
+
+  .egress-list {
+    background: var(--rule-paint) no-repeat 27px 0 / 2px 100%;
+  }
+
+  .egress-row {
+    padding-left: 62px;
+  }
+
+  .search-view .banner {
+    margin-left: var(--pad);
+  }
+
+  .diag-list li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diag-when {
+    grid-row: auto;
+  }
+}
+
+@keyframes au-draw-across {
+  from {
+    transform: scaleX(0);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2143,5 +3581,6 @@ input:focus-visible,
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -1,24 +1,42 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Markdown } from '@shared/Markdown';
+import { api, appendPage, PagedLoads } from '../api';
+import { readToken } from '../auth';
+import { ASK_PAGE, AskList, confirmDeleteAsk } from '../components/AskList';
 import { AudioBar, type AudioBarHandle } from '../components/AudioBar';
-import { Markdown } from '../components/Markdown';
-import { buildMapTurns, SessionMap } from '../components/SessionMap';
-import { TurnDoc, type TurnDocHandle } from '../components/TurnDoc';
+import { LiveTape } from '../components/LiveTape';
+import { hasMatch } from '../components/Marked';
+import {
+  buildMapTurns,
+  SessionMap,
+  turnAt,
+  type MapHit,
+  type MapTurn,
+  type SessionMapHandle,
+} from '../components/SessionMap';
+import { fmtTs, TurnDoc, type TurnDocHandle } from '../components/TurnDoc';
+import { TapeLegend, WhereMark } from '../components/TwoVoices';
 import { VuMeter } from '../components/VuMeter';
-import { WaveRibbon } from '../components/WaveRibbon';
 import { buildTurns, useAuricle, type Row } from '../store';
+import {
+  providerName,
+  providerPlace,
+  providerWhere,
+  templateName,
+  withoutRepeatedTitle,
+} from '../words';
 
 const reducedMotion =
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-import type { LlmProviderInfo, SessionDetail, TemplateInfo } from '../types';
+import type { AskInfo, LlmProviderInfo, SessionDetail, TemplateInfo } from '../types';
 
 function fmtLongDate(unixSecs: number): string {
   return new Date(unixSecs * 1000).toLocaleString(undefined, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
   });
 }
@@ -27,13 +45,13 @@ function fmtDur(secs: number): string {
   return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(Math.floor(secs) % 60).padStart(2, '0')}`;
 }
 
-function ClockIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <polyline points="12 6 12 12 16 14" />
-    </svg>
-  );
+/** A finished meeting's length, in the words a person would use. */
+function fmtLength(secs: number): string {
+  const mins = Math.round(secs / 60);
+  if (mins < 1) return 'under a minute';
+  if (mins < 60) return `${mins} ${mins === 1 ? 'minute' : 'minutes'}`;
+  const rest = mins % 60;
+  return `${Math.floor(mins / 60)} h ${rest} min`;
 }
 
 function LiveTicker({ startedAtMs }: { startedAtMs: number | null }) {
@@ -48,10 +66,23 @@ function LiveTicker({ startedAtMs }: { startedAtMs: number | null }) {
 
 export function SessionView({
   sessionId,
+  renamed,
   onRenamed,
+  query,
+  moment,
+  onBackToResults,
+  onOpenSettings,
 }: {
   sessionId: string;
+  /** The latest rename from the sidebar; PATCH broadcasts nothing to pick up. */
+  renamed: { id: string; title: string } | null;
   onRenamed: () => void;
+  /** What the search box holds, marked in the text and on the tape. */
+  query: string;
+  /** The moment to open at, when a search result or the home tape asked for one. */
+  moment: { id: string; ms: number; channel: number } | null;
+  onBackToResults: () => void;
+  onOpenSettings: () => void;
 }) {
   const activeSession = useAuricle((s) => s.activeSession);
   const engineState = useAuricle((s) => s.engineState);
@@ -66,17 +97,34 @@ export function SessionView({
   const sessionsVersion = useAuricle((s) => s.sessionsVersion);
   const isLive = activeSession === sessionId;
   const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [tab, setTab] = useState<'transcript' | 'summary'>('transcript');
+  const [tab, setTab] = useState<'transcript' | 'summary' | 'asks'>('transcript');
+  const [asks, setAsks] = useState<AskInfo[]>([]);
+  const [moreAsks, setMoreAsks] = useState(false);
+  const askLoads = useRef(new PagedLoads());
   const [editingTitle, setEditingTitle] = useState(false);
+  // Set when an edit ends from the keyboard, so focus returns to the title
+  // instead of dropping to the top of the page.
+  const refocusTitle = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<AudioBarHandle>(null);
   const docRef = useRef<TurnDocHandle>(null);
+  const mapRef = useRef<SessionMapHandle>(null);
+  // A jump from another tab, held until the transcript mounts.
+  const pendingJump = useRef<{ turn: MapTurn; play: boolean } | null>(null);
+  const [foundTurn, setFoundTurn] = useState<number | null>(null);
+  // Scrolled into the text. At phone width the title and meta give up their room.
+  const [reading, setReading] = useState(false);
+  const [currentTurn, setCurrentTurn] = useState<number | null>(null);
+  // The transcript keeps up with playback until the reader scrolls away.
+  const [following, setFollowing] = useState(true);
 
   // Summary tab state.
   const [llmProviders, setLlmProviders] = useState<LlmProviderInfo[]>([]);
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
-  const [template, setTemplate] = useState('minutes');
-  const [llmProvider, setLlmProvider] = useState('');
+  const template = useAuricle((s) => s.summaryTemplate);
+  const llmPick = useAuricle((s) => s.summaryProvider);
+  const [llmDefault, setLlmDefault] = useState('');
+  const llmProvider = llmPick ?? llmDefault;
   const [summarizing, setSummarizing] = useState(false);
 
   useEffect(() => {
@@ -96,6 +144,24 @@ export function SessionView({
     }
   }, [isLive, engineState, sessionId, sessionsVersion]);
 
+  // No stored asks is the usual case, so a failure here just leaves the tab out.
+  useEffect(() => {
+    setAsks([]);
+    setMoreAsks(false);
+    const loads = askLoads.current;
+    if (!isLive) {
+      loads.replace(
+        api.asks(sessionId, ASK_PAGE, 0),
+        (page) => {
+          setAsks(page);
+          setMoreAsks(page.length >= ASK_PAGE);
+        },
+        () => {},
+      );
+    }
+    return () => loads.cancel();
+  }, [sessionId, isLive]);
+
   useEffect(() => {
     api
       .providers()
@@ -104,10 +170,14 @@ export function SessionView({
         setTemplates(body.templates);
         const ready = body.llm.filter((p) => p.ready);
         const preferred = ready.find((p) => p.default) ?? ready[0];
-        if (preferred) setLlmProvider(preferred.id);
+        if (preferred) setLlmDefault(preferred.id);
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (renamed?.id === sessionId) setDetail((d) => d && { ...d, title: renamed.title });
+  }, [renamed, sessionId]);
 
   const staticDoc = useMemo(() => {
     if (!detail) return null;
@@ -145,7 +215,114 @@ export function SessionView({
     return Math.max(wall, mapTurns[mapTurns.length - 1]?.endMs ?? 0);
   }, [detail, mapTurns]);
 
-  const title = isLive ? (sessionTitleLive ?? 'Recording…') : (detail?.title ?? '…');
+  const showReading = useCallback(
+    (first: number, last: number) => mapRef.current?.showWindow(mapTurns[first], mapTurns[last]),
+    [mapTurns],
+  );
+
+  const jumpTo = (t: MapTurn, play: boolean) => {
+    docRef.current?.scrollToTurn(t.index);
+    if (play && hasAudio) audioRef.current?.seek(t.startMs);
+  };
+
+  const openAt = (t: MapTurn, play: boolean) => {
+    setFollowing(true);
+    if (tab === 'transcript') {
+      jumpTo(t, play);
+    } else {
+      pendingJump.current = { turn: t, play };
+      setTab('transcript');
+    }
+  };
+
+  /** A moment picked anywhere on the line, between blocks included. */
+  const seekOnLine = (ms: number) => {
+    const turn = mapTurns[Math.max(0, turnAt(mapTurns, ms))];
+    if (!turn) return;
+    if (tab === 'transcript') {
+      openAt(turn, false);
+      if (hasAudio) audioRef.current?.seek(ms);
+    } else {
+      openAt(turn, true);
+    }
+  };
+
+  // Called several times a second, so the map is written to directly and the
+  // turn only changes state when playback crosses into a new one.
+  const followAudio = useCallback(
+    (ms: number) => {
+      mapRef.current?.showPlayhead(ms);
+      const index = turnAt(mapTurns, ms);
+      if (ms > 0 && index >= 0) setCurrentTurn(index);
+    },
+    [mapTurns],
+  );
+
+  useEffect(() => {
+    if (following && currentTurn !== null) docRef.current?.scrollToTurn(currentTurn);
+  }, [following, currentTurn]);
+
+  useEffect(() => {
+    if (tab !== 'transcript' || !pendingJump.current) return;
+    jumpTo(pendingJump.current.turn, pendingJump.current.play);
+    pendingJump.current = null;
+  });
+
+  // Opened at a moment: land on that turn without starting playback. A search
+  // wants the words, and sound out of nowhere would be a surprise.
+  useEffect(() => {
+    if (moment?.id !== sessionId || mapTurns.length === 0) return;
+    const voice = moment.channel === 0 ? 'mic' : 'loopback';
+    const inTurn = (t: MapTurn) => moment.ms >= t.startMs && moment.ms <= t.endMs;
+    const index = Math.max(
+      mapTurns.findIndex((t) => t.channel === voice && inTurn(t)),
+      mapTurns.findIndex(inTurn),
+    );
+    if (index < 0) return;
+    setFoundTurn(index);
+    pendingJump.current = { turn: mapTurns[index], play: false };
+    setTab('transcript');
+  }, [moment, sessionId, mapTurns]);
+
+  useEffect(() => setReading(false), [tab]);
+
+  const searchHits = useMemo<MapHit[]>(() => {
+    if (!staticDoc || !query) return [];
+    return Object.values(staticDoc.rows)
+      .filter((row) => hasMatch(row.text, query))
+      .map((row) => ({ ms: row.tStartMs, channel: row.channel }));
+  }, [staticDoc, query]);
+
+  const askedAtMs = useCallback(
+    (ask: AskInfo): number | null => {
+      if (!detail) return null;
+      const ms = (ask.created_at - detail.started_at) * 1000;
+      return ms >= 0 && ms <= durationMs ? ms : null;
+    },
+    [detail, durationMs],
+  );
+
+  // A question is your own voice, so it marks your side of the line.
+  const askMarks = useMemo<MapHit[]>(
+    () =>
+      asks.flatMap((a) => {
+        const ms = askedAtMs(a);
+        return ms === null ? [] : [{ ms, channel: 'mic' }];
+      }),
+    [asks, askedAtMs],
+  );
+
+  const interrupted = (detail?.meta as Record<string, unknown> | undefined)?.['interrupted'] === true;
+  const loadFailed = !isLive && !detail && error !== null;
+
+  const retry = () => {
+    setError(null);
+    api.session(sessionId).then(setDetail).catch((e) => setError((e as Error).message));
+  };
+
+  const title = isLive
+    ? (sessionTitleLive ?? 'Recording…')
+    : (detail?.title ?? (error ? 'This meeting could not be opened' : 'Opening this meeting…'));
 
   const saveTitle = async (value: string) => {
     setEditingTitle(false);
@@ -157,7 +334,7 @@ export function SessionView({
       if (isLive) useAuricle.setState({ sessionTitle: next });
       onRenamed();
     } catch (e) {
-      setError(`rename failed: ${(e as Error).message}`);
+      setError(`The meeting was not renamed: ${(e as Error).message}`);
     }
   };
 
@@ -169,40 +346,108 @@ export function SessionView({
       const fresh = await api.session(sessionId);
       setDetail(fresh);
     } catch (e) {
-      setError(`summarize failed: ${(e as Error).message}`);
+      setError(`The summary was not written: ${(e as Error).message}. Check the provider in Settings, then try again.`);
     } finally {
       setSummarizing(false);
     }
   };
 
+  const saveExport = async () => {
+    try {
+      const url = URL.createObjectURL(await api.exportBlob(sessionId));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${sessionId}.md`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url));
+    } catch (e) {
+      setError(`The export failed: ${(e as Error).message}`);
+    }
+  };
+
+  const showMoreAsks = () => {
+    setError(null);
+    askLoads.current.extend(
+      () => api.asks(sessionId, ASK_PAGE, asks.length),
+      (page) => {
+        setAsks((shown) => appendPage(shown, page));
+        setMoreAsks(page.length >= ASK_PAGE);
+      },
+      (e) => setError(`More questions could not be loaded: ${e.message}`),
+    );
+  };
+
+  const deleteAsk = async (id: number) => {
+    setError(null);
+    try {
+      if (!(await confirmDeleteAsk(id, (message) => window.confirm(message)))) return;
+      // A page in flight was read from before the delete, and may hold this row.
+      askLoads.current.cancel();
+      setAsks((shown) => shown.filter((a) => a.id !== id));
+      const rest = asks.filter((a) => a.id !== id);
+      if (rest.length === 0 && !moreAsks) setTab('transcript');
+    } catch (e) {
+      setError(`The question was not deleted: ${(e as Error).message}`);
+    }
+  };
+
   return (
-    <div className="session-view">
+    <div
+      className={`session-view ${reading ? 'reading' : ''}`}
+      onScrollCapture={(e) => {
+        const el = e.target as HTMLElement;
+        // Too little text and folding the header would end the scroll that
+        // caused it, and the two would flip back and forth.
+        const room = el.scrollHeight - el.clientHeight;
+        setReading((was) => (was ? el.scrollTop > 4 : el.scrollTop > 24 && room > 200));
+      }}
+    >
       <header className="session-header">
+        {query && (
+          <button className="link-btn back-link" onClick={onBackToResults}>
+            Back to results for “{query}”
+          </button>
+        )}
         <div className="session-title-row">
           {editingTitle ? (
             <input
               className="title-input"
               type="text"
+              aria-label="Session title"
               defaultValue={title}
               autoFocus
               onBlur={(e) => saveTitle(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') saveTitle(e.currentTarget.value);
+                if (e.key === 'Enter' || e.key === 'Escape') refocusTitle.current = true;
+                if (e.key === 'Enter') {
+                  // Focus lands on the title during this keydown; without this
+                  // the same Enter would click it and reopen the editor.
+                  e.preventDefault();
+                  saveTitle(e.currentTarget.value);
+                }
                 if (e.key === 'Escape') setEditingTitle(false);
               }}
             />
           ) : (
-            <h1
-              className="session-title"
-              title="Click to rename"
-              onClick={() => setEditingTitle(true)}
-            >
-              {title}
+            <h1 className="session-title">
+              <button
+                className="session-title-btn"
+                title={`Rename: ${title}`}
+                ref={(el) => {
+                  if (el && refocusTitle.current) {
+                    refocusTitle.current = false;
+                    el.focus();
+                  }
+                }}
+                onClick={() => setEditingTitle(true)}
+              >
+                {title}
+              </button>
             </h1>
           )}
           {isLive && (
             <span className="rec">
-              <span className="rec-dot" /> REC
+              <span className="rec-dot" /> Recording
             </span>
           )}
         </div>
@@ -210,12 +455,16 @@ export function SessionView({
           {isLive ? (
             <>
               <span className="meta-item">
-                <ClockIcon />
                 <LiveTicker startedAtMs={liveStartedAtMs} />
               </span>
-              <span className="meta-chip">{sessionProvider}</span>
+              {sessionProvider && (
+                <span className="meta-item where">
+                  <WhereMark place={providerPlace(sessionProvider)} />
+                  {providerWhere(sessionProvider)}
+                </span>
+              )}
               {latencyMs !== null && (
-                <span className="meta-item">latency {(latencyMs / 1000).toFixed(1)}s</span>
+                <span className="meta-item">{(latencyMs / 1000).toFixed(1)} s behind</span>
               )}
               {reducedMotion && (
                 <div className="header-meters">
@@ -229,27 +478,32 @@ export function SessionView({
               <>
                 <span className="meta-item">{fmtLongDate(detail.started_at)}</span>
                 <span className="meta-item">
-                  <ClockIcon />
-                  {detail.ended_at ? fmtDur(detail.ended_at - detail.started_at) : 'in progress'}
+                  {detail.ended_at ? fmtLength(detail.ended_at - detail.started_at) : 'In progress'}
                 </span>
-                <span className="meta-chip">{detail.stt_provider}</span>
-                {(detail.meta as Record<string, unknown>)['interrupted'] === true && (
-                  <span className="tag warn">interrupted</span>
+                <span className="meta-item where">
+                  <WhereMark place={providerPlace(detail.stt_provider)} />
+                  {providerWhere(detail.stt_provider)}
+                </span>
+                {detail.transcript.length > 0 && (
+                  <a
+                    className="btn quiet header-export"
+                    title="Save as a Markdown file"
+                    href={api.exportUrl(sessionId)}
+                    download={`${sessionId}.md`}
+                    onClick={(e) => {
+                      if (!readToken()) return;
+                      e.preventDefault();
+                      void saveExport();
+                    }}
+                  >
+                    Export
+                  </a>
                 )}
-                <a
-                  className="btn quiet header-export"
-                  href={api.exportUrl(sessionId)}
-                  download={`${sessionId}.md`}
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
-                  Export .md
-                </a>
               </>
             )
           )}
         </div>
-        {isLive && !reducedMotion && <WaveRibbon />}
-        <div className="tabs">
+        {!loadFailed && <div className="tabs">
           <button
             className={`tab ${tab === 'transcript' ? 'active' : ''}`}
             onClick={() => setTab('transcript')}
@@ -264,32 +518,88 @@ export function SessionView({
           >
             Summary
           </button>
-        </div>
+          {(asks.length > 0 || moreAsks) && (
+            <button
+              className={`tab ${tab === 'asks' ? 'active' : ''}`}
+              onClick={() => setTab('asks')}
+            >
+              Asks
+            </button>
+          )}
+        </div>}
       </header>
 
-      {deviceLost && isLive && <div className="banner error">audio device lost — {deviceLost}</div>}
-      {(error ?? (isLive ? lastError : null)) && (
-        <div className="banner warn">{error ?? lastError}</div>
+      {/* After the header in the DOM, so Tab still reaches the map after the
+          tabs. The grid is what puts it beside the text. */}
+      <div
+        className={`session-tape ${isLive ? 'live' : ''} ${tab === 'transcript' ? '' : 'no-frame'}`}
+      >
+        <TapeLegend
+          lost={
+            isLive && deviceLost ? (deviceLost.startsWith('mic') ? 'mic' : 'loopback') : undefined
+          }
+        />
+        {isLive ? (
+          <LiveTape showPen={!reducedMotion} onPick={(t) => openAt(t, false)} />
+        ) : (
+          <SessionMap
+            ref={mapRef}
+            turns={mapTurns}
+            durationMs={durationMs}
+            hits={tab === 'asks' ? askMarks : searchHits}
+            cutMs={interrupted ? mapTurns[mapTurns.length - 1]?.endMs : undefined}
+            onPick={(t) => openAt(t, true)}
+            onSeek={seekOnLine}
+          />
+        )}
+      </div>
+
+      {deviceLost && isLive && (
+        <div className="banner">
+          <span>
+            <strong>Audio device lost.</strong>{' '}
+            {deviceLost.replace(/^mic: /, '').replace(/^loopback: /, 'System audio: ')}. Reconnect
+            it, then stop and start a new recording to capture that side again.
+          </span>
+        </div>
+      )}
+      {/* lastError is announced from App's status line, so only this view's
+          own failures need a region here. */}
+      <div className="status-slot" role="status">
+        {error &&
+          (loadFailed ? (
+            <div className="banner">
+              <span>
+                Auricle could not read this meeting ({error}). Try again in a moment. If it keeps
+                failing, restart Auricle.
+              </span>
+              <button className="btn" onClick={retry}>
+                Try again
+              </button>
+            </div>
+          ) : (
+            <div className="banner">{error}</div>
+          ))}
+      </div>
+      {!error && isLive && lastError && <div className="banner">{lastError}</div>}
+      {interrupted && (
+        <div className="banner passing">
+          <span>
+            Auricle closed unexpectedly during this meeting, so the recording ends at{' '}
+            {fmtTs(mapTurns[mapTurns.length - 1]?.endMs ?? 0)}. Everything before that was saved.
+          </span>
+        </div>
       )}
 
       {tab === 'transcript' ? (
         <div className="doc-wrap">
-          {!isLive && (
-            <SessionMap
-              turns={mapTurns}
-              durationMs={durationMs}
-              onPick={(t) => {
-                docRef.current?.scrollToTurn(t.index);
-                if (hasAudio) audioRef.current?.seek(t.startMs);
-              }}
-            />
-          )}
           {isLive ? (
             <TurnDoc
+              ref={docRef}
               turnOrder={liveTurnOrder}
               live
               follow
-              emptyHint="Listening — speak, or play audio. Partials appear dim and settle into place."
+              emptyHint="Listening. Speak, or play some audio. Words appear here as they are heard, and settle once they are sure."
             />
           ) : staticDoc ? (
             <TurnDoc
@@ -298,66 +608,122 @@ export function SessionView({
               turns={staticDoc.turns}
               rows={staticDoc.rows}
               live={false}
-              onSeek={hasAudio ? (ms) => audioRef.current?.seek(ms) : undefined}
-              emptyHint="No speech was transcribed in this session."
+              onSeek={
+                hasAudio
+                  ? (ms) => {
+                      setFollowing(true);
+                      audioRef.current?.seek(ms);
+                    }
+                  : undefined
+              }
+              onRange={showReading}
+              query={query}
+              foundTurn={foundTurn}
+              currentTurn={currentTurn}
+              onUserScroll={() => setFollowing(false)}
+              emptyHint={
+                <>
+                  <p>
+                    <strong>No speech was heard in this meeting.</strong>
+                  </p>
+                  <p>
+                    Neither side made a sound for the whole recording. If people were talking, the
+                    wrong device may have been listening.
+                  </p>
+                  <button className="btn" onClick={onOpenSettings}>
+                    Check your audio devices
+                  </button>
+                </>
+              }
             />
-          ) : (
-            <div className="doc-empty">
-              <p className="dim">Loading…</p>
-            </div>
+          ) : null}
+          {hasAudio && (
+            <AudioBar
+              ref={audioRef}
+              sessionId={sessionId}
+              onTime={followAudio}
+              following={following || currentTurn === null}
+              onFollow={() => setFollowing(true)}
+            />
           )}
-          {hasAudio && <AudioBar ref={audioRef} sessionId={sessionId} />}
         </div>
+      ) : tab === 'asks' ? (
+        <AskList
+          asks={asks}
+          hasMore={moreAsks}
+          onMore={showMoreAsks}
+          onDelete={deleteAsk}
+          askedAtMs={askedAtMs}
+          onJump={(ms) => {
+            const turn = mapTurns.find((t) => ms < t.endMs) ?? mapTurns[mapTurns.length - 1];
+            if (turn) openAt(turn, false);
+          }}
+        />
       ) : (
         <div className="summary-pane">
-          <div className="summary-controls">
-            <label className="control">
-              <span>Template</span>
-              <select value={template} onChange={(e) => setTemplate(e.target.value)}>
-                {templates.map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.name}
-                    {t.overridden ? ' *' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="control">
-              <span>Written by</span>
-              <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)}>
-                {llmProviders.map((p) => (
-                  <option key={p.id} value={p.id} disabled={!p.ready}>
-                    {p.id} ({p.model}){p.ready ? '' : ' — not ready'}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              className="btn accent"
-              onClick={summarize}
-              disabled={summarizing || !llmProvider || !detail || detail.transcript.length === 0}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3v4" /><path d="M19 17v4" /><path d="M3 5h4" /><path d="M17 19h4" /><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" /></svg>
-              {summarizing ? 'Summarizing…' : 'Generate summary'}
-            </button>
-          </div>
           <div className="summary-scroll">
             {detail?.summaries.length === 0 && (
-              <p className="dim">
-                No summaries yet — pick a template and provider, then generate one.
+              <p className="note">
+                No summaries yet. Choose a template and who writes it, then press Write a summary.
               </p>
             )}
             {detail?.summaries.map((s) => (
               <div className="summary" key={s.id}>
-                <div className="summary-head">
-                  <span className="summary-title">{s.template}</span>
-                  <span className="summary-model">{s.model}</span>
-                </div>
+                <p className="summary-head">
+                  {templateName(s.template)}, written by {s.model}
+                </p>
                 <div className="summary-body">
-                  <Markdown source={s.content} />
+                  <Markdown
+                    source={withoutRepeatedTitle(s.content, title, templateName(s.template))}
+                  />
                 </div>
               </div>
             ))}
+            {detail && detail.summaries.length > 0 && (
+              <p className="note summary-check">
+                To check a point, pick that part of the line and read the transcript there.
+              </p>
+            )}
+            <div className="summary-controls">
+              <label className="control">
+                <span>Template</span>
+                <select
+                  value={template}
+                  onChange={(e) => useAuricle.setState({ summaryTemplate: e.target.value })}
+                >
+                  {templates.map((t) => (
+                    <option key={t.name} value={t.name}>
+                      {templateName(t.name)}
+                      {t.overridden ? ' (customized)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control">
+                <span>Written by</span>
+                <select
+                  value={llmProvider}
+                  onChange={(e) => useAuricle.setState({ summaryProvider: e.target.value })}
+                >
+                  {llmProviders.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.ready}>
+                      {providerName(p.id)} ({p.model}){p.ready ? '' : ', not ready'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={detail?.summaries.length ? 'btn' : 'btn accent'}
+                onClick={summarize}
+                disabled={summarizing || !llmProvider || !detail || detail.transcript.length === 0}
+              >
+                {summarizing
+                  ? 'Writing…'
+                  : detail?.summaries.length
+                    ? 'Write another summary'
+                    : 'Write a summary'}
+              </button>
+            </div>
           </div>
         </div>
       )}
