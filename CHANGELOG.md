@@ -68,6 +68,22 @@ Your coding agent can read your meetings.
   sharing that runtime. The tools are async now and their store access goes
   through `spawn_blocking`, as `POST /api/v1/peek` already did.
 
+### Dictation (engine)
+
+- **The engine can dictate.** `POST /api/v1/dictation/start`, `/stop` and
+  `/cancel` transcribe the mic alone and hand the text back to whoever stopped
+  it. A meeting and a dictation never share the mic: either start answers `409`
+  while the other runs. Only finals are transcribed, so a stop never waits
+  behind a preview, and a dictation stops itself after 5 minutes so a stuck key
+  can't hold the mic. WebSocket events: `dictation_started`,
+  `dictation_partial`, `dictation_stopped`.
+- **Local unless you choose otherwise.** Dictation has its own
+  `dictation_provider` setting, `whisper-local` by default, and never follows
+  the meeting default. `dictation_language` falls back to `stt_language`.
+- **Nothing is kept.** No session row, transcript line or audio file, nothing
+  in the ring that feeds asks and MCP. A cloud provider gets a `dictation`
+  egress row before any audio goes, with no text in it.
+
 ### Your data
 
 - **Meetings can expire.** Settings → Your data can delete meetings after N

@@ -280,9 +280,16 @@ verbatim:
   copy to a `backups` folder beside the database. Retained audio is not in the
   backup, and retention leaves backups alone, so one keeps meetings you delete
   later.
+- **Dictation keeps nothing.** The engine can transcribe the mic alone for
+  dictation (`/api/v1/dictation/*`). It uses its own `dictation_provider`
+  setting, `whisper-local` unless you pick another, so a cloud setup for
+  meetings never makes dictation cloud. The text goes back to whoever stopped
+  the dictation and nowhere else: no meeting, no transcript line, no audio file,
+  nothing an ask or an MCP agent can read. A dictation stops itself after
+  5 minutes.
 - **Verifiable, not just promised.** The daemon's egress ledger records every
-  time it sent user data to a cloud provider — session audio, prompt, summary,
-  or auto-title — with the destination and, for text, the rough size, and
+  time it sent user data to a cloud provider — session audio, dictation audio,
+  prompt, summary, or auto-title — with the destination and, for text, the rough size, and
   records local-only actions too. Metadata only; contents are never logged. See
   it on the dashboard's **Privacy** page or `GET /api/v1/egress`. It covers the
   daemon only: `auricle record` with a cloud provider writes no ledger rows.

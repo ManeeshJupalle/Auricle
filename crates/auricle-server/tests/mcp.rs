@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use auricle_core::{AudioChunk, ChannelId, ChunkKind, Config, Result, Segment, SttEvent};
-use auricle_server::{build_router, AudioSource, Engine, EngineOptions, StartParams};
+use auricle_server::{
+    build_router, AudioSource, DictationParams, Engine, EngineOptions, StartParams,
+};
 use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
 use tokio::sync::mpsc;
 
@@ -546,6 +548,51 @@ async fn recorded_meeting(
     let live = live_transcript(client, base, mcp_session).await;
     assert!(live.contains(SECRET), "nothing to lose: {live}");
     id
+}
+
+#[tokio::test]
+async fn a_dictation_never_reaches_an_agent() {
+    let (base, engine) = spawn_with("dictation", Some(Arc::new(SecretProvider))).await;
+    let client = reqwest::Client::new();
+    enable_mcp(&base, &client).await;
+    let session = handshake(&client, &base).await;
+
+    engine
+        .start_dictation(DictationParams {
+            audio: Some(AudioSource::WavFile {
+                path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../fixtures/tts_loopback_16k.wav"),
+                channel: ChannelId::Mic,
+            }),
+            ..DictationParams::default()
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let dictated = engine.stop_dictation().await.unwrap();
+    assert!(
+        dictated.text.contains(SECRET),
+        "nothing to leak: {dictated:?}"
+    );
+
+    let live = live_transcript(&client, &base, &session).await;
+    assert!(!live.contains(SECRET), "{live}");
+    let found = post(&client, &base)
+        .header("mcp-session-id", &session)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+            "params": { "name": "auricle.search", "arguments": { "query": "merger" } }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!found.contains(SECRET), "{found}");
+
+    // A meeting's words do reach the live transcript, so the look above is real.
+    recorded_meeting(&client, &base, &engine, &session).await;
 }
 
 #[tokio::test]

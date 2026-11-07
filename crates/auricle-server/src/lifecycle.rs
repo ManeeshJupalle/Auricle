@@ -1,5 +1,6 @@
-//! Session lifecycle state machine: idle → recording → stopping → idle.
-//! One active session max; a concurrent start is a conflict (HTTP 409).
+//! Session lifecycle state machine: idle → recording → stopping → idle, or
+//! idle → dictating → idle. One owner of the mic at a time, a meeting or a
+//! dictation; a concurrent start is a conflict (HTTP 409).
 //!
 //! This is the one record of whether a session exists and how to stop it: the
 //! slot and its stop controls are reserved, signalled, and released together.
@@ -14,12 +15,17 @@ pub enum State {
     Idle,
     Recording(String),
     Stopping(String),
+    /// The mic is taken by a dictation. It has no stopping state: it keeps the
+    /// slot until its text is in, and the control's flag is its stop.
+    Dictating(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LifecycleError {
     /// Another session is active (or still stopping) — maps to 409.
     Busy(String),
+    /// A dictation has the mic — maps to 409.
+    Dictating,
     /// The named session is not the active one — maps to 404/409.
     NotActive,
     /// The daemon is exiting and takes no more sessions — maps to 503.
@@ -64,9 +70,10 @@ impl Lifecycle {
         self.control.clone()
     }
 
+    /// The meeting holding the slot. A dictation is not a session.
     pub fn active_session(&self) -> Option<&str> {
         match &self.state {
-            State::Idle => None,
+            State::Idle | State::Dictating(_) => None,
             State::Recording(id) | State::Stopping(id) => Some(id),
         }
     }
@@ -78,12 +85,21 @@ impl Lifecycle {
 
     /// idle → recording; anything else is a conflict.
     pub fn start(&mut self, id: &str) -> Result<(), LifecycleError> {
+        self.take(State::Recording(id.to_string()))
+    }
+
+    /// idle → dictating, on the same terms as a meeting.
+    pub fn start_dictation(&mut self, id: &str) -> Result<(), LifecycleError> {
+        self.take(State::Dictating(id.to_string()))
+    }
+
+    fn take(&mut self, next: State) -> Result<(), LifecycleError> {
         if self.closed {
             return Err(LifecycleError::ShuttingDown);
         }
         match &self.state {
             State::Idle => {
-                self.state = State::Recording(id.to_string());
+                self.state = next;
                 self.control = SessionControl::default();
                 self.capturing = false;
                 Ok(())
@@ -91,12 +107,17 @@ impl Lifecycle {
             State::Recording(active) | State::Stopping(active) => {
                 Err(LifecycleError::Busy(active.clone()))
             }
+            State::Dictating(_) => Err(LifecycleError::Dictating),
         }
     }
 
     /// Claim the go-ahead to open capture: false if a stop got here first.
     pub fn begin_capture(&mut self, id: &str) -> bool {
-        self.capturing = matches!(&self.state, State::Recording(active) if active == id);
+        self.capturing = match &self.state {
+            State::Recording(active) => active == id,
+            State::Dictating(active) => active == id && !self.control.stop.load(Ordering::Relaxed),
+            _ => false,
+        };
         self.capturing
     }
 
@@ -118,10 +139,24 @@ impl Lifecycle {
         }
     }
 
+    /// Signal the named dictation to stop capturing. It keeps the slot until
+    /// `finish_stop`, once its text is in.
+    pub fn stop_dictation(&mut self, id: &str) -> Result<(), LifecycleError> {
+        match &self.state {
+            State::Dictating(active) if active == id => {
+                self.control.stop.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            _ => Err(LifecycleError::NotActive),
+        }
+    }
+
     /// → idle: the session is fully stopped and persisted, or its start
     /// failed. Either way nothing of it may keep running.
     pub fn finish_stop(&mut self, id: &str) {
-        if matches!(&self.state, State::Recording(a) | State::Stopping(a) if a == id) {
+        if matches!(&self.state,
+            State::Recording(a) | State::Stopping(a) | State::Dictating(a) if a == id)
+        {
             self.control.stop.store(true, Ordering::Relaxed);
             self.state = State::Idle;
         }
@@ -230,6 +265,66 @@ mod tests {
         lc.begin_stop("b").unwrap_err();
         lc.finish_stop("b");
         assert!(!control.stop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_dictation_and_a_meeting_never_hold_the_mic_together() {
+        let mut lc = Lifecycle::new();
+        lc.start_dictation("d1").unwrap();
+        assert_eq!(lc.start("s1"), Err(LifecycleError::Dictating));
+        assert_eq!(lc.start_dictation("d2"), Err(LifecycleError::Dictating));
+        assert_eq!(lc.active_session(), None, "a dictation is not a session");
+        lc.finish_stop("d1");
+
+        lc.start("s1").unwrap();
+        assert_eq!(
+            lc.start_dictation("d2"),
+            Err(LifecycleError::Busy("s1".into()))
+        );
+        lc.begin_stop("s1").unwrap();
+        assert_eq!(
+            lc.start_dictation("d2"),
+            Err(LifecycleError::Busy("s1".into()))
+        );
+        lc.finish_stop("s1");
+        lc.start_dictation("d2").unwrap();
+    }
+
+    #[test]
+    fn a_dictation_keeps_the_mic_until_its_text_is_in() {
+        let mut lc = Lifecycle::new();
+        lc.start_dictation("d").unwrap();
+        let control = lc.control();
+        // Neither a meeting's stop nor another id's touches it.
+        assert_eq!(lc.begin_stop("d"), Err(LifecycleError::NotActive));
+        assert_eq!(lc.stop_dictation("x"), Err(LifecycleError::NotActive));
+        assert!(!control.stop.load(Ordering::Relaxed));
+
+        lc.stop_dictation("d").unwrap();
+        assert!(control.stop.load(Ordering::Relaxed));
+        assert_eq!(lc.state(), &State::Dictating("d".into()));
+        assert_eq!(lc.start("s"), Err(LifecycleError::Dictating));
+        lc.finish_stop("d");
+        assert_eq!(lc.state(), &State::Idle);
+    }
+
+    #[test]
+    fn a_dictation_stopped_before_capture_never_opens_the_mic() {
+        let mut lc = Lifecycle::new();
+        lc.start_dictation("d").unwrap();
+        lc.stop_dictation("d").unwrap();
+        assert!(!lc.begin_capture("d"));
+
+        let mut lc = Lifecycle::new();
+        lc.start_dictation("d").unwrap();
+        assert!(lc.begin_capture("d"));
+    }
+
+    #[test]
+    fn a_closed_lifecycle_takes_no_dictation() {
+        let mut lc = Lifecycle::new();
+        lc.close();
+        assert_eq!(lc.start_dictation("d"), Err(LifecycleError::ShuttingDown));
     }
 
     #[test]

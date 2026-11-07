@@ -87,6 +87,21 @@ pub enum WsEvent {
         ask_id: String,
         message: String,
     },
+    /// A dictation has the mic.
+    DictationStarted {
+        id: String,
+        provider: String,
+    },
+    /// The dictation's text so far, sent as each final lands (lossy lane).
+    DictationPartial {
+        id: String,
+        text: String,
+    },
+    /// The dictation is over, however it ended. Its text goes only to the
+    /// stop's reply.
+    DictationStopped {
+        id: String,
+    },
     DeviceLost {
         session: String,
         channel: String,
@@ -217,6 +232,29 @@ mod tests {
         .unwrap();
         assert_eq!(v["type"], "ask_error");
         assert!(v["message"].as_str().unwrap().contains("404"));
+    }
+
+    #[test]
+    fn dictation_events_serialize() {
+        let json = |ev: WsEvent| serde_json::from_str::<serde_json::Value>(&ev.to_json()).unwrap();
+        assert_eq!(
+            json(WsEvent::DictationStarted {
+                id: "d1".into(),
+                provider: "whisper-local".into(),
+            }),
+            serde_json::json!({"type": "dictation_started", "id": "d1", "provider": "whisper-local"})
+        );
+        assert_eq!(
+            json(WsEvent::DictationPartial {
+                id: "d1".into(),
+                text: "so far".into(),
+            }),
+            serde_json::json!({"type": "dictation_partial", "id": "d1", "text": "so far"})
+        );
+        assert_eq!(
+            json(WsEvent::DictationStopped { id: "d1".into() }),
+            serde_json::json!({"type": "dictation_stopped", "id": "d1"})
+        );
     }
 
     #[test]

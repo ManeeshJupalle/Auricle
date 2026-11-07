@@ -13,7 +13,9 @@ use axum::{Json, Router};
 use serde_json::json;
 use tokio::sync::{broadcast, Notify};
 
-use crate::engine::{Engine, EngineOptions, StartError, StartParams, StopError};
+use crate::engine::{
+    DictationError, DictationParams, Engine, EngineOptions, StartError, StartParams, StopError,
+};
 use crate::events::WsEvent;
 use crate::export::render_markdown_full;
 use crate::store::{SegmentRow, SessionPage, SessionRow, Store, SummaryRow};
@@ -92,6 +94,9 @@ fn router(
         .route("/api/v1/sessions/{id}/stop", post(stop_session))
         .route("/api/v1/sessions/{id}/export", get(export_session))
         .route("/api/v1/sessions/{id}/summarize", post(summarize_session))
+        .route("/api/v1/dictation/start", post(start_dictation))
+        .route("/api/v1/dictation/stop", post(stop_dictation))
+        .route("/api/v1/dictation/cancel", post(cancel_dictation))
         .route("/api/v1/settings", get(get_settings).put(put_settings))
         .route(
             "/api/v1/secrets/{provider}",
@@ -910,6 +915,9 @@ async fn start_session(State(state): State<AppState>, Json(params): Json<StartPa
             })),
         )
             .into_response(),
+        Err(StartError::Dictating) => {
+            conflict("a dictation is in progress; finish it before starting a meeting")
+        }
         Err(StartError::Invalid(msg)) => {
             (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
         }
@@ -923,6 +931,77 @@ async fn start_session(State(state): State<AppState>, Json(params): Json<StartPa
             .into_response(),
         Err(StartError::Internal(e)) => internal(e.to_string()),
     }
+}
+
+/// POST /api/v1/dictation/start — the body (`{"language": "en"}`) is optional.
+async fn start_dictation(
+    State(state): State<AppState>,
+    body: Option<Json<DictationParams>>,
+) -> Response {
+    let params = body.map(|Json(params)| params).unwrap_or_default();
+    match state.engine.start_dictation(params).await {
+        Ok(started) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "id": started.id,
+                "provider": started.provider,
+                "local": started.local,
+            })),
+        )
+            .into_response(),
+        Err(StartError::Busy(_)) => {
+            conflict("a meeting is recording; dictation can start once it stops")
+        }
+        Err(StartError::Dictating) => conflict("a dictation is already active"),
+        Err(StartError::Stopped) => conflict("the dictation was stopped before it began"),
+        Err(StartError::Invalid(msg)) => {
+            (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
+        }
+        Err(e @ StartError::ShuttingDown) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+        Err(StartError::Internal(e)) => internal(e.to_string()),
+    }
+}
+
+/// POST /api/v1/dictation/stop — ends the dictation and answers with its text,
+/// once the last chunk has been transcribed.
+async fn stop_dictation(State(state): State<AppState>) -> Response {
+    match state.engine.stop_dictation().await {
+        Ok(dictated) => Json(json!({
+            "id": dictated.id,
+            "text": dictated.text,
+            "duration_ms": dictated.duration_ms,
+        }))
+        .into_response(),
+        Err(e) => dictation_error(e),
+    }
+}
+
+/// POST /api/v1/dictation/cancel — ends the dictation and discards its text.
+async fn cancel_dictation(State(state): State<AppState>) -> Response {
+    match state.engine.cancel_dictation().await {
+        Ok(id) => Json(json!({"id": id})).into_response(),
+        Err(e) => dictation_error(e),
+    }
+}
+
+fn dictation_error(e: DictationError) -> Response {
+    let (status, message) = match e {
+        DictationError::NotActive => (StatusCode::NOT_FOUND, "no dictation is active".to_string()),
+        DictationError::Failed(message) => (StatusCode::BAD_GATEWAY, message),
+        DictationError::TimedOut => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "the dictation did not finish in time".to_string(),
+        ),
+    };
+    (status, Json(json!({"error": message}))).into_response()
+}
+
+fn conflict(message: &str) -> Response {
+    (StatusCode::CONFLICT, Json(json!({"error": message}))).into_response()
 }
 
 async fn stop_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -1246,16 +1325,18 @@ async fn put_settings(
     }
     // Ends up in a provider's URL, and a bad value would otherwise surface
     // only as a failed Start in the middle of someone's meeting.
-    if obj.get("stt_language").is_some_and(|language| {
-        language
-            .as_str()
-            .is_none_or(|tag| auricle_stt::validate_language(tag).is_err())
-    }) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "stt_language must be \"auto\" or a tag like en or pt-BR"})),
-        )
-            .into_response();
+    for key in ["stt_language", "dictation_language"] {
+        if obj.get(key).is_some_and(|language| {
+            language
+                .as_str()
+                .is_none_or(|tag| auricle_stt::validate_language(tag).is_err())
+        }) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("{key} must be \"auto\" or a tag like en or pt-BR")})),
+            )
+                .into_response();
+        }
     }
     let store = state.engine.store();
     for (k, v) in obj {

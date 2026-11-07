@@ -185,6 +185,44 @@ Returns immediately; the engine flushes open speech spans, finishes
 in-flight STT, persists, then emits `session_stopped` on the WebSocket and
 returns to `idle`. Stopping a session that is not active returns `409`.
 
+## POST /api/v1/dictation/start · stop · cancel
+
+Push-to-talk dictation from the mic alone. A dictation and a meeting never hold
+the mic together: each start answers `409` with a plain `error` while the other
+is running, as does a second dictation.
+
+- **`start`**: optional body `{"language":"en"}`. Answers once the mic is
+  listening with `201 {"id":"d…","provider":"whisper-local","local":true}`,
+  where `local` is false when the audio leaves the machine. The provider is the
+  `dictation_provider` setting, `whisper-local` when unset. It never follows
+  `default_provider`, so setting meetings up for the cloud does not send
+  dictation there. The language is the body's, else `dictation_language`, else
+  `stt_language`, else `[stt].language`. A bad language or unknown provider is
+  `400`; after a shutdown request it is `503`.
+- **`stop`**: stops the mic, transcribes what is left, and answers
+  `200 {"id":"d…","text":"…","duration_ms":n}`. `text` may be empty. `404`
+  when there is nothing to stop, `502 {"error":…}` when transcription failed
+  and nothing was heard, `504` if the dictation runs past its own bounds on
+  finishing (150 s).
+- **`cancel`**: discards it, `200 {"id":"d…"}` or `404`. It answers once the
+  mic is free, so a new start can follow at once.
+
+A dictation stops itself after 5 minutes, so a stuck key can't hold the mic.
+That works as a stop does and sends `dictation_stopped`. Its text waits in
+memory for the next `stop` to collect, and a new start discards it.
+
+Nothing of a dictation is stored: no session row, no segment, no audio file
+even with `retain_raw_audio` on, and nothing in the transcript ring, so `/ask`
+and MCP never see it. A provider that is not on-device gets one `dictation`
+egress row before any audio is sent, with no text in it. Local dictation
+writes no row. While a dictation runs, `/health` still says `idle` with no
+`active_session`.
+
+Only finals are transcribed, with no interim passes, so a stop never waits
+behind a preview. `dictation_partial` carries the text so far as each final
+lands. A start that is still loading its model can be stopped: the start then
+answers `409` and the stop gets empty text.
+
 ## GET /api/v1/sessions
 
 Newest first. Optional `?q=` filters sessions whose **title or transcript
@@ -375,6 +413,8 @@ start; `mcp_enabled` applies at once, and `retention_days` at the next sweep:
 | `default_provider` | string | `[stt].provider` |
 | `whisper_model` | string | `[stt.whisper-local].model` |
 | `stt_language` | string | `[stt].language` — `auto` or a tag like `en` or `pt-BR`; anything else is `400`. `base.en` and `small.en` ignore it, and a session that asks them for another language gets a warning as an `error` event |
+| `dictation_provider` | string | none — dictation's STT provider, `whisper-local` when unset; deliberately separate from `default_provider` |
+| `dictation_language` | string | `stt_language` — validated the same way |
 | `mic_device` | string | `[audio].mic_device` |
 | `loopback_device` | string | `[audio].loopback_device` |
 | `retain_raw_audio` | bool | `[audio].retain_raw_audio` |
@@ -472,7 +512,7 @@ clamped to 1–1000), `offset` (default 0, to page past the first `limit` rows).
 | `destination` | `"cloud"` (Auricle sent it off the machine), `"local"` (stayed on-device), or `"agent"` (a local MCP client read it — see `POST /mcp`) |
 | `provider` | e.g. `deepgram`, `groq`, `whisper-local`; for `agent` rows, the client's self-reported name |
 | `host` | destination host for cloud rows, else null/local host |
-| `kind` | `"audio"` (a session's live capture, one row per session), `"prompt"` (an ask), `"summary"`, `"title"` (a post-stop auto-title sent to an LLM), or an MCP read kind |
+| `kind` | `"audio"` (a session's live capture, one row per session), `"dictation"` (one dictation's audio, sent to a provider that is not on-device), `"prompt"` (an ask), `"summary"`, `"title"` (a post-stop auto-title sent to an LLM), or an MCP read kind |
 | `items` | rough size — characters for text; null for audio |
 | `detail` | short human note (e.g. `"ask + screen + transcript"`) |
 
@@ -703,6 +743,9 @@ Event types:
 | `session_started` | session, title, stt_provider | |
 | `session_stopped` | session | emitted after flush + persistence complete |
 | `session_updated` | session, title | post-stop auto-title landed (see POST /sessions) |
+| `dictation_started` | id, provider | a dictation has the mic |
+| `dictation_partial` | id, text | the dictation's text so far, sent as each final lands; rides the lossy lane |
+| `dictation_stopped` | id | the dictation is over: stopped, cancelled, capped at 5 minutes, or failed to start. The text goes only to the stop's reply |
 | `answer_delta` | ask_id, text | one fragment of an ask's streamed answer (mirrors the ask's SSE response) |
 | `answer_done` | ask_id, usage | an ask completed; `usage` when the provider reported tokens |
 | `ask_error` | ask_id, message | an ask failed (upstream LLM error, screen capture failure) |
