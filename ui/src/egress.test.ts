@@ -28,6 +28,10 @@ describe('egress kinds', () => {
     expect(kindLabel('title')).toBe('Auto-title');
   });
 
+  it('names the dictation polish kind', () => {
+    expect(kindLabel('dictation_polish')).toBe('Dictation polish');
+  });
+
   it('shows a kind it does not know as is', () => {
     expect(kindLabel('something_new')).toBe('something_new');
   });

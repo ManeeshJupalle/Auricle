@@ -16,6 +16,7 @@ mod events;
 mod export;
 mod lifecycle;
 mod mcp;
+mod polish;
 mod redact;
 mod retention;
 mod ring;

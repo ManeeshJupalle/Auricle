@@ -15,6 +15,11 @@ Ctrl+V of `synthetic_keys.rs`, the Windows window activation of
 `focus_capture.rs`, and the paste sequence in `main.rs`, with changes
 described in that file.
 
+The dictation polish prompt in `crates/auricle-llm/templates/dictation-polish.md`
+adapts wording from the refinement prompt in voicebox's
+`backend/services/refinement.py`, narrowed to punctuation, capitals and filler
+words, with the dictated text framed so that it is never read as an instruction.
+
 ```
 MIT License
 

@@ -288,6 +288,20 @@ export function Settings() {
           />
           {saved === 'ollama_model' && <span className="saved">Saved</span>}
         </label>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={settings['dictation_polish'] === true}
+            onChange={(e) => save({ dictation_polish: e.target.checked })}
+          />
+          <span>Tidy dictation with the LLM above</span>
+          {saved === 'dictation_polish' && <span className="saved">Saved</span>}
+        </label>
+        <p className="note">
+          Off by default. The LLM fixes punctuation, capitals, and filler words before your
+          dictation is pasted, and it goes in as heard if that fails or takes over 8 seconds. With a
+          cloud LLM, what you dictate is sent there.
+        </p>
         <div className="keys">
           <span>Cloud API keys</span>
           {keySlots.map((slot) => (

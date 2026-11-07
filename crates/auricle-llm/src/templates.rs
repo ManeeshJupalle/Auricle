@@ -18,6 +18,13 @@ pub const DEFAULT_TEMPLATES: &[(&str, &str)] = &[
     ("copilot", include_str!("../templates/copilot.md")),
 ];
 
+/// The system prompt that polishes dictated text (the `dictation_polish`
+/// setting). Kept out of `DEFAULT_TEMPLATES`, which the summary picker lists
+/// and a user file can replace: half of this prompt is what keeps a dictated
+/// sentence from being obeyed, so it ships fixed. Its wording is adapted from
+/// voicebox's `backend/services/refinement.py` (MIT; see THIRD_PARTY_NOTICES.md).
+pub const DICTATION_POLISH: &str = include_str!("../templates/dictation-polish.md");
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TemplateInfo {
     pub name: String,

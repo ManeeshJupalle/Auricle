@@ -13,10 +13,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use auricle_core::{Config, Error, Result};
 
-pub use chat::OpenAiChatProvider;
+pub use chat::{OpenAiChatProvider, TRUNCATION_NOTICE};
 pub use mapreduce::{chunk_by_lines, estimate_tokens, summarize, MAP_REDUCE_TOKEN_THRESHOLD};
 pub use stream::{parse_stream_frame, FrameOut, SseParser, TokenUsage, DONE_SENTINEL};
-pub use templates::{list_templates, load_template, TemplateInfo, DEFAULT_TEMPLATES};
+pub use templates::{
+    list_templates, load_template, TemplateInfo, DEFAULT_TEMPLATES, DICTATION_POLISH,
+};
 
 // PHASE-NEXT: native Anthropic variant — skipped in this build because no
 // ANTHROPIC_API_KEY was available to capture a real payload against

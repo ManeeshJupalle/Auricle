@@ -970,12 +970,18 @@ async fn start_dictation(
 /// once the last chunk has been transcribed.
 async fn stop_dictation(State(state): State<AppState>) -> Response {
     match state.engine.stop_dictation().await {
-        Ok(dictated) => Json(json!({
-            "id": dictated.id,
-            "text": dictated.text,
-            "duration_ms": dictated.duration_ms,
-        }))
-        .into_response(),
+        Ok(dictated) => {
+            let mut body = json!({
+                "id": dictated.id,
+                "text": dictated.text,
+                "duration_ms": dictated.duration_ms,
+                "polished": dictated.polished,
+            });
+            if let Some(note) = dictated.polish_note {
+                body["polish_note"] = json!(note);
+            }
+            Json(body).into_response()
+        }
         Err(e) => dictation_error(e),
     }
 }
@@ -1320,6 +1326,18 @@ async fn put_settings(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "retention_days must be a whole number of days, 0 for off"})),
+        )
+            .into_response();
+    }
+    // Decides whether dictated text goes to an LLM. Anything but a bool reads
+    // as off, so a "true" string must not look accepted.
+    if obj
+        .get("dictation_polish")
+        .is_some_and(|polish| !polish.is_boolean())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "dictation_polish must be true or false"})),
         )
             .into_response();
     }

@@ -90,6 +90,10 @@ pub struct Dictated {
     pub id: String,
     pub text: String,
     pub duration_ms: u64,
+    /// Whether `text` went through the LLM polish (`dictation_polish`).
+    pub polished: bool,
+    /// Why polish was on and `text` is as heard all the same.
+    pub polish_note: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1312,8 +1316,8 @@ impl Engine {
     }
 
     /// Stop the dictation and wait for its text: the last chunk is flushed and
-    /// transcribed first. After the cap has stopped it, this collects the text
-    /// the cap left.
+    /// transcribed first, then polished if `dictation_polish` is on. After the
+    /// cap has stopped it, this collects the text the cap left.
     pub async fn stop_dictation(&self) -> std::result::Result<Dictated, DictationError> {
         let DictationHandle { id, end, outcome } = self
             .dictation
@@ -1324,11 +1328,25 @@ impl Engine {
         let _ = end.send(End::Stop);
         self.end_dictation_capture(&id);
         match tokio::time::timeout(DICTATION_WAIT, outcome).await {
-            Ok(Ok(Outcome::Heard { text, duration_ms })) => Ok(Dictated {
-                id,
-                text,
-                duration_ms,
-            }),
+            Ok(Ok(Outcome::Heard { text, duration_ms })) => {
+                let mut dictated = Dictated {
+                    id,
+                    text,
+                    duration_ms,
+                    polished: false,
+                    polish_note: None,
+                };
+                if !dictated.text.trim().is_empty() && crate::polish::enabled(&self.store) {
+                    match crate::polish::polish(&self.cfg, &self.store, &dictated.text).await {
+                        Ok(text) => {
+                            dictated.text = text;
+                            dictated.polished = true;
+                        }
+                        Err(note) => dictated.polish_note = Some(note),
+                    }
+                }
+                Ok(dictated)
+            }
             Ok(Ok(Outcome::Failed(message))) => Err(DictationError::Failed(message)),
             Ok(Ok(Outcome::Cancelled) | Err(_)) => Err(DictationError::Failed(
                 "the dictation ended without its text".to_string(),

@@ -34,7 +34,7 @@ const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
 
 /// Appended to output cut off by `finish_reason: length`. A cut-off answer
 /// is still worth keeping, but must never read as complete.
-pub(crate) const TRUNCATION_NOTICE: &str =
+pub const TRUNCATION_NOTICE: &str =
     "[Truncated: the model reached its output limit before finishing.]";
 
 #[derive(Debug, Serialize)]

@@ -122,7 +122,10 @@ cancels. Prefer press-to-start, press-to-paste? Put `[dictation]` /
 `mode = "toggle"` in `%LOCALAPPDATA%\auricle\overlay.toml` (the dictate key is
 `[hotkeys] dictate`). Tray → **Dictation setup** checks the hotkey, the engine,
 and which provider will hear you: local `whisper-local` unless you choose
-otherwise. Dictation can't start while a meeting is recording.
+otherwise. Dictation can't start while a meeting is recording. Settings →
+Transcription → **Tidy dictation with the LLM above** (off by default) has the
+summaries LLM fix punctuation, capitals and filler words before the paste; if
+it fails or takes over 8 seconds, the text goes in as heard.
 
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
@@ -297,9 +300,11 @@ verbatim:
   nothing an ask or an MCP agent can read. A dictation stops itself after
   5 minutes. The overlay pastes it through the clipboard and marks it so
   Windows keeps it out of clipboard history (Win+V) and cloud clipboard sync.
+  Dictation polish is off by default; turned on with a cloud LLM, the text is
+  sent to that LLM, with a ledger row first.
 - **Verifiable, not just promised.** The daemon's egress ledger records every
   time it sent user data to a cloud provider — session audio, dictation audio,
-  prompt, summary, or auto-title — with the destination and, for text, the rough size, and
+  dictation polish, prompt, summary, or auto-title — with the destination and, for text, the rough size, and
   records local-only actions too. Metadata only; contents are never logged. See
   it on the dashboard's **Privacy** page or `GET /api/v1/egress`. It covers the
   daemon only: `auricle record` with a cloud provider writes no ledger rows.

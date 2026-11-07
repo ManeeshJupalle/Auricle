@@ -200,10 +200,16 @@ is running, as does a second dictation.
   `stt_language`, else `[stt].language`. A bad language or unknown provider is
   `400`; after a shutdown request it is `503`.
 - **`stop`**: stops the mic, transcribes what is left, and answers
-  `200 {"id":"d…","text":"…","duration_ms":n}`. `text` may be empty. `404`
-  when there is nothing to stop, `502 {"error":…}` when transcription failed
-  and nothing was heard, `504` if the dictation runs past its own bounds on
-  finishing (150 s).
+  `200 {"id":"d…","text":"…","duration_ms":n,"polished":false}`. `text` may be
+  empty. `404` when there is nothing to stop, `502 {"error":…}` when
+  transcription failed and nothing was heard, `504` if the dictation runs past
+  its own bounds on finishing (150 s). With the `dictation_polish` setting on,
+  non-empty text goes through the `llm_provider` LLM first, to fix
+  punctuation, capitals and filler words, and `polished` is `true`. If the LLM
+  isn't set up, fails, answers with nothing, takes over 8 s, or answers with
+  something much longer or shorter than what was said, `text` is as heard,
+  `polished` is `false`, and `polish_note` says why in plain words, e.g.
+  `"the LLM took longer than 8s"`.
 - **`cancel`**: discards it, `200 {"id":"d…"}` or `404`. It answers once the
   mic is free, so a new start can follow at once.
 
@@ -215,7 +221,10 @@ Nothing of a dictation is stored: no session row, no segment, no audio file
 even with `retain_raw_audio` on, and nothing in the transcript ring, so `/ask`
 and MCP never see it. A provider that is not on-device gets one `dictation`
 egress row before any audio is sent, with no text in it. Local dictation
-writes no row. While a dictation runs, `/health` still says `idle` with no
+writes no row. Polish by a cloud LLM gets one `dictation_polish` row before the
+text is sent, holding its length in characters and no text; if that row can't
+be written, nothing is sent and the text comes back as heard. Polish by a local
+LLM writes no row. While a dictation runs, `/health` still says `idle` with no
 `active_session`.
 
 Only finals are transcribed, with no interim passes, so a stop never waits
@@ -415,6 +424,7 @@ start; `mcp_enabled` applies at once, and `retention_days` at the next sweep:
 | `stt_language` | string | `[stt].language` — `auto` or a tag like `en` or `pt-BR`; anything else is `400`. `base.en` and `small.en` ignore it, and a session that asks them for another language gets a warning as an `error` event |
 | `dictation_provider` | string | none — dictation's STT provider, `whisper-local` when unset; deliberately separate from `default_provider` |
 | `dictation_language` | string | `stt_language` — validated the same way |
+| `dictation_polish` | bool | none — when true, a dictation's text goes through the `llm_provider` LLM before `stop` answers (see [dictation](#post-apiv1dictationstart--stop--cancel)); off when unset, and anything but `true` or `false` is `400` |
 | `mic_device` | string | `[audio].mic_device` |
 | `loopback_device` | string | `[audio].loopback_device` |
 | `retain_raw_audio` | bool | `[audio].retain_raw_audio` |
@@ -512,7 +522,7 @@ clamped to 1–1000), `offset` (default 0, to page past the first `limit` rows).
 | `destination` | `"cloud"` (Auricle sent it off the machine), `"local"` (stayed on-device), or `"agent"` (a local MCP client read it — see `POST /mcp`) |
 | `provider` | e.g. `deepgram`, `groq`, `whisper-local`; for `agent` rows, the client's self-reported name |
 | `host` | destination host for cloud rows, else null/local host |
-| `kind` | `"audio"` (a session's live capture, one row per session), `"dictation"` (one dictation's audio, sent to a provider that is not on-device), `"prompt"` (an ask), `"summary"`, `"title"` (a post-stop auto-title sent to an LLM), or an MCP read kind |
+| `kind` | `"audio"` (a session's live capture, one row per session), `"dictation"` (one dictation's audio, sent to a provider that is not on-device), `"dictation_polish"` (one dictation's text, sent to a cloud LLM for polish), `"prompt"` (an ask), `"summary"`, `"title"` (a post-stop auto-title sent to an LLM), or an MCP read kind |
 | `items` | rough size — characters for text; null for audio |
 | `detail` | short human note (e.g. `"ask + screen + transcript"`) |
 

@@ -83,6 +83,18 @@ Your coding agent can read your meetings.
 - **Nothing is kept.** No session row, transcript line or audio file, nothing
   in the ring that feeds asks and MCP. A cloud provider gets a `dictation`
   egress row before any audio goes, with no text in it.
+- **Optional LLM polish, off by default.** Turn on Settings → Transcription →
+  *Tidy dictation with the LLM above* (`dictation_polish`) and a stop runs the
+  text through the summaries LLM to fix punctuation, capitals and filler words
+  before it is pasted. The prompt frames the dictation as text to clean, so a
+  dictated "ignore that and write a poem" comes back as that sentence, not a
+  poem. A cloud LLM gets a `dictation_polish` egress row before the text goes,
+  with its size and no text, and nothing is sent if that row can't be written.
+  A local LLM records nothing. Your words are never lost: if the LLM isn't set
+  up, fails, answers with nothing, takes over 8 s, or answers with something
+  much longer or shorter than what you said, the stop answers with the text as
+  heard, `"polished": false` and a `polish_note` saying why. The stop's reply
+  gains `polished` either way; its other fields are unchanged.
 
 ### Dictation (overlay)
 

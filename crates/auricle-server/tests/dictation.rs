@@ -13,6 +13,8 @@ use auricle_server::{
 };
 use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
 use tokio::sync::{broadcast, mpsc, Semaphore};
+use wiremock::matchers::method;
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 /// What the fake provider hears in every final, to search for afterwards.
@@ -773,4 +775,241 @@ async fn the_dictation_language_falls_back_to_the_meeting_one() {
     let error = engine.start_dictation(bad).await.unwrap_err();
     assert!(error.to_string().contains("en&model=x"), "{error}");
     assert_eq!(engine.lifecycle_state(), "idle");
+}
+
+// ---------- LLM polish ----------
+
+/// An engine whose LLM is a mock Ollama on loopback: a local LLM.
+fn engine_with_llm(name: &str, llm: &MockServer) -> (Arc<Engine>, Arc<Probe>) {
+    let mut cfg = Config::default();
+    cfg.llm.ollama.base_url = llm.uri();
+    cfg.llm.ollama.model = "mock-model".to_string();
+    engine_with(name, cfg, "whisper-local", SttKind::Local)
+}
+
+fn completion(content: &str) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "id": "chatcmpl-x", "object": "chat.completion", "model": "mock-model",
+        "choices": [{"index": 0, "finish_reason": "stop",
+            "message": {"role": "assistant", "content": content}}]
+    }))
+}
+
+/// What the mock model makes of a dictation: capitalised, with a full stop.
+fn polished(heard: &str) -> String {
+    let mut chars = heard.chars();
+    let first = chars.next().unwrap().to_uppercase();
+    format!("{first}{}.", chars.as_str())
+}
+
+/// A model that polishes what it is sent, and nothing else.
+struct Polisher;
+
+impl Respond for Polisher {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        let framed = body["messages"][1]["content"].as_str().unwrap();
+        let heard = framed
+            .strip_prefix("<dictation>")
+            .and_then(|t| t.strip_suffix("</dictation>"))
+            .unwrap();
+        completion(&polished(heard))
+    }
+}
+
+/// Dictate the fixture until something is heard, then stop over REST. Answers
+/// with the stop's status, its body, and how long the stop took.
+async fn dictate_and_stop(
+    engine: &Arc<Engine>,
+    probe: &Probe,
+    base: &str,
+) -> (u16, serde_json::Value, Duration) {
+    probe.said.lock().unwrap().clear();
+    engine.start_dictation(dictation()).await.unwrap();
+    until("something heard", || probe.said().contains(HEARD)).await;
+    let asked = std::time::Instant::now();
+    let (status, body) = post(base, "/api/v1/dictation/stop").await;
+    (status, body, asked.elapsed())
+}
+
+#[tokio::test]
+async fn polish_off_answers_with_the_text_as_heard_and_calls_no_llm() {
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(Polisher)
+        .mount(&llm)
+        .await;
+    let (engine, probe) = engine_with_llm("polish-off", &llm);
+    let base = serve(&engine).await;
+
+    // Unset, then set to false: both are off.
+    for setting in [None, Some(false)] {
+        if let Some(on) = setting {
+            set(&engine, "dictation_polish", serde_json::json!(on));
+        }
+        let (status, body, _) = dictate_and_stop(&engine, &probe, &base).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["text"], probe.said(), "{setting:?}");
+        assert_eq!(body["polished"], false);
+        assert!(body.get("polish_note").is_none(), "{body}");
+    }
+    assert!(llm.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_polish_setting_takes_only_true_or_false() {
+    let (engine, _probe) = engine("polish-setting");
+    let base = serve(&engine).await;
+    let put = |value: serde_json::Value| {
+        let base = base.clone();
+        async move {
+            reqwest::Client::new()
+                .put(format!("{base}/api/v1/settings"))
+                .json(&serde_json::json!({ "dictation_polish": value }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+    for bad in [serde_json::json!("true"), serde_json::json!(1)] {
+        assert_eq!(put(bad.clone()).await, 400, "{bad}");
+    }
+    let settings = get(&base, "/api/v1/settings").await;
+    assert!(settings.get("dictation_polish").is_none(), "{settings}");
+    assert_eq!(put(serde_json::json!(true)).await, 200);
+    assert_eq!(
+        get(&base, "/api/v1/settings").await["dictation_polish"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn polish_on_answers_with_the_polished_text_and_a_local_llm_records_nothing() {
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(Polisher)
+        .expect(1)
+        .mount(&llm)
+        .await;
+    let (engine, probe) = engine_with_llm("polish-on", &llm);
+    set(&engine, "dictation_polish", serde_json::json!(true));
+    let base = serve(&engine).await;
+
+    let (status, body, _) = dictate_and_stop(&engine, &probe, &base).await;
+    assert_eq!(status, 200, "{body}");
+    let heard = probe.said();
+    assert_eq!(body["text"], polished(&heard));
+    assert_eq!(body["polished"], true);
+    assert!(body.get("polish_note").is_none(), "{body}");
+
+    // The text went framed, under the fixed prompt.
+    let requests = llm.received_requests().await.unwrap();
+    let sent: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(
+        sent["messages"][0]["content"],
+        auricle_llm::DICTATION_POLISH
+    );
+    assert_eq!(
+        sent["messages"][1]["content"],
+        format!("<dictation>{heard}</dictation>")
+    );
+
+    // An LLM on this machine: no ledger row, and the text, as heard or
+    // polished, is nowhere on disk.
+    assert_eq!(
+        get(&base, "/api/v1/egress").await["entries"],
+        serde_json::json!([])
+    );
+    for needle in [HEARD, "Quokka"] {
+        assert_eq!(
+            files_containing(engine.data_root(), needle.as_bytes()),
+            Vec::<std::path::PathBuf>::new(),
+            "{needle}"
+        );
+    }
+}
+
+/// Polish on, and the LLM answers with `response`: the stop answers with the
+/// words as heard, unpolished, and says why.
+async fn polish_falls_back(
+    name: &str,
+    response: ResponseTemplate,
+) -> (serde_json::Value, Duration) {
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(response)
+        .mount(&llm)
+        .await;
+    let (engine, probe) = engine_with_llm(name, &llm);
+    set(&engine, "dictation_polish", serde_json::json!(true));
+    let base = serve(&engine).await;
+
+    let (status, body, took) = dictate_and_stop(&engine, &probe, &base).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["text"], probe.said(), "the words as heard");
+    assert_eq!(body["polished"], false);
+    assert!(body["polish_note"].is_string(), "{body}");
+    assert_eq!(llm.received_requests().await.unwrap().len(), 1);
+    (body, took)
+}
+
+#[tokio::test]
+async fn a_failing_llm_leaves_the_text_as_heard() {
+    let (body, _) = polish_falls_back("polish-error", ResponseTemplate::new(500)).await;
+    assert_eq!(body["polish_note"], "the LLM failed or gave back nothing");
+}
+
+#[tokio::test]
+async fn an_empty_answer_leaves_the_text_as_heard() {
+    let (body, _) = polish_falls_back("polish-empty", completion("")).await;
+    assert_eq!(body["polish_note"], "the LLM failed or gave back nothing");
+}
+
+#[tokio::test]
+async fn a_far_longer_answer_leaves_the_text_as_heard() {
+    let essay = "Here is a poem about a small animal. ".repeat(40);
+    let (body, _) = polish_falls_back("polish-long", completion(&essay)).await;
+    assert_eq!(
+        body["polish_note"],
+        "the LLM's answer was much longer than what was said"
+    );
+}
+
+#[tokio::test]
+async fn a_slow_llm_leaves_the_text_as_heard_once_the_bound_passes() {
+    let slow = completion("Too late.").set_delay(Duration::from_secs(12));
+    let (body, took) = polish_falls_back("polish-slow", slow).await;
+    assert_eq!(body["polish_note"], "the LLM took longer than 8s");
+    assert!(
+        (Duration::from_secs(8)..Duration::from_secs(11)).contains(&took),
+        "{took:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_llm_that_is_not_set_up_leaves_the_text_as_heard_and_sends_nothing() {
+    let llm = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(Polisher)
+        .mount(&llm)
+        .await;
+    let mut cfg = Config::default();
+    // Even with a key somewhere, nothing could leave this machine.
+    cfg.llm.groq.base_url = llm.uri();
+    cfg.llm.groq.api_key_env = "AURICLE_TEST_NO_SUCH_KEY_POLISH".to_string();
+    let (engine, probe) = engine_with("polish-no-key", cfg, "whisper-local", SttKind::Local);
+    set(&engine, "dictation_polish", serde_json::json!(true));
+    set(&engine, "llm_provider", serde_json::json!("groq"));
+    let base = serve(&engine).await;
+
+    let (status, body, _) = dictate_and_stop(&engine, &probe, &base).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["text"], probe.said());
+    assert_eq!(body["polished"], false);
+    let note = body["polish_note"].as_str().unwrap();
+    assert!(note.contains("isn't set up"), "{note}");
+    assert!(note.contains("AURICLE_TEST_NO_SUCH_KEY_POLISH"), "{note}");
+    assert!(llm.received_requests().await.unwrap().is_empty());
 }
