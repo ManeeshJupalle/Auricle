@@ -1,8 +1,19 @@
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use auricle_core::{Error, Result};
+
+use crate::http_error;
+use reqwest::header::{CONTENT_RANGE, RANGE};
+use reqwest::{Client, Response, StatusCode};
 use sha2::{Digest, Sha256};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Per read, never total: a healthy download runs for many minutes, a stalled
+/// one should fail and leave its `.part` for the next attempt to resume.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A downloadable ggml whisper model.
 #[derive(Debug, Clone, Copy)]
@@ -16,8 +27,8 @@ pub struct ModelInfo {
 }
 
 /// Known models. Checksums and sizes captured from the Hugging Face LFS
-/// metadata for `ggerganov/whisper.cpp` on 2026-07-04 via
-/// `/api/models/ggerganov/whisper.cpp/tree/main`.
+/// metadata for `ggerganov/whisper.cpp` on 2026-07-04 (multilingual rows on
+/// 2026-11-06) via `/api/models/ggerganov/whisper.cpp/tree/main`.
 const MODELS: &[ModelInfo] = &[
     ModelInfo {
         name: "base.en",
@@ -32,6 +43,20 @@ const MODELS: &[ModelInfo] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
         sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         size_bytes: 487_614_201,
+    },
+    ModelInfo {
+        name: "base",
+        file_name: "ggml-base.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        size_bytes: 147_951_465,
+    },
+    ModelInfo {
+        name: "small",
+        file_name: "ggml-small.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        size_bytes: 487_601_967,
     },
 ];
 
@@ -107,33 +132,94 @@ pub async fn ensure_model(info: &'static ModelInfo, dir: &Path) -> Result<PathBu
         info.url
     );
     let part = dir.join(format!("{}.part", info.file_name));
-    let result = download_verified(info, &part).await;
-    if result.is_err() {
-        let _ = std::fs::remove_file(&part);
-    }
-    result?;
+    download_verified(&http_client(READ_TIMEOUT)?, info, &part).await?;
     std::fs::rename(&part, &path)?;
     eprintln!("model saved to {}", path.display());
     Ok(path)
 }
 
-async fn download_verified(info: &ModelInfo, part: &Path) -> Result<()> {
-    let mut resp = reqwest::get(info.url)
-        .await
-        .map_err(|e| Error::Model(format!("download failed: {e}")))?
-        .error_for_status()
-        .map_err(|e| Error::Model(format!("download failed: {e}")))?;
+fn http_client(read_timeout: Duration) -> Result<Client> {
+    Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .build()
+        .map_err(|e| Error::Model(format!("building http client: {e}")))
+}
 
-    let mut file = std::fs::File::create(part)?;
-    let mut hasher = Sha256::new();
-    let mut received: u64 = 0;
+/// Bring `part` up to the complete, verified model. An interrupted transfer
+/// leaves `part` for the next run to resume; a failed checksum removes it,
+/// since resuming from those bytes could never succeed.
+async fn download_verified(client: &Client, info: &ModelInfo, part: &Path) -> Result<()> {
+    let have = std::fs::metadata(part).map_or(0, |m| m.len());
+    // Full size is a run killed before its rename, so only the checksum is
+    // left to do. Larger cannot be a prefix of this file.
+    let have = if have > info.size_bytes { 0 } else { have };
+    if have < info.size_bytes {
+        fetch_into_part(client, info, part, have).await?;
+    }
+
+    // Hashes the whole file, so bytes from an earlier run are verified too.
+    let path = part.to_path_buf();
+    let actual = tokio::task::spawn_blocking(move || file_sha256(&path))
+        .await
+        .map_err(|e| Error::Model(format!("checksum task failed: {e}")))??;
+    if actual != info.sha256 {
+        let _ = std::fs::remove_file(part);
+        return Err(Error::Model(format!(
+            "downloaded {} failed checksum verification: expected {}, got {actual}",
+            info.file_name, info.sha256
+        )));
+    }
+    Ok(())
+}
+
+async fn request_from(client: &Client, info: &ModelInfo, offset: u64) -> Result<Response> {
+    let mut request = client.get(info.url);
+    if offset > 0 {
+        request = request.header(RANGE, format!("bytes={offset}-"));
+    }
+    request
+        .send()
+        .await
+        .map_err(|e| Error::Model(format!("download failed: {}", http_error(&e))))
+}
+
+/// First byte of a `Content-Range: bytes 80-199/200` response.
+fn content_range_start(resp: &Response) -> Option<u64> {
+    let value = resp.headers().get(CONTENT_RANGE)?.to_str().ok()?;
+    let (start, _) = value.strip_prefix("bytes ")?.split_once('-')?;
+    start.parse().ok()
+}
+
+/// Append to `part` from byte `have`, or rewrite it when the server can't
+/// serve that offset.
+async fn fetch_into_part(client: &Client, info: &ModelInfo, part: &Path, have: u64) -> Result<()> {
+    let mut resp = request_from(client, info, have).await?;
+    let resumed = have > 0
+        && resp.status() == StatusCode::PARTIAL_CONTENT
+        && content_range_start(&resp) == Some(have);
+    // A 200 already carries the whole file (Range ignored). Anything else,
+    // such as 416 or a 206 for another offset, can't extend `part`.
+    if have > 0 && !resumed && resp.status() != StatusCode::OK {
+        resp = request_from(client, info, 0).await?;
+    }
+    let mut resp = resp
+        .error_for_status()
+        .map_err(|e| Error::Model(format!("download failed: {}", http_error(&e))))?;
+
+    let mut file = if resumed {
+        eprintln!("  resuming from {:.0} MB", have as f64 / 1_048_576.0);
+        OpenOptions::new().append(true).open(part)?
+    } else {
+        File::create(part)?
+    };
+    let mut received: u64 = if resumed { have } else { 0 };
     let mut next_report: u64 = 0;
     while let Some(chunk) = resp
         .chunk()
         .await
-        .map_err(|e| Error::Model(format!("download interrupted: {e}")))?
+        .map_err(|e| Error::Model(format!("download interrupted: {}", http_error(&e))))?
     {
-        hasher.update(&chunk);
         file.write_all(&chunk)?;
         received += chunk.len() as u64;
         if received >= next_report {
@@ -147,21 +233,190 @@ async fn download_verified(info: &ModelInfo, part: &Path) -> Result<()> {
         }
     }
     file.flush()?;
-    drop(file);
-
-    let actual = hex(&hasher.finalize());
-    if actual != info.sha256 {
-        return Err(Error::Model(format!(
-            "downloaded {} failed checksum verification: expected {}, got {actual}",
-            info.file_name, info.sha256
-        )));
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn model_bytes() -> Vec<u8> {
+        (0..200u8).collect()
+    }
+
+    /// `ensure_model` takes a `&'static ModelInfo`; leaking is fine in a test.
+    fn test_model(url: String) -> &'static ModelInfo {
+        let bytes = model_bytes();
+        Box::leak(Box::new(ModelInfo {
+            name: "test",
+            file_name: "ggml-test.bin",
+            url: Box::leak(url.into_boxed_str()),
+            sha256: Box::leak(hex(&Sha256::digest(&bytes)).into_boxed_str()),
+            size_bytes: bytes.len() as u64,
+        }))
+    }
+
+    /// A fresh directory, with `.part` holding `partial` when given.
+    fn model_dir(test: &str, partial: Option<&[u8]>) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("auricle-stt-model-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(bytes) = partial {
+            std::fs::write(dir.join("ggml-test.bin.part"), bytes).unwrap();
+        }
+        dir
+    }
+
+    #[tokio::test]
+    async fn interrupted_download_resumes_from_the_part_file() {
+        let bytes = model_bytes();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/m.bin"))
+            .and(header("range", "bytes=80-"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("content-range", "bytes 80-199/200")
+                    .set_body_bytes(&bytes[80..]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = model_dir("resume", Some(&bytes[..80]));
+
+        let info = test_model(format!("{}/m.bin", server.uri()));
+        let saved = ensure_model(info, &dir).await.unwrap();
+
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+        assert!(
+            !dir.join("ggml-test.bin.part").exists(),
+            "renamed into place"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_ignoring_range_rewrites_the_part_file() {
+        let bytes = model_bytes();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/m.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // Stale bytes that would fail the checksum if they were appended to.
+        let dir = model_dir("ignored", Some(&[0xff; 80]));
+
+        let info = test_model(format!("{}/m.bin", server.uri()));
+        let saved = ensure_model(info, &dir).await.unwrap();
+
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+    }
+
+    #[tokio::test]
+    async fn refused_range_falls_back_to_a_full_download() {
+        let bytes = model_bytes();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header_exists("range"))
+            .respond_with(ResponseTemplate::new(416))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = model_dir("refused", Some(&bytes[..80]));
+
+        let info = test_model(format!("{}/m.bin", server.uri()));
+        let saved = ensure_model(info, &dir).await.unwrap();
+
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+    }
+
+    #[tokio::test]
+    async fn complete_part_file_only_needs_verifying() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let dir = model_dir("complete", Some(&model_bytes()));
+
+        let info = test_model(format!("{}/m.bin", server.uri()));
+        let saved = ensure_model(info, &dir).await.unwrap();
+
+        assert_eq!(std::fs::read(&saved).unwrap(), model_bytes());
+    }
+
+    #[tokio::test]
+    async fn resumed_bytes_that_fail_the_checksum_are_discarded() {
+        let bytes = model_bytes();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("content-range", "bytes 80-199/200")
+                    .set_body_bytes(&bytes[80..]),
+            )
+            .mount(&server)
+            .await;
+        let dir = model_dir("corrupt", Some(&[0xff; 80]));
+
+        let info = test_model(format!("{}/m.bin", server.uri()));
+        let err = ensure_model(info, &dir).await.unwrap_err().to_string();
+
+        assert!(err.contains("failed checksum verification"), "{err}");
+        assert!(!dir.join("ggml-test.bin").exists(), "never renamed");
+        assert!(
+            !dir.join("ggml-test.bin.part").exists(),
+            "the next attempt must start clean"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_stalled_mid_body_fails_and_keeps_its_progress() {
+        // Raw socket: wiremock can delay a response but not stall a body
+        // halfway through. `hold` keeps the connection open and silent.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/m.bin", listener.local_addr().unwrap());
+        let (hold, wait) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _ = socket.read(&mut [0u8; 2048]);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 200\r\n\r\n")
+                .unwrap();
+            socket.write_all(&model_bytes()[..80]).unwrap();
+            let _ = wait.recv();
+        });
+        let dir = model_dir("stall", None);
+        let part = dir.join("ggml-test.bin.part");
+        let client = http_client(Duration::from_secs(1)).unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            download_verified(&client, test_model(url), &part),
+        )
+        .await
+        .expect("a stalled download must not hang");
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("download interrupted"), "{err}");
+        assert!(err.contains("timed out"), "{err}");
+        assert_eq!(
+            std::fs::metadata(&part).unwrap().len(),
+            80,
+            "kept to resume"
+        );
+        drop(hold);
+    }
 
     /// NIST test vector: sha256("abc").
     #[test]
@@ -199,6 +454,6 @@ mod tests {
     #[test]
     fn known_models_are_listed() {
         let names: Vec<_> = available_models().iter().map(|m| m.name).collect();
-        assert_eq!(names, vec!["base.en", "small.en"]);
+        assert_eq!(names, vec!["base.en", "small.en", "base", "small"]);
     }
 }

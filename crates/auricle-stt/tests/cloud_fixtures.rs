@@ -4,7 +4,7 @@
 #![cfg(feature = "cloud")]
 
 use auricle_core::{AudioChunk, ChannelId, ChunkKind, SttEvent};
-use auricle_stt::{OpenAiBatchProvider, SessionCfg, SttProvider};
+use auricle_stt::{OpenAiBatchProvider, SessionCfg, SttProvider, SttSession};
 use serde_json::Value;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -326,6 +326,162 @@ async fn interims_are_shed_during_rate_limit_cooldown() {
         "2 for the rate-limited final + 1 for the second final; the interim \
          must not have been uploaded"
     );
+}
+
+async fn open_batch_session(server: &MockServer) -> Box<dyn SttSession> {
+    OpenAiBatchProvider::with_key(
+        "groq-whisper",
+        "test-key".to_string(),
+        &server.uri(),
+        "whisper-large-v3-turbo",
+    )
+    .start_session(&SessionCfg {
+        session_id: "t".to_string(),
+        language: "en".to_string(),
+    })
+    .await
+    .unwrap()
+}
+
+/// 429 with a long retry-after on the first request, then the fixture.
+struct RateLimitedOnce {
+    counter: std::sync::atomic::AtomicU32,
+}
+
+impl Respond for RateLimitedOnce {
+    fn respond(&self, _req: &Request) -> ResponseTemplate {
+        let n = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            ResponseTemplate::new(429).insert_header("retry-after", "60")
+        } else {
+            let body =
+                std::fs::read_to_string(fixture_dir("groq").join("transcription.json")).unwrap();
+            ResponseTemplate::new(200).set_body_raw(body, "application/json")
+        }
+    }
+}
+
+#[tokio::test]
+async fn rate_limited_interim_is_not_retried_and_never_holds_up_a_final() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .respond_with(RateLimitedOnce {
+            counter: std::sync::atomic::AtomicU32::new(0),
+        })
+        .mount(&server)
+        .await;
+    let mut session = open_batch_session(&server).await;
+
+    let mut interim = test_chunk();
+    interim.kind = ChunkKind::Interim;
+    session.feed(interim).await.unwrap();
+    while server.received_requests().await.unwrap().is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Honoring retry-after for the partial would hold this for a minute.
+    session.feed(test_chunk()).await.unwrap();
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), session.next_event())
+        .await
+        .expect("the final must not queue behind a stale partial");
+    assert!(matches!(event, Some(SttEvent::Final(_))), "{event:?}");
+    session.finish().await.unwrap();
+
+    let calls = server.received_requests().await.unwrap();
+    assert_eq!(calls.len(), 2, "one try for the interim, one for the final");
+}
+
+/// A stock phrase flagged as no speech, then the captured verbose fixture.
+struct NoSpeechThenFixture {
+    counter: std::sync::atomic::AtomicU32,
+}
+
+impl Respond for NoSpeechThenFixture {
+    fn respond(&self, _req: &Request) -> ResponseTemplate {
+        let n = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": " Thank you.",
+                "segments": [{"text": " Thank you.", "no_speech_prob": 0.92}]
+            }))
+        } else {
+            let body =
+                std::fs::read_to_string(fixture_dir("groq").join("transcription_verbose.json"))
+                    .unwrap();
+            ResponseTemplate::new(200).set_body_raw(body, "application/json")
+        }
+    }
+}
+
+#[tokio::test]
+async fn no_speech_stock_phrase_never_reaches_the_transcript() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .respond_with(NoSpeechThenFixture {
+            counter: std::sync::atomic::AtomicU32::new(0),
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut session = open_batch_session(&server).await;
+
+    session.feed(test_chunk()).await.unwrap();
+    session.feed(test_chunk()).await.unwrap();
+
+    match session.next_event().await {
+        Some(SttEvent::Final(seg)) => assert!(seg.text.contains("streaming pipeline")),
+        other => panic!("expected the real final first, got {other:?}"),
+    }
+    assert_eq!(session.finish().await.unwrap().len(), 1);
+
+    let calls = server.received_requests().await.unwrap();
+    let sent = String::from_utf8_lossy(&calls[0].body);
+    assert!(sent.contains("verbose_json"), "asks for no_speech_prob");
+}
+
+/// Refuses `verbose_json` the way gpt-4o-transcribe does, otherwise answers.
+struct RefusesVerbose;
+
+impl Respond for RefusesVerbose {
+    fn respond(&self, req: &Request) -> ResponseTemplate {
+        if String::from_utf8_lossy(&req.body).contains("verbose_json") {
+            return ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "response_format 'verbose_json' is not compatible with this model",
+                    "param": "response_format"
+                }
+            }));
+        }
+        let body = std::fs::read_to_string(fixture_dir("groq").join("transcription.json")).unwrap();
+        ResponseTemplate::new(200).set_body_raw(body, "application/json")
+    }
+}
+
+#[tokio::test]
+async fn model_refusing_verbose_json_falls_back_for_the_whole_session() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .respond_with(RefusesVerbose)
+        .expect(3) // refused once, then plain for both chunks
+        .mount(&server)
+        .await;
+    let mut session = open_batch_session(&server).await;
+
+    for _ in 0..2 {
+        session.feed(test_chunk()).await.unwrap();
+        assert!(matches!(
+            session.next_event().await,
+            Some(SttEvent::Final(_))
+        ));
+    }
+    session.finish().await.unwrap();
 }
 
 #[tokio::test]

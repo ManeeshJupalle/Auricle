@@ -5,6 +5,8 @@
 //! Inference/uploads never block capture: every session runs a worker with
 //! a bounded chunk queue (drop-oldest-interim + counter).
 
+mod hallucination;
+mod language;
 mod model;
 mod queue;
 mod registry;
@@ -18,6 +20,7 @@ mod openai_batch;
 use async_trait::async_trait;
 use auricle_core::{AudioChunk, Result, Segment, SttEvent};
 
+pub use language::{check_language, english_only_warning, validate_language};
 pub use model::{available_models, default_data_dir, ensure_model, file_sha256, ModelInfo};
 pub use registry::{create_provider, provider_ids, provider_statuses, ProviderStatus};
 pub use whisper_local::WhisperLocalProvider;
@@ -26,6 +29,16 @@ pub use whisper_local::WhisperLocalProvider;
 pub use deepgram::DeepgramProvider;
 #[cfg(feature = "cloud")]
 pub use openai_batch::OpenAiBatchProvider;
+
+/// A request error in words: reqwest's own text for a timeout is only "error
+/// sending request".
+fn http_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "timed out waiting for the server".to_string()
+    } else {
+        e.to_string()
+    }
+}
 
 /// How a provider processes audio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +62,17 @@ impl std::fmt::Display for SttKind {
 #[derive(Debug, Clone)]
 pub struct SessionCfg {
     pub session_id: String,
-    /// ISO-ish language hint sent to the model ("en").
+    /// "auto" or a language tag ("en", "pt-BR"): see [`validate_language`].
     pub language: String,
+}
+
+/// What a session has shed so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SttDrops {
+    /// Every chunk shed, interim or final.
+    pub chunks: u64,
+    /// The finals among `chunks`: transcript lost, not a skipped partial.
+    pub finals: u64,
 }
 
 #[async_trait]
@@ -65,4 +87,8 @@ pub trait SttSession: Send {
     async fn feed(&mut self, chunk: AudioChunk) -> Result<()>;
     async fn next_event(&mut self) -> Option<SttEvent>;
     async fn finish(&mut self) -> Result<Vec<Segment>>;
+    /// Running totals of what this session shed; still valid after `finish`.
+    fn drops(&self) -> SttDrops {
+        SttDrops::default()
+    }
 }
