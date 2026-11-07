@@ -68,6 +68,271 @@ Your coding agent can read your meetings.
   sharing that runtime. The tools are async now and their store access goes
   through `spawn_blocking`, as `POST /api/v1/peek` already did.
 
+### Your data
+
+- **Meetings can expire.** Settings → Your data can delete meetings after N
+  days, with their transcripts, summaries, retained asks, and audio. Off by
+  default, permanent, and there is no trash. It runs at every start and once a
+  day, never touches a meeting in progress, and refuses a `retention_days` that
+  isn't a whole number of days rather than appearing to accept it. A system clock
+  more than 3 days past the last sweep pauses deletion until that reading has
+  held for 7 days, recorded in the `retention_clock` setting, so a wrong date
+  can't mass-delete; a machine left off that long pauses it too. The protection
+  has limits and a delete can't be undone: a clock wrong for over 7 days still
+  deletes, and a jump under 3 days can expire meetings up to 3 days early.
+- **Backups.** *Back up database*, or `POST /api/v1/backup`, writes a consistent
+  copy to a `backups` folder beside the database while recording and reads carry
+  on. It holds the database only, not retained audio, and retention leaves it
+  alone, so a backup keeps meetings you delete later.
+- **Retained asks can be read and removed.** With `copilot.retain_context` on,
+  asks went into the database with no way to see or delete them. A meeting now
+  shows its asks under an Asks tab, and `GET /api/v1/asks` and
+  `DELETE /api/v1/asks/{id}` do the same over the API.
+- **Deleting a meeting takes everything with it.** It used to leave retained
+  asks behind, screen text included, and a summary could land after its session
+  had gone. Asks now go with the meeting, the upgrade clears what earlier deletes
+  left, and freed database pages are zeroed instead of holding the old text. The
+  text also leaves the rolling window, so `/ask` and `auricle.live_transcript`
+  can't return it.
+- **A delete can't leave audio behind.** Rows went first and audio was removed
+  best-effort, so a failure reported success and left the WAVs for good. Audio
+  now goes first: if it can't be removed, `DELETE /sessions/{id}` returns `500`
+  and keeps the meeting, and a retry works.
+- **The `asks` table now always exists.** The 0.3.0 notes below say it is never
+  created with retention off. Deleting a meeting relies on it now, so it is
+  created empty on upgrade. No row is written unless `copilot.retain_context` is
+  on.
+- **Retained audio lines up with the transcript.** Capture delivers nothing
+  during system silence, so a WAV drifted off transcript time and seeking landed
+  in the wrong place. Files now follow the session timeline, padded with silence,
+  and are flushed every 5 s, so a hard kill leaves them playable up to the last
+  flush. A channel's file stops with an `error` event when its padding would pass
+  12 h in total, because resuming without it would misalign playback, or at a 36 h
+  track length. The transcript carries on.
+- **Migrations are all or nothing, and a newer database is refused.** A kill
+  mid-upgrade leaves the database at the version it started from, and a database
+  written by a newer build is refused rather than risked.
+
+### Recording
+
+- **A lost device is reported during the meeting.** `device_lost` was only ever
+  sent after the session had ended, so a dead microphone stayed quiet until you
+  stopped. Capture streams are now checked every second and the dashboard says
+  so at once, once per channel. The session keeps running on the other channel.
+  Notices from a stream that is still running no longer read as a lost device.
+- **Sessions record what they lost.** `meta.dropped` gives audio lost to capture
+  overflow and chunks shed by the provider's queue, per channel, so a hole in the
+  transcript can be told apart from silence after the live warnings are gone.
+- **Far-side speech off laptop speakers appears twice less often.** The mic hears
+  the speakers, so "Them" came back as "You". A mic line of five or more words
+  that starts 0 to 500 ms after a matching loopback line is now dropped, and
+  counted in `meta.dropped.bleed_finals`. The window is narrow, so some bleed gets
+  through, such as chunks of long speech and the first lines after loopback
+  silence, and the thresholds have not been measured on real bleed. See
+  Limitations in the README. `[stt] drop_mic_bleed` defaults to true; set it to
+  false with a monitor mix, where a match can delete your own words.
+- **Finals end in the likeliest gap between words.** They were cut at a hard 5 s,
+  wherever that landed. A final now ends at the quietest VAD frame of its last
+  second, so finals run 4–5 s.
+- **Live partials no longer stop partway through a meeting.** Partials were held
+  back until earlier finals came home, but a chunk that transcribed to nothing
+  never reported back, so two coughs were enough to end partials for the rest of
+  the session. Every chunk now reports when it is handled, whether or not it
+  produced text, and Deepgram's incremental feed is never held back.
+- **Languages other than English.** `[stt] language`, `auricle record --language`
+  and Settings → Transcription take `auto` or a tag like `de` or `pt-BR`. The new
+  `base` and `small` models cover any language. The `.en` models stay
+  English-only, and a session that asks them for anything else says so. A
+  malformed value is refused when it is saved, because it ends up in a provider's
+  URL. In Chinese and Japanese, overlap words may repeat at chunk seams and the
+  bleed filter won't fire, because both count words by spaces.
+- **Devices with more than two channels use the front pair.** Averaging every
+  channel diluted stereo on a surround endpoint. The other channels are now used
+  only while the front pair is silent.
+- **A dropped line's partial goes with it.** When a final is dropped as speaker
+  bleed, the row showing its partial used to linger until the next line on that
+  channel. A new `partial_cleared` event removes it, on the important lane so lag
+  can't shed it. A final that transcribes to nothing still leaves its partial
+  until the next one.
+- **Deepgram outages are bounded.** Audio held for a reconnect is capped at 60
+  chunks per channel. Anything shed past that is counted and announced.
+- **Timeouts say they are timeouts.** They used to read "error sending request".
+- **A start survives its client.** Reloading the dashboard during a long
+  first-run model download used to abandon a half-built session holding the slot.
+  The start now finishes on its own. A stop that lands first ends it with `409`
+  and no row, and a start that fails after its client left says why on the
+  WebSocket.
+- **One daemon per data root.** A second `auricle serve` on another port got as
+  far as crash recovery, which closed the running daemon's live session. It is
+  refused now, before touching anything.
+- **`POST /api/v1/shutdown`** stops the active session cleanly, then exits, with
+  bounded waits for the stop and for the auto-title. Closing the console now does
+  the same stop, and the app does it for an engine it started when Windows logs
+  off or shuts down, within a 4 s budget. A stop that misses the deadline is left
+  for crash recovery. Once a shutdown is under way `POST /sessions` returns `503`,
+  and `/health` now reports the daemon's `pid`.
+- **Stock phrases invented on silence are dropped,** on local and batch Whisper
+  alike. Whisper writes "Thank you." on a breath, and people really say that, so
+  text alone never drops anything: a phrase goes only when the model's no-speech
+  probability is high, or, for a provider that gives none, the audio's energy is
+  low.
+- **Deepgram reconnects without losing speech.** Up to 10 s of audio no final has
+  covered yet is re-sent after a reconnect, so that audio can reach Deepgram
+  twice. Auth errors stop the retries instead of looping. Audio that goes
+  unanswered is replayed once on a new connection, then given up on with an
+  error.
+- **Deepgram's last words arrive without more speech.** The server can sit on a
+  short line with no answer at all, so Auricle now asks for it 1.5 s after the
+  last audio, and such a final can land about 1.5 s after speech ends.
+- **Model downloads resume** from where they stopped.
+
+### Copilot
+
+- **The overlay moves.** Drag it by its header and it stays there until the app
+  restarts, moving only if growth would run it off the screen.
+- **New chat.** A `+` in the header starts over. A new conversation now clears
+  the engine's follow-up history too; before, the old conversation came back with
+  the next follow-up.
+- **A screen toggle.** A button in the header keeps the next asks, quick assist
+  included, from reading your screen. It is on at every launch.
+- **Follow-ups stay in their meeting.** History was keyed on the session id in the
+  request, which the overlay never sends, so one meeting's Q&A reached the next
+  one's prompt. It is keyed on the session the ask resolved to now. An ask
+  abandoned before it finished leaves no history and no retained row, and
+  dismissing the overlay abandons the one in progress.
+- **A dead engine comes back.** If an engine the app started dies, the app says
+  so and restarts it, up to five tries in a row, and gives up after five crashes
+  in an hour until you relaunch it. Crash notices come at most every 10 minutes,
+  so a crash loop can't keep taking focus. A recording that was running is closed
+  as interrupted, not resumed. An engine that stays alive but stops answering is
+  never killed: after 2 minutes the app says so. An `auricle serve` you started
+  yourself is left alone. The engine's stderr now lands in `engine.log`, the
+  previous run's in `engine.log.old`, and `engine.pid` records which engine is the
+  app's, all under `%LOCALAPPDATA%\auricle`.
+- **Updates wait for the recording, and stop only the app's own engine.** A
+  running `auricle.exe` stays locked against the installer, and the relaunched
+  overlay would attach to the old version. Check for updates now refuses during a
+  recording, and refuses if its own engine is alive but not answering. An engine
+  you started yourself is never stopped: the app tells you how to stop it. The
+  overlay warns before handing off to the installer, because nothing can report a
+  failure after that point.
+- **Quit doesn't end a recording by surprise.** A recording the app doesn't own
+  keeps running. Its own recording needs a second Quit within 10 seconds, which
+  stops it and exits.
+- **The app says what is wrong.** The tray tooltip shows recording and offline,
+  and the update nudge and hotkey warnings bring the overlay up rather than
+  waiting in a hidden window.
+- **Cut-off answers say so.** A summary or answer that hits the model's output
+  limit ends with a truncation notice, and a stream that ends early or errors
+  partway now fails instead of passing for a finished answer.
+- **A long summary keeps what finished.** One failed portion used to lose the
+  whole summary, which on a slow local model can be hours of work. The finished
+  portions are now kept, and the summary ends with `[Incomplete: ...]` saying what
+  is missing. Only a failure on the first portion still fails the request.
+- **Local models get longer to answer.** A call to Ollama, or to any endpoint on
+  this machine, may stay silent for up to an hour, against 10 minutes for a cloud
+  provider, because a long prompt on a CPU can take over 10 minutes to start.
+
+### Dashboard
+
+- **A new design, built around one line.** The dashboard now takes after a
+  stenographer's pad, the one object made for writing down what people say: pale
+  green paper with a rule down the page. That rule runs through the product. In
+  a meeting it divides Them from You and carries the tape of who spoke when; live,
+  it grows as people talk and breaks where a device is lost; on the Privacy page
+  it is the edge of your machine, and each ledger row sits inside it or crosses
+  it. Them reads in a flush serif and You in an indented sans, so the voices
+  separate without relying on colour. Red now means recording and nothing else:
+  it used to double as the colour for Them. Geist gives way to Alegreya and
+  Alegreya Sans, still bundled, and the Egress tab is now called Privacy.
+- **Search finds the moment.** It lists matching lines with their timestamps,
+  marks them on the line, and jumps to the moment, through a new
+  `GET /api/v1/search`. It used to say which meetings matched and leave you to
+  reread them.
+- **Playback follows along.** The transcript tracks the audio and marks the turn
+  being played, until you scroll away, and clicking the line seeks.
+- **First-run downloads show real progress.** A new `model_download_progress`
+  event reports megabytes done, so waiting to record no longer means guessing
+  between ten seconds and five minutes.
+- **Keyboard and screen readers.** Controls take keyboard focus and carry
+  labels, status changes are announced, and the session map is one tab stop that
+  arrow keys step through.
+- **Narrow windows get their own layouts,** at 900 px and 640 px.
+- **The provider picker follows Settings.** A change there replaces a pick made
+  in the sidebar, so a default switched to local for a confidential call can't
+  lose to a stale cloud pick. A sidebar pick applies to the next session only.
+- **whisper-local can be chosen before its model is downloaded.** It fetches its
+  own model on first use, so nothing is missing that you have to supply.
+- **Transcript turns break** on a 5 s pause or after 60 s.
+- **The session list pages,** and the Egress tab gained a session filter, a Show
+  more button, and an Auto-title label.
+- **Token-protected daemons work in the browser.** The dashboard asks for the
+  token, keeps it for that tab only, and sends it.
+
+### API and security
+
+- **REST is same-origin only, like `/ws/live`.** Any localhost origin used to be
+  allowed, so another page on this machine could POST to the daemon without a
+  preflight. A page on another localhost port now gets no more than any other
+  site.
+- **Responses carry `nosniff`, a CSP, and `Cross-Origin-Resource-Policy`.** The
+  last one covers what an origin check can't see: an `<audio>` on a foreign page
+  sends no `Origin`, and could otherwise play retained audio from a tokenless
+  daemon.
+- **`?token=` on `/ws/live` and retained audio, and nowhere else,** because a
+  browser cannot set a header on either. Every other API route still demands the
+  header.
+- **`docs/API.md` now states the trust model.** Other local processes can reach
+  REST on loopback with no token, and the MCP toggle and the ledger govern MCP
+  only. Nothing changed there; the code cited a trust model the docs didn't have.
+- **Auto-titles are on the ledger.** The opening of the transcript went to the
+  titling LLM with no row, which left "nothing has left this machine" wrong for
+  anyone using a cloud LLM. They now appear as kind `title`.
+- **Paging.** `GET /api/v1/sessions` takes `limit` and `offset` and always returns
+  `total`, `GET /api/v1/egress` takes `offset`, so rows past the first 1000 can
+  be reached, and `auricle.list_sessions` takes `limit` and `offset` and returns
+  `total`.
+- **Long answers can't crowd out finals.** Answer fragments ride their own lane on
+  `/ws/live`, and `lag` gains `dropped_answer_deltas`. The docs no longer claim
+  finals are never dropped: a consumer over 1024 events behind does lose them, and
+  is told.
+- **`/providers` reports the real default.** `default` now honours the
+  `default_provider` setting.
+- **MCP output is marked untrusted.** Anyone on a call chooses the "Them" text, so
+  the tool descriptions and server instructions now tell clients to read it as
+  data and never follow instructions in it.
+- **Redaction matches current key shapes** (`sk-proj-…`, `gsk_…`), and digits said
+  right next to a card no longer hide it from the Luhn check.
+- **`auricle.toml` is found without `--config`.** The daemon read no config file
+  unless told to, which left the app's engine with no way to get one.
+  `%LOCALAPPDATA%\auricle\auricle.toml` is now loaded if it exists, and the file
+  in use prints as `using config <path>`. A bad value fails a command only if that
+  command needs the key: `server.bind` for `serve`, `[audio]` for `capture`, and
+  `[audio]`, the language, and the active provider for `record`. Anything else
+  wrong, unknown keys included, warns. `--config` stays strict about the file
+  itself. A file that was only found can't fail the load: if it is broken or a
+  needed key is bad, it warns and the defaults apply, though `record` still stops
+  on a bad provider. `transcript_window_min = 0` warns, and asks then get no
+  transcript.
+- **A rename during auto-titling sticks,** and a transcript with multibyte text
+  around the prompt cap no longer panics the titler. A summary finishing after its
+  session was deleted returns `404` instead of a `201` for a row that doesn't
+  exist.
+
+### Building
+
+- Rust is pinned to 1.95.0 by `rust-toolchain.toml`, and Node must be ^20.19 or
+  >=22.12. The overlay moved to Tauri 2.12.
+- Releases run in a `release` environment and must pass a gate before anything
+  is signed: the tag must match the version in every file that carries it, tests
+  must pass, and the build flags are checked.
+- `cargo build --features vulkan` opts local Whisper into the GPU, with
+  `use_gpu = true` under `[stt.whisper-local]`. It needs the Vulkan SDK, is off by
+  default, and no release ships it yet: this path has not been compiled or run.
+- Ollama's context size can't be set per request through its OpenAI-compatible
+  endpoint. Set `OLLAMA_CONTEXT_LENGTH` on the Ollama server if long summaries
+  get truncated.
+
 ## 0.4.1 — 2026-08-10
 
 A design pass over the dashboard, and the fixes it turned up.
