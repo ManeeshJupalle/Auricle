@@ -6,7 +6,7 @@
 //! or unparseable content falls back to defaults — a broken config must never
 //! keep the copilot from starting.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
@@ -36,7 +36,7 @@ impl Default for Hotkeys {
 }
 
 /// How the dictation hotkey works.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DictationMode {
     /// Hold the keys while talking; letting go pastes.

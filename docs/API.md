@@ -662,9 +662,10 @@ Config (`[copilot]` in auricle.toml): `transcript_window_min` (10; `0` warns,
 and asks and `auricle.live_transcript` then get no transcript),
 `max_screen_chars` (6000), `retain_context` (false),
 `provider` (unset → LLM default). The overlay's hotkeys are not set here: it
-reads them from `[hotkeys]` (`summon`, `quick`) in its own
-`%LOCALAPPDATA%\auricle\overlay.toml`. `[copilot].hotkey_summon` and
-`hotkey_quick` still parse, but nothing reads them.
+reads them from `[hotkeys]` (`summon`, `quick`, `dictate`) in its own
+`%LOCALAPPDATA%\auricle\overlay.toml`, where `[dictation] mode` is `hold`
+(the default) or `toggle`. `[copilot].hotkey_summon` and `hotkey_quick` still
+parse, but nothing reads them.
 
 ## GET /api/v1/asks
 

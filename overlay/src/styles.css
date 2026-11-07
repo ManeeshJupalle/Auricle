@@ -196,6 +196,43 @@ body {
   border-radius: 9px;
 }
 
+/* dictation setup check (tray → Dictation setup) */
+.ov-setup {
+  margin: 0 10px 8px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  color: var(--text-soft);
+  background: var(--inset-bg);
+  border: 1px solid var(--edge-strong);
+  border-radius: 9px;
+}
+
+.ov-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 4px;
+}
+
+.ov-setup-line {
+  display: flex;
+  gap: 7px;
+  padding: 2px 0;
+}
+
+.ov-setup-mark {
+  flex: none;
+  width: 10px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.ov-setup-line[data-ok] .ov-setup-mark {
+  color: var(--ok);
+}
+
 /* quick-assist marker: these asks have no typed question, so the card
    states what was asked on the user's behalf */
 .ov-quick {

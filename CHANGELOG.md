@@ -84,6 +84,28 @@ Your coding agent can read your meetings.
   in the ring that feeds asks and MCP. A cloud provider gets a `dictation`
   egress row before any audio goes, with no text in it.
 
+### Dictation (overlay)
+
+- **Hold `Ctrl+Shift+D`, talk, let go: the text lands where your cursor was.**
+  Set `[dictation] mode = "toggle"` in `overlay.toml` to press once to start
+  and again to paste, and `[hotkeys] dictate` to pick other keys. The press
+  goes through the same global-shortcut plugin as the other hotkeys; there is
+  no keyboard hook. `Esc` cancels, and is only taken while a dictation runs.
+- **It pastes into the window you started in, or nowhere.** The overlay
+  remembers the exact window that had focus at the press. If that window has
+  closed, won't come to the front, or runs as administrator, nothing is typed
+  anywhere: the text is left on the clipboard and the pill says so. Ctrl+V
+  waits until you've let go of Ctrl, Shift, Alt and Win.
+- **Your clipboard comes back, and dictation stays out of its history.** The
+  overlay puts your clipboard back after the paste, unless you copied
+  something meanwhile, which is kept. Dictated text is marked so Windows
+  leaves it out of clipboard history (Win+V) and cloud clipboard sync, the
+  clipboard fallback included.
+- **A small pill shows what's happening**: listening, transcribing, pasted,
+  or what went wrong in plain words. It never takes focus from the app you're
+  dictating into. Tray → *Dictation setup* checks the hotkey, the engine, and
+  which provider will hear you (local `whisper-local` is the default).
+
 ### Your data
 
 - **Meetings can expire.** Settings → Your data can delete meetings after N

@@ -24,6 +24,8 @@ use crate::dictate::{self, Pasted, Target};
 /// Stop and cancel wait for the engine, which gives up on its own after 150 s.
 const ENGINE_WAIT: Duration = Duration::from_secs(170);
 
+/// The engine's dictation provider when `dictation_provider` is unset.
+const DEFAULT_PROVIDER: &str = "whisper-local";
 const UNREACHABLE: &str = "The Auricle engine isn't answering.";
 pub const STARTING: &str = "Starting…";
 pub const TRANSCRIBING: &str = "Transcribing…";
@@ -429,19 +431,35 @@ async fn end(
     }
 }
 
+/// What the effects loop works with.
+pub struct Driver {
+    pub app: tauri::AppHandle,
+    pub mode: DictationMode,
+    /// The dictate hotkey as configured, for the pill's hints.
+    pub hotkey: String,
+    pub http: reqwest::Client,
+    pub base: String,
+    pub esc: Shortcut,
+}
+
 /// Carry out the machine's effects for the life of the overlay. `feed` is
 /// how the engine's answers come back in as inputs.
 pub async fn run(
-    app: tauri::AppHandle,
-    mode: DictationMode,
-    http: reqwest::Client,
-    base: String,
-    esc: Shortcut,
+    driver: Driver,
     mut inputs: UnboundedReceiver<Input>,
     feed: UnboundedSender<Input>,
 ) {
+    let Driver {
+        app,
+        mode,
+        hotkey,
+        http,
+        base,
+        esc,
+    } = driver;
     let mut machine = Dictation::new(mode);
     let mut watch: Option<AbortHandle> = None;
+    let mut esc_on = false;
     while let Some(input) = inputs.recv().await {
         for effect in machine.on(input) {
             let run = machine.run();
@@ -449,7 +467,7 @@ pub async fn run(
                 Effect::Begin => {
                     // Esc is only taken while a dictation needs it: held
                     // globally, it would be swallowed from every app.
-                    set_esc(&app, esc, true).await;
+                    esc_on = set_esc(&app, esc, true).await;
                     let (handle, registration) = AbortHandle::new_pair();
                     watch = Some(handle);
                     let (http, base, feed) = (http.clone(), base.clone(), feed.clone());
@@ -491,9 +509,12 @@ pub async fn run(
                         let _ = feed.send(Input::Pasted { run, outcome });
                     });
                 }
-                Effect::Pill(pill) => show_pill(&app, pill),
+                Effect::Pill(pill) => crate::pill::show(&app, &pill, mode, &hotkey, esc_on),
                 Effect::End => {
-                    set_esc(&app, esc, false).await;
+                    if esc_on {
+                        set_esc(&app, esc, false).await;
+                        esc_on = false;
+                    }
                     if let Some(handle) = watch.take() {
                         handle.abort();
                     }
@@ -519,10 +540,42 @@ async fn set_esc(app: &tauri::AppHandle, esc: Shortcut, on: bool) -> bool {
     .unwrap_or(false)
 }
 
-fn show_pill(app: &tauri::AppHandle, pill: Pill) {
-    if let Pill::Failed(why) = pill {
-        crate::notify(app, why);
-    }
+/// What the setup check reports about dictation's provider, from the
+/// engine's settings and provider list.
+pub fn provider_info(
+    settings: &serde_json::Value,
+    providers: &serde_json::Value,
+) -> serde_json::Value {
+    let id = settings["dictation_provider"]
+        .as_str()
+        .unwrap_or(DEFAULT_PROVIDER);
+    let entry = providers["providers"]
+        .as_array()
+        .and_then(|list| list.iter().find(|p| p["id"] == id));
+    serde_json::json!({
+        "id": id,
+        "local": entry.is_some_and(|p| p["kind"] == "local"),
+        "ready": entry.is_some_and(|p| p["ready"] == true),
+        "detail": entry.and_then(|p| p["detail"].as_str()),
+        "is_default": id == DEFAULT_PROVIDER,
+    })
+}
+
+/// Read the provider dictation will use; None if the engine won't say.
+pub async fn provider(http: &reqwest::Client, base: &str) -> Option<serde_json::Value> {
+    let get = |path: &'static str| async move {
+        http.get(format!("{base}/api/v1/{path}"))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .ok()?
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+    };
+    let settings = get("settings").await?;
+    let providers = get("providers").await?;
+    Some(provider_info(&settings, &providers))
 }
 
 #[cfg(test)]
@@ -846,6 +899,38 @@ mod tests {
             panic!("{pill:?}")
         };
         assert!(text.contains("press Ctrl+V"), "{text}");
+    }
+
+    #[test]
+    fn an_unset_provider_is_the_local_default() {
+        let providers = serde_json::json!({"providers": [
+            {"id": "whisper-local", "kind": "local", "ready": true, "detail": "model small.en present"},
+            {"id": "deepgram", "kind": "cloud-streaming", "ready": true, "default": true},
+        ]});
+        let info = provider_info(&serde_json::json!({}), &providers);
+        assert_eq!(info["id"], "whisper-local");
+        assert_eq!(info["local"], true);
+        assert_eq!(info["is_default"], true);
+        assert_eq!(info["ready"], true);
+    }
+
+    #[test]
+    fn a_cloud_dictation_provider_is_reported_as_not_local() {
+        let providers = serde_json::json!({"providers": [
+            {"id": "groq-whisper", "kind": "cloud-batch", "ready": false, "detail": "env var GROQ_API_KEY not set"},
+        ]});
+        let settings = serde_json::json!({"dictation_provider": "groq-whisper"});
+        let info = provider_info(&settings, &providers);
+        assert_eq!(info["local"], false);
+        assert_eq!(info["is_default"], false);
+        assert_eq!(info["ready"], false);
+        assert_eq!(info["detail"], "env var GROQ_API_KEY not set");
+        let unknown = provider_info(
+            &serde_json::json!({"dictation_provider": "nope"}),
+            &providers,
+        );
+        assert_eq!(unknown["local"], false);
+        assert_eq!(unknown["ready"], false);
     }
 
     #[test]

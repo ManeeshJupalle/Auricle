@@ -115,6 +115,15 @@ second Quit within 10 seconds, which stops it; a recording it doesn't own keeps
 running. The app checks for updates on launch and from the tray; every update
 is signature-verified before it installs ([RELEASING.md](RELEASING.md)).
 
+**Dictation:** hold `Ctrl+Shift+D` in any app, talk, and let go: the text is
+pasted where your cursor was, and your clipboard is put back. A small pill at
+the edge of the screen says when it's listening and when it's done, and `Esc`
+cancels. Prefer press-to-start, press-to-paste? Put `[dictation]` /
+`mode = "toggle"` in `%LOCALAPPDATA%\auricle\overlay.toml` (the dictate key is
+`[hotkeys] dictate`). Tray → **Dictation setup** checks the hotkey, the engine,
+and which provider will hear you: local `whisper-local` unless you choose
+otherwise. Dictation can't start while a meeting is recording.
+
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
 + LLM answers/summaries), or any OpenAI-compatible endpoint via config.
@@ -286,7 +295,8 @@ verbatim:
   meetings never makes dictation cloud. The text goes back to whoever stopped
   the dictation and nowhere else: no meeting, no transcript line, no audio file,
   nothing an ask or an MCP agent can read. A dictation stops itself after
-  5 minutes.
+  5 minutes. The overlay pastes it through the clipboard and marks it so
+  Windows keeps it out of clipboard history (Win+V) and cloud clipboard sync.
 - **Verifiable, not just promised.** The daemon's egress ledger records every
   time it sent user data to a cloud provider — session audio, dictation audio,
   prompt, summary, or auto-title — with the destination and, for text, the rough size, and
@@ -372,6 +382,11 @@ A Deepgram final after a pause can take longer than this median: see
   article text, honest-but-imperfect on dense small fonts (`auricle` can
   come back as `auride` in a file tree).
 - One recording session at a time, by design.
+- **Dictation can't type into a window running as administrator.** Windows
+  drops keystrokes sent to it without telling the sender, so the overlay
+  doesn't try: the text is left on the clipboard for you to paste. In hold
+  mode, `Esc` cancels only once you've let go of the keys (with them held it
+  would be `Ctrl+Shift+Esc`); before then, letting go pastes.
 
 ## Roadmap
 
