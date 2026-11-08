@@ -116,7 +116,9 @@ running. The app checks for updates on launch and from the tray; every update
 is signature-verified before it installs ([RELEASING.md](RELEASING.md)).
 
 **Dictation:** hold `Ctrl+Shift+D` in any app, talk, and let go: the text is
-pasted where your cursor was, and your clipboard is put back. A small pill at
+pasted where your cursor was. Your clipboard is put back once that app has
+actually read the text; if it never does, the text stays on your clipboard and
+the pill says so, so a failed paste never loses your words. A small pill at
 the edge of the screen says when it's listening and when it's done, and `Esc`
 cancels. Prefer press-to-start, press-to-paste? Put `[dictation]` /
 `mode = "toggle"` in `%LOCALAPPDATA%\auricle\overlay.toml` (the dictate key is

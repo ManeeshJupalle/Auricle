@@ -148,16 +148,24 @@ Your coding agent can read your meetings.
   and again to paste, and `[hotkeys] dictate` to pick other keys. The press
   goes through the same global-shortcut plugin as the other hotkeys; there is
   no keyboard hook. `Esc` cancels, and is only taken while a dictation runs.
-- **It pastes into the window you started in, or nowhere.** The overlay
-  remembers the exact window that had focus at the press. If that window has
-  closed, won't come to the front, or runs as administrator, nothing is typed
-  anywhere: the text is left on the clipboard and the pill says so. Ctrl+V
-  waits until you've let go of Ctrl, Shift, Alt and Win.
-- **Your clipboard comes back, and dictation stays out of its history.** The
-  overlay puts your clipboard back after the paste, unless you copied
-  something meanwhile, which is kept. Dictated text is marked so Windows
-  leaves it out of clipboard history (Win+V) and cloud clipboard sync, the
-  clipboard fallback included.
+- **It pastes into the field you started in, or nowhere.** The overlay
+  remembers the exact window and the focused field at the press. If either has
+  changed, closed, or runs at a higher integrity level, nothing is typed
+  anywhere and no window is pulled to the front: the text is left on the
+  clipboard and the pill says so. Ctrl+V waits until you've let go of Ctrl,
+  Shift, Alt and Win.
+- **A paste counts only when the app reads it.** The text is offered on the
+  clipboard and handed over when the target app asks for it. Your own clipboard
+  comes back half a second after that, unless you copied something meanwhile,
+  which is kept. If the app never reads it within 3 s, as with a read-only
+  field, the text stays on the clipboard and the pill says so, rather than your
+  old clipboard silently replacing it. A few apps read without saying who they
+  are, Windows Terminal among them: they get the text, but the paste is marked
+  unconfirmed and your old clipboard is left alone. Dictated text is marked so
+  Windows leaves it out of clipboard history (Win+V) and cloud clipboard sync,
+  the clipboard fallback included.
+- **Nothing can get stuck.** Every step of a dictation has a deadline, and `Esc`
+  is released as soon as a dictation ends, or 30 s into transcribing.
 - **A small pill shows what's happening**: listening, transcribing, pasted,
   or what went wrong in plain words. It never takes focus from the app you're
   dictating into. Tray → *Dictation setup* checks the hotkey, the engine, and
