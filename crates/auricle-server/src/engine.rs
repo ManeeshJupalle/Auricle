@@ -500,7 +500,7 @@ impl Engine {
         // With no record, the newest meeting is the last time known to be good.
         let clock = match kept {
             Some(clock) => clock,
-            None => SweepClock::last_read(self.store.latest_session_end()?.unwrap_or(now)),
+            None => SweepClock::newest_meeting(self.store.latest_session_end()?.unwrap_or(now)),
         };
         let (clock, held) = clock.observe(now);
         // Ahead of any delete: a crash mid-sweep must not forget a hold.
