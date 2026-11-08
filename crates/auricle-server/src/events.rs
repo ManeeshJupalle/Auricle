@@ -92,13 +92,13 @@ pub enum WsEvent {
         id: String,
         provider: String,
     },
-    /// The dictation's text so far, sent as each final lands (lossy lane).
+    /// A final of the dictation landed (lossy lane). Every `/ws/live`
+    /// subscriber gets this, the dashboard included, so it carries no text.
     DictationPartial {
         id: String,
-        text: String,
     },
     /// The dictation is over, however it ended. Its text goes only to the
-    /// stop's reply.
+    /// stop's reply, and to the LLM first when polish is on.
     DictationStopped {
         id: String,
     },
@@ -245,11 +245,8 @@ mod tests {
             serde_json::json!({"type": "dictation_started", "id": "d1", "provider": "whisper-local"})
         );
         assert_eq!(
-            json(WsEvent::DictationPartial {
-                id: "d1".into(),
-                text: "so far".into(),
-            }),
-            serde_json::json!({"type": "dictation_partial", "id": "d1", "text": "so far"})
+            json(WsEvent::DictationPartial { id: "d1".into() }),
+            serde_json::json!({"type": "dictation_partial", "id": "d1"})
         );
         assert_eq!(
             json(WsEvent::DictationStopped { id: "d1".into() }),

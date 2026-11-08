@@ -125,7 +125,10 @@ and which provider will hear you: local `whisper-local` unless you choose
 otherwise. Dictation can't start while a meeting is recording. Settings →
 Transcription → **Tidy dictation with the LLM above** (off by default) has the
 summaries LLM fix punctuation, capitals and filler words before the paste; if
-it fails or takes over 8 seconds, the text goes in as heard.
+it fails, takes over 8 seconds, or changes what you said instead of tidying it
+(answers a question you dictated, summarises, adds words), the text goes in as
+heard. When words may be missing (transcription hit an error or fell behind),
+the engine's reply says so.
 
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
@@ -297,7 +300,11 @@ verbatim:
   setting, `whisper-local` unless you pick another, so a cloud setup for
   meetings never makes dictation cloud. The text goes back to whoever stopped
   the dictation and nowhere else: no meeting, no transcript line, no audio file,
-  nothing an ask or an MCP agent can read. A dictation stops itself after
+  nothing an ask or an MCP agent can read. Every `/ws/live` client, the
+  dashboard included, sees that a dictation is running and when each part is
+  transcribed (`dictation_partial`), but none of its words. A start whose
+  caller disconnects before the mic opens never opens it, and a cancel sends
+  nothing more to a cloud provider. A dictation stops itself after
   5 minutes. The overlay pastes it through the clipboard and marks it so
   Windows keeps it out of clipboard history (Win+V) and cloud clipboard sync.
   Dictation polish is off by default; turned on with a cloud LLM, the text is

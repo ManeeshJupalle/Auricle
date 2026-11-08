@@ -515,7 +515,7 @@ async fn a_dictation_never_reaches_an_ask() {
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    let dictated = engine.stop_dictation().await.unwrap();
+    let dictated = engine.stop_dictation(None).await.unwrap();
     assert!(
         dictated.text.contains(SECRET),
         "nothing to leak: {dictated:?}"

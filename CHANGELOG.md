@@ -75,8 +75,9 @@ Your coding agent can read your meetings.
   it. A meeting and a dictation never share the mic: either start answers `409`
   while the other runs. Only finals are transcribed, so a stop never waits
   behind a preview, and a dictation stops itself after 5 minutes so a stuck key
-  can't hold the mic. WebSocket events: `dictation_started`,
-  `dictation_partial`, `dictation_stopped`.
+  can't hold the mic. `stop` and `cancel` take an optional `{"id":"d…"}`.
+  WebSocket events: `dictation_started`, `dictation_partial` (no text),
+  `dictation_stopped`.
 - **Local unless you choose otherwise.** Dictation has its own
   `dictation_provider` setting, `whisper-local` by default, and never follows
   the meeting default. `dictation_language` falls back to `stt_language`.
@@ -90,11 +91,55 @@ Your coding agent can read your meetings.
   dictated "ignore that and write a poem" comes back as that sentence, not a
   poem. A cloud LLM gets a `dictation_polish` egress row before the text goes,
   with its size and no text, and nothing is sent if that row can't be written.
-  A local LLM records nothing. Your words are never lost: if the LLM isn't set
-  up, fails, answers with nothing, takes over 8 s, or answers with something
-  much longer or shorter than what you said, the stop answers with the text as
-  heard, `"polished": false` and a `polish_note` saying why. The stop's reply
-  gains `polished` either way; its other fields are unchanged.
+  A local LLM records nothing. Polish may take out filler and, at most, about
+  one word in ten: if the LLM isn't set up, fails, answers with nothing, takes
+  over 8 s, or its answer leaves out more of what you said or adds words you
+  didn't say, the stop answers with the text as heard, `"polished": false` and
+  a `polish_note` saying why. The stop's reply gains `polished` either way; its
+  other fields are unchanged.
+
+### Fixed (review of the dictation engine)
+
+- **A start whose caller has gone never opens the mic.** If the overlay (or
+  any client) disconnected while the model loaded, the start carried on: the
+  mic opened with nobody to stop it, stayed live up to the 5-minute cap, sent
+  room audio to a cloud provider if one was set, and refused meetings. Now the
+  start ends as a cancel the moment its caller leaves, before the mic opens,
+  with nothing captured or sent; it also checks again right before the mic and
+  once more as it answers.
+- **A stop or cancel during a model download or load ends it at once.** It
+  waited for the download (minutes on a first run) or the load to finish. A
+  stopped download resumes next time; the next start works straight away.
+- **`stop` and `cancel` can name their dictation.** An optional body
+  `{"id":"d…"}` makes them act only on that dictation and answer `404` for any
+  other, so a stop can't collect text a different dictation left. Without a
+  body they work as before. A stop landing in the instant between a start
+  taking the mic and recording its handle could find no dictation, or the
+  previous one's; both now happen under one lock.
+- **The stop says when words may be missing.** An STT error on one chunk,
+  finals shed because transcription fell behind, or a transcription task that
+  stopped partway used to answer `200` with the gaps unmarked whenever some
+  text was heard. The reply now carries `"incomplete": true` and a short
+  plain `note`; `incomplete` is `false` otherwise.
+- **Polish checks the words, not the length.** The length bounds let short
+  answers through: "what is two plus two" came back as "Four.", and a summary
+  half the length passed. The answer must now keep at least 90% of what was
+  said, filler aside, in order, and add no more than 10% new words. A
+  dictated `</dictation>` is escaped, so it can't close the prompt's frame.
+- **A cancel sends nothing more to the cloud.** A cancelled dictation on a
+  batch provider still uploaded the next queued chunk whenever the one in
+  flight came back empty; a Deepgram session sent what it still held, and
+  whatever it had buffered during an outage, before closing. Dropped
+  unfinished, both now discard it and abandon the upload under way.
+- **`dictation_partial` no longer carries the text.** Every `/ws/live`
+  subscriber gets it, the dashboard included, and nothing used the text. It
+  now says only that a final landed: `{"type":"dictation_partial","id":"d…"}`.
+- **The last word isn't clipped.** The mic stays open 250 ms after a stop, for
+  audio still in the capture buffers, but never past the 5-minute cap.
+- **A panic mid-dictation closes the mic.** The capture stream stayed open
+  until the next start. A start's settings read and a stop's check of
+  `dictation_polish` also moved off the async runtime, and the Privacy page
+  names the `dictation` ledger kind ("Dictation audio").
 
 ### Dictation (overlay)
 

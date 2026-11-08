@@ -966,36 +966,59 @@ async fn start_dictation(
     }
 }
 
+/// The optional body of `stop` and `cancel`: which dictation. Without it they
+/// act on whichever is the latest, as before ids were sent.
+#[derive(Debug, Default, serde::Deserialize)]
+struct DictationTarget {
+    id: Option<String>,
+}
+
 /// POST /api/v1/dictation/stop — ends the dictation and answers with its text,
 /// once the last chunk has been transcribed.
-async fn stop_dictation(State(state): State<AppState>) -> Response {
-    match state.engine.stop_dictation().await {
+async fn stop_dictation(
+    State(state): State<AppState>,
+    body: Option<Json<DictationTarget>>,
+) -> Response {
+    let id = body.and_then(|Json(target)| target.id);
+    match state.engine.stop_dictation(id.as_deref()).await {
         Ok(dictated) => {
             let mut body = json!({
                 "id": dictated.id,
                 "text": dictated.text,
                 "duration_ms": dictated.duration_ms,
                 "polished": dictated.polished,
+                "incomplete": dictated.missing.is_some(),
             });
             if let Some(note) = dictated.polish_note {
                 body["polish_note"] = json!(note);
             }
+            if let Some(note) = dictated.missing {
+                body["note"] = json!(note);
+            }
             Json(body).into_response()
         }
-        Err(e) => dictation_error(e),
+        Err(e) => dictation_error(e, id.is_some()),
     }
 }
 
 /// POST /api/v1/dictation/cancel — ends the dictation and discards its text.
-async fn cancel_dictation(State(state): State<AppState>) -> Response {
-    match state.engine.cancel_dictation().await {
+async fn cancel_dictation(
+    State(state): State<AppState>,
+    body: Option<Json<DictationTarget>>,
+) -> Response {
+    let id = body.and_then(|Json(target)| target.id);
+    match state.engine.cancel_dictation(id.as_deref()).await {
         Ok(id) => Json(json!({"id": id})).into_response(),
-        Err(e) => dictation_error(e),
+        Err(e) => dictation_error(e, id.is_some()),
     }
 }
 
-fn dictation_error(e: DictationError) -> Response {
+fn dictation_error(e: DictationError, named: bool) -> Response {
     let (status, message) = match e {
+        DictationError::NotActive if named => (
+            StatusCode::NOT_FOUND,
+            "no dictation with that id is active".to_string(),
+        ),
         DictationError::NotActive => (StatusCode::NOT_FOUND, "no dictation is active".to_string()),
         DictationError::Failed(message) => (StatusCode::BAD_GATEWAY, message),
         DictationError::TimedOut => (

@@ -198,20 +198,41 @@ is running, as does a second dictation.
   `default_provider`, so setting meetings up for the cloud does not send
   dictation there. The language is the body's, else `dictation_language`, else
   `stt_language`, else `[stt].language`. A bad language or unknown provider is
-  `400`; after a shutdown request it is `503`.
-- **`stop`**: stops the mic, transcribes what is left, and answers
-  `200 {"id":"d…","text":"…","duration_ms":n,"polished":false}`. `text` may be
-  empty. `404` when there is nothing to stop, `502 {"error":…}` when
-  transcription failed and nothing was heard, `504` if the dictation runs past
-  its own bounds on finishing (150 s). With the `dictation_polish` setting on,
+  `400`; after a shutdown request it is `503`. The mic opens only for a caller
+  still waiting for this answer: one that disconnects first ends the dictation
+  as a cancel, with nothing captured or sent, and `dictation_stopped` follows.
+- **`stop`**: keeps the mic open 250 ms more for the last word (never past the
+  5-minute cap), then stops it, transcribes what is left, and answers
+  `200 {"id":"d…","text":"…","duration_ms":n,"polished":false,"incomplete":false}`.
+  `text` may be empty. `404` when there is nothing to stop, `502 {"error":…}`
+  when transcription failed and nothing was heard, `504` if the dictation runs
+  past its own bounds on finishing (150 s). `incomplete` is `true`, with a short
+  plain `note`, when some of what was said may be missing from `text`: an STT
+  error, finals shed because transcription fell behind, or a transcription
+  task that stopped partway. With the `dictation_polish` setting on,
   non-empty text goes through the `llm_provider` LLM first, to fix
   punctuation, capitals and filler words, and `polished` is `true`. If the LLM
-  isn't set up, fails, answers with nothing, takes over 8 s, or answers with
-  something much longer or shorter than what was said, `text` is as heard,
-  `polished` is `false`, and `polish_note` says why in plain words, e.g.
-  `"the LLM took longer than 8s"`.
+  isn't set up, fails, answers with nothing, takes over 8 s, or doesn't give
+  back the same words in the same order, `text` is as heard, `polished` is
+  `false`, and `polish_note` says why in plain words, e.g.
+  `"the LLM took longer than 8s"`. Same words means at least 90% of what was
+  said, filler aside (um, uh, er, erm, hmm, like, you know, I mean, and a
+  repeated word), appears in order in the answer, and no more than 10% of the
+  answer is words that weren't said; Chinese and Japanese count character by
+  character. So an answered question ("what is two plus two" as "Four."), a
+  summary, a reply or a poem comes back as heard; a model that respells at
+  most one word in ten still counts as a polish.
 - **`cancel`**: discards it, `200 {"id":"d…"}` or `404`. It answers once the
-  mic is free, so a new start can follow at once.
+  mic is free, so a new start can follow at once, and a cloud provider is sent
+  nothing more: audio still queued for it is dropped and an upload under way is
+  abandoned.
+
+`stop` and `cancel` take an optional body `{"id":"d…"}`, the id `start`
+answered with. With it they act only on that dictation, whether running or
+holding text the cap left, and answer `404 {"error":"no dictation with that id
+is active"}` for any other. Without a body, or with no `id` in it, they act on
+the latest dictation, which is what a key released before `start` has answered
+needs.
 
 A dictation stops itself after 5 minutes, so a stuck key can't hold the mic.
 That works as a stop does and sends `dictation_stopped`. Its text waits in
@@ -228,9 +249,13 @@ LLM writes no row. While a dictation runs, `/health` still says `idle` with no
 `active_session`.
 
 Only finals are transcribed, with no interim passes, so a stop never waits
-behind a preview. `dictation_partial` carries the text so far as each final
-lands. A start that is still loading its model can be stopped: the start then
-answers `409` and the stop gets empty text.
+behind a preview. `dictation_partial` says a final landed, and carries only the
+id: every `/ws/live` subscriber gets it, the dashboard included, so it holds
+none of the text. A start that is still downloading or loading its model can
+be stopped or cancelled, and ends at once rather than when the model is ready:
+the start answers `409`, a stop gets empty text, and the next start works. A
+download stopped this way resumes from its `.part` file next time; a model load
+already under way finishes in the background and is discarded.
 
 ## GET /api/v1/sessions
 
@@ -755,8 +780,8 @@ Event types:
 | `session_stopped` | session | emitted after flush + persistence complete |
 | `session_updated` | session, title | post-stop auto-title landed (see POST /sessions) |
 | `dictation_started` | id, provider | a dictation has the mic |
-| `dictation_partial` | id, text | the dictation's text so far, sent as each final lands; rides the lossy lane |
-| `dictation_stopped` | id | the dictation is over: stopped, cancelled, capped at 5 minutes, or failed to start. The text goes only to the stop's reply |
+| `dictation_partial` | id | a final of the dictation landed; rides the lossy lane. Every subscriber gets it, so it carries no text |
+| `dictation_stopped` | id | the dictation is over: stopped, cancelled, capped at 5 minutes, failed to start, or abandoned by a start's caller that disconnected. The text goes only to the stop's reply |
 | `answer_delta` | ask_id, text | one fragment of an ask's streamed answer (mirrors the ask's SSE response) |
 | `answer_done` | ask_id, usage | an ask completed; `usage` when the provider reported tokens |
 | `ask_error` | ask_id, message | an ask failed (upstream LLM error, screen capture failure) |

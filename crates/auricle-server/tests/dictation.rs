@@ -2,7 +2,7 @@
 //! audio from the fixture WAV. These tests never open a capture device: a
 //! start that could reach one is guarded by a provider set to refuse first.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use auricle_core::{AudioChunk, ChannelId, ChunkKind, Config, Error, Result, Segm
 use auricle_server::{
     AudioSource, DictationError, DictationParams, Engine, EngineOptions, StartParams, WsEvent,
 };
-use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
+use auricle_stt::{SessionCfg, SttDrops, SttKind, SttProvider, SttSession};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -40,6 +40,11 @@ struct Probe {
     answer_at_finish: AtomicBool,
     /// How long `finish` takes.
     finish_ms: AtomicUsize,
+    /// The next final fed also brings an STT error, as a chunk that failed
+    /// beside the others would.
+    error_once: AtomicBool,
+    /// Finals every session says it shed.
+    shed_finals: AtomicU64,
     gate: Gate,
 }
 
@@ -124,7 +129,19 @@ impl SttSession for FakeSession {
         } else if let Some(tx) = &self.tx {
             let _ = tx.send(event);
         }
+        if self.probe.error_once.swap(false, Ordering::SeqCst) {
+            if let Some(tx) = &self.tx {
+                let _ = tx.send(SttEvent::Error("a chunk failed".to_string()));
+            }
+        }
         Ok(())
+    }
+    fn drops(&self) -> SttDrops {
+        let finals = self.probe.shed_finals.load(Ordering::SeqCst);
+        SttDrops {
+            chunks: finals,
+            finals,
+        }
     }
     async fn next_event(&mut self) -> Option<SttEvent> {
         self.rx.recv().await
@@ -326,12 +343,13 @@ async fn stop_waits_for_the_last_text_and_answers_with_all_of_it() {
     // Free when the text arrives: the next press can start straight away.
     let next = engine.start_dictation(dictation()).await.unwrap();
     assert_ne!(next.id, started.id);
-    engine.cancel_dictation().await.unwrap();
+    engine.cancel_dictation(None).await.unwrap();
 }
 
 #[tokio::test]
-async fn partials_carry_the_text_so_far() {
-    let (engine, _probe) = engine("partials");
+async fn partials_say_a_final_landed_and_carry_none_of_its_text() {
+    let (engine, probe) = engine("partials");
+    // Every /ws/live subscriber gets this lane, the dashboard included.
     let mut partials = engine.subscribe_partials();
 
     let started = engine.start_dictation(dictation()).await.unwrap();
@@ -339,18 +357,14 @@ async fn partials_carry_the_text_so_far() {
         matches!(e, WsEvent::DictationPartial { .. })
     })
     .await;
-    let WsEvent::DictationPartial { id, text } = ev else {
-        unreachable!();
-    };
-    assert_eq!(id, started.id);
-    assert!(text.starts_with(HEARD), "{text}");
-
-    let dictated = engine.stop_dictation().await.unwrap();
-    assert!(
-        dictated.text.starts_with(&text),
-        "{} / {text}",
-        dictated.text
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&ev.to_json()).unwrap(),
+        serde_json::json!({"type": "dictation_partial", "id": started.id})
     );
+    assert!(probe.said().contains(HEARD));
+
+    let dictated = engine.stop_dictation(None).await.unwrap();
+    assert!(dictated.text.contains(HEARD), "{}", dictated.text);
 }
 
 #[tokio::test]
@@ -367,6 +381,91 @@ async fn stop_and_cancel_with_no_dictation_answer_404() {
     }
 }
 
+async fn post_json(base: &str, path: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}{path}"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or_default())
+}
+
+#[tokio::test]
+async fn stop_and_cancel_act_only_on_the_dictation_they_name() {
+    let (engine, _probe) = engine("by-id");
+    let base = serve(&engine).await;
+    let mut events = engine.subscribe_important();
+
+    let started = engine.start_dictation(dictation()).await.unwrap();
+    for path in ["/api/v1/dictation/stop", "/api/v1/dictation/cancel"] {
+        let (status, body) = post_json(&base, path, serde_json::json!({"id": "d0"})).await;
+        assert_eq!(status, 404, "{path}: {body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("that id"),
+            "{body}"
+        );
+    }
+    // Untouched by those, and its own id stops it.
+    let stop = serde_json::json!({"id": started.id});
+    let (status, body) = post_json(&base, "/api/v1/dictation/stop", stop).await;
+    assert_eq!((status, &body["id"]), (200, &serde_json::json!(started.id)));
+
+    // Text the cap left waits for its own id: another one's stop can't take it.
+    let capped = engine
+        .start_dictation(DictationParams {
+            max_duration: Some(Duration::from_millis(300)),
+            ..dictation()
+        })
+        .await
+        .unwrap();
+    next_event(
+        &mut events,
+        |e| matches!(e, WsEvent::DictationStopped { id } if *id == capped.id),
+    )
+    .await;
+    let stale = serde_json::json!({"id": started.id});
+    let (status, _) = post_json(&base, "/api/v1/dictation/stop", stale).await;
+    assert_eq!(status, 404);
+    let cancel = serde_json::json!({"id": capped.id});
+    let (status, body) = post_json(&base, "/api/v1/dictation/cancel", cancel).await;
+    assert_eq!((status, &body["id"]), (200, &serde_json::json!(capped.id)));
+
+    // A body with no id is a bare stop or cancel.
+    let next = engine.start_dictation(dictation()).await.unwrap();
+    let (status, body) = post_json(&base, "/api/v1/dictation/cancel", serde_json::json!({})).await;
+    assert_eq!((status, &body["id"]), (200, &serde_json::json!(next.id)));
+}
+
+#[tokio::test]
+async fn a_stop_says_when_some_of_what_was_said_may_be_missing() {
+    let (engine, probe) = engine("incomplete");
+    let base = serve(&engine).await;
+
+    let (status, body, _) = dictate_and_stop(&engine, &probe, &base).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["incomplete"], false);
+    assert!(body.get("note").is_none(), "{body}");
+
+    // One chunk failed and the rest were heard.
+    probe.error_once.store(true, Ordering::SeqCst);
+    let (status, body, _) = dictate_and_stop(&engine, &probe, &base).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["text"], probe.said());
+    assert_eq!(body["incomplete"], true);
+    let note = body["note"].as_str().unwrap();
+    assert!(note.contains("error") && note.contains("missing"), "{note}");
+
+    // Finals shed under load, with no error of their own.
+    probe.shed_finals.store(1, Ordering::SeqCst);
+    let (status, body, _) = dictate_and_stop(&engine, &probe, &base).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["incomplete"], true);
+    let note = body["note"].as_str().unwrap();
+    assert!(note.contains("fell behind"), "{note}");
+}
+
 // ---------- nothing is kept ----------
 
 #[tokio::test]
@@ -378,7 +477,7 @@ async fn a_dictation_leaves_no_session_segment_audio_or_text_on_disk() {
 
     engine.start_dictation(dictation()).await.unwrap();
     let_the_fixture_play().await;
-    let dictated = engine.stop_dictation().await.unwrap();
+    let dictated = engine.stop_dictation(None).await.unwrap();
     assert!(
         dictated.text.contains(HEARD),
         "nothing heard, so nothing to leak"
@@ -441,7 +540,7 @@ async fn a_cloud_provider_records_a_dictation_row_before_any_audio_and_no_text()
     assert!(row["session_id"].is_null(), "{row}");
 
     let_the_fixture_play().await;
-    let dictated = engine.stop_dictation().await.unwrap();
+    let dictated = engine.stop_dictation(None).await.unwrap();
     assert!(dictated.text.contains(HEARD));
     assert!(probe.said().contains(HEARD));
     let entries = get(&base, "/api/v1/egress").await["entries"].clone();
@@ -474,7 +573,7 @@ async fn dictation_stays_local_when_meetings_default_to_the_cloud() {
         (started.provider.as_str(), started.local),
         ("whisper-local", true)
     );
-    engine.stop_dictation().await.unwrap();
+    engine.stop_dictation(None).await.unwrap();
     assert_eq!(
         get(&base, "/api/v1/egress").await["entries"],
         serde_json::json!([])
@@ -513,7 +612,7 @@ async fn a_meeting_cannot_start_during_a_dictation() {
         (Some("idle"), &serde_json::Value::Null)
     );
 
-    engine.stop_dictation().await.unwrap();
+    engine.stop_dictation(None).await.unwrap();
     probe.refuse.store(false, Ordering::SeqCst);
     let id = engine.start_session(meeting()).await.unwrap();
     stop_meeting(&engine, &id).await;
@@ -549,7 +648,7 @@ async fn a_dictation_cannot_start_during_a_meeting_or_another_dictation() {
         body["error"].as_str().unwrap().contains("already active"),
         "{body}"
     );
-    engine.cancel_dictation().await.unwrap();
+    engine.cancel_dictation(None).await.unwrap();
 }
 
 // ---------- cancel, the cap, and clients that go away ----------
@@ -577,7 +676,7 @@ async fn cancel_discards_what_was_heard() {
     let (status, _) = post(&base, "/api/v1/dictation/stop").await;
     assert_eq!(status, 404);
     let next = engine.start_dictation(dictation()).await.unwrap();
-    engine.cancel_dictation().await.unwrap();
+    engine.cancel_dictation(None).await.unwrap();
     assert_ne!(next.id, started.id);
 }
 
@@ -603,7 +702,7 @@ async fn the_cap_stops_a_dictation_nobody_stopped_and_keeps_its_text_for_the_sto
     stop_meeting(&engine, &meeting_id).await;
 
     // A key released after the cap still gets what was said.
-    let dictated = engine.stop_dictation().await.unwrap();
+    let dictated = engine.stop_dictation(None).await.unwrap();
     assert_eq!(dictated.id, started.id);
     assert!(
         (300..2_000).contains(&dictated.duration_ms),
@@ -611,7 +710,7 @@ async fn the_cap_stops_a_dictation_nobody_stopped_and_keeps_its_text_for_the_sto
         dictated.duration_ms
     );
     assert!(matches!(
-        engine.stop_dictation().await,
+        engine.stop_dictation(None).await,
         Err(DictationError::NotActive)
     ));
 
@@ -629,40 +728,199 @@ async fn the_cap_stops_a_dictation_nobody_stopped_and_keeps_its_text_for_the_sto
     .await;
     assert!(matches!(ev, WsEvent::DictationStopped { id } if id == capped.id));
     let fresh = engine.start_dictation(dictation()).await.unwrap();
-    assert_eq!(engine.stop_dictation().await.unwrap().id, fresh.id);
+    assert_eq!(engine.stop_dictation(None).await.unwrap().id, fresh.id);
     assert!(matches!(
-        engine.stop_dictation().await,
+        engine.stop_dictation(None).await,
         Err(DictationError::NotActive)
     ));
 }
 
+/// Events up to and including the next `dictation_stopped`.
+async fn events_until_stopped(rx: &mut broadcast::Receiver<WsEvent>) -> Vec<WsEvent> {
+    let mut seen = Vec::new();
+    while !matches!(seen.last(), Some(WsEvent::DictationStopped { .. })) {
+        seen.push(next_event(rx, |_| true).await);
+    }
+    seen
+}
+
+/// After a start whose caller left: nothing was ever said to be listening, no
+/// audio reached the provider, nothing is left to stop, and the mic is free.
+async fn assert_nothing_was_heard(engine: &Arc<Engine>, probe: &Probe, seen: &[WsEvent]) {
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, WsEvent::DictationStarted { .. })),
+        "{seen:?}"
+    );
+    // Long enough for a start that carried on regardless to feed the fixture.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(probe.said(), "", "audio reached the provider");
+    assert!(matches!(
+        engine.stop_dictation(None).await,
+        Err(DictationError::NotActive)
+    ));
+    let id = engine.start_session(meeting()).await.unwrap();
+    stop_meeting(engine, &id).await;
+}
+
 #[tokio::test]
-async fn a_client_gone_mid_start_cannot_wedge_the_mic() {
+async fn a_start_whose_caller_left_while_the_model_loads_never_opens_the_mic() {
     let (engine, probe) = engine("gone-mid-start");
     let mut events = engine.subscribe_important();
     probe.hold.store(true, Ordering::SeqCst);
 
     // The caller disconnects while the model loads: its future is dropped.
-    let params = DictationParams {
-        max_duration: Some(Duration::from_millis(500)),
-        ..dictation()
-    };
-    let abandoned =
-        tokio::time::timeout(Duration::from_millis(100), engine.start_dictation(params));
-    assert!(abandoned.await.is_err(), "start should still be held open");
-    assert!(
-        engine.start_session(meeting()).await.is_err(),
-        "the dictation has the mic"
+    let abandoned = tokio::time::timeout(
+        Duration::from_millis(100),
+        engine.start_dictation(dictation()),
     );
+    assert!(abandoned.await.is_err(), "start should still be held open");
 
-    // Nobody will stop it; the cap does.
+    // Over there and then: no stop, and the cap is 5 minutes away.
+    let seen = events_until_stopped(&mut events).await;
+    // The model finishing late changes nothing.
     probe.release();
-    next_event(&mut events, |e| {
-        matches!(e, WsEvent::DictationStopped { .. })
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        probe.opened.load(Ordering::SeqCst),
+        0,
+        "a session was opened"
+    );
+    assert_nothing_was_heard(&engine, &probe, &seen).await;
+}
+
+#[tokio::test]
+async fn a_start_whose_caller_left_as_the_model_loaded_never_opens_the_mic() {
+    let (engine, probe) = engine("gone-at-load");
+    let mut events = engine.subscribe_important();
+    probe.hold.store(true, Ordering::SeqCst);
+    let start = {
+        let engine = engine.clone();
+        tokio::spawn(async move { engine.start_dictation(dictation()).await })
+    };
+    until("start to reach the provider", || {
+        probe.entered.load(Ordering::SeqCst) > 0
     })
     .await;
-    let id = engine.start_session(meeting()).await.unwrap();
-    stop_meeting(&engine, &id).await;
+
+    // Gone at the moment the model is ready, either side of the session opening.
+    start.abort();
+    probe.release();
+    let seen = events_until_stopped(&mut events).await;
+    assert_nothing_was_heard(&engine, &probe, &seen).await;
+}
+
+#[tokio::test]
+async fn a_client_that_hangs_up_mid_start_never_opens_the_mic() {
+    let (engine, probe) = engine("hang-up");
+    let base = serve(&engine).await;
+    let mut events = engine.subscribe_important();
+    // Over REST the start is for the real mic, so the provider stays held
+    // until nothing could reach it.
+    probe.hold.store(true, Ordering::SeqCst);
+
+    let addr = base.trim_start_matches("http://").to_string();
+    let mut socket = std::net::TcpStream::connect(&addr).unwrap();
+    std::io::Write::write_all(
+        &mut socket,
+        format!(
+            "POST /api/v1/dictation/start HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    until("start to reach the provider", || {
+        probe.entered.load(Ordering::SeqCst) > 0
+    })
+    .await;
+    drop(socket);
+
+    let seen = events_until_stopped(&mut events).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, WsEvent::DictationStarted { .. })),
+        "{seen:?}"
+    );
+    // Anything still waiting on the provider is now turned away, devices unreached.
+    probe.refuse.store(true, Ordering::SeqCst);
+    probe.release();
+    let (status, _) = post(&base, "/api/v1/dictation/stop").await;
+    assert_eq!(status, 404);
+    assert_eq!(probe.opened.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_stop_or_cancel_while_the_model_loads_ends_it_at_once() {
+    for cancel in [false, true] {
+        let (engine, probe) = engine(if cancel {
+            "cancel-in-load"
+        } else {
+            "stop-in-load"
+        });
+        probe.hold.store(true, Ordering::SeqCst);
+        let start = {
+            let engine = engine.clone();
+            tokio::spawn(async move { engine.start_dictation(dictation()).await })
+        };
+        until("start to reach the provider", || {
+            probe.entered.load(Ordering::SeqCst) > 0
+        })
+        .await;
+
+        // The model is still loading, and stays so: the end can't wait for it.
+        let ended = tokio::time::timeout(Duration::from_secs(2), async {
+            if cancel {
+                engine.cancel_dictation(None).await.map(|_| String::new())
+            } else {
+                engine.stop_dictation(None).await.map(|d| d.text)
+            }
+        })
+        .await
+        .expect("the end waited for the model");
+        assert_eq!(ended.unwrap(), "", "cancel: {cancel}");
+        let error = start.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("stopped"), "{error}");
+
+        // The next start works, and the abandoned one never opened a session.
+        probe.release();
+        engine.start_dictation(dictation()).await.unwrap();
+        engine.cancel_dictation(None).await.unwrap();
+        assert_eq!(probe.opened.load(Ordering::SeqCst), 1, "cancel: {cancel}");
+    }
+}
+
+#[tokio::test]
+async fn a_stop_listens_a_moment_longer_for_the_last_word_but_never_past_the_cap() {
+    let (engine, _probe) = engine("tail");
+    engine.start_dictation(dictation()).await.unwrap();
+    let listening = std::time::Instant::now();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let released = listening.elapsed().as_millis() as u64;
+    let dictated = engine.stop_dictation(None).await.unwrap();
+    assert!(
+        dictated.duration_ms >= released + 245,
+        "the mic closed {} ms after the release",
+        dictated.duration_ms.saturating_sub(released)
+    );
+
+    // Released 100 ms before the cap: the cap still ends it, a full tail
+    // would run to 550 ms or later.
+    engine
+        .start_dictation(DictationParams {
+            max_duration: Some(Duration::from_millis(400)),
+            ..dictation()
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let dictated = engine.stop_dictation(None).await.unwrap();
+    assert!(
+        (380..540).contains(&dictated.duration_ms),
+        "{}",
+        dictated.duration_ms
+    );
 }
 
 #[tokio::test]
@@ -673,7 +931,7 @@ async fn a_client_gone_mid_stop_cannot_wedge_the_mic() {
     engine.start_dictation(dictation()).await.unwrap();
 
     // The caller disconnects while the last chunk is transcribed.
-    let abandoned = tokio::time::timeout(Duration::from_millis(50), engine.stop_dictation());
+    let abandoned = tokio::time::timeout(Duration::from_millis(50), engine.stop_dictation(None));
     assert!(abandoned.await.is_err(), "stop should still be waiting");
 
     next_event(&mut events, |e| {
@@ -700,7 +958,7 @@ async fn a_stop_during_start_ends_it_with_no_text_and_nothing_left_open() {
     // A key pressed and released while the model was still loading.
     let stop = {
         let engine = engine.clone();
-        tokio::spawn(async move { engine.stop_dictation().await })
+        tokio::spawn(async move { engine.stop_dictation(None).await })
     };
     tokio::time::sleep(Duration::from_millis(50)).await;
     probe.release();
@@ -726,12 +984,12 @@ async fn a_failed_start_leaves_nothing_to_stop() {
     let error = engine.start_dictation(dictation()).await.unwrap_err();
     assert!(error.to_string().contains("refused"), "{error}");
     assert!(matches!(
-        engine.stop_dictation().await,
+        engine.stop_dictation(None).await,
         Err(DictationError::NotActive)
     ));
     probe.refuse.store(false, Ordering::SeqCst);
     engine.start_dictation(dictation()).await.unwrap();
-    engine.cancel_dictation().await.unwrap();
+    engine.cancel_dictation(None).await.unwrap();
 }
 
 // ---------- settings ----------
@@ -745,7 +1003,7 @@ async fn the_dictation_language_falls_back_to_the_meeting_one() {
         let probe = probe.clone();
         async move {
             engine.start_dictation(params).await.unwrap();
-            engine.cancel_dictation().await.unwrap();
+            engine.cancel_dictation(None).await.unwrap();
             probe.languages.lock().unwrap().pop().unwrap()
         }
     };
@@ -968,12 +1226,21 @@ async fn an_empty_answer_leaves_the_text_as_heard() {
 }
 
 #[tokio::test]
-async fn a_far_longer_answer_leaves_the_text_as_heard() {
+async fn an_answer_with_words_of_its_own_leaves_the_text_as_heard() {
     let essay = "Here is a poem about a small animal. ".repeat(40);
     let (body, _) = polish_falls_back("polish-long", completion(&essay)).await;
     assert_eq!(
         body["polish_note"],
-        "the LLM's answer was much longer than what was said"
+        "the LLM's answer had words that weren't said"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_that_leaves_words_out_leaves_the_text_as_heard() {
+    let (body, _) = polish_falls_back("polish-short", completion("Quokka.")).await;
+    assert_eq!(
+        body["polish_note"],
+        "the LLM's answer left out words that were said"
     );
 }
 

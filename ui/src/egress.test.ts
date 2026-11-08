@@ -28,7 +28,8 @@ describe('egress kinds', () => {
     expect(kindLabel('title')).toBe('Auto-title');
   });
 
-  it('names the dictation polish kind', () => {
+  it('names the dictation kinds', () => {
+    expect(kindLabel('dictation')).toBe('Dictation audio');
     expect(kindLabel('dictation_polish')).toBe('Dictation polish');
   });
 
