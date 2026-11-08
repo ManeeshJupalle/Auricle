@@ -183,6 +183,9 @@ Your coding agent can read your meetings.
   can't mass-delete; a machine left off that long pauses it too. The protection
   has limits and a delete can't be undone: a clock wrong for over 7 days still
   deletes, and a jump under 3 days can expire meetings up to 3 days early.
+  Before the first sweep the newest meeting stands in for the last sweep, so an
+  upgrade whose newest meeting is over 3 days old deletes nothing for 7 days,
+  and the log line says it is measuring from that meeting.
 - **Backups.** *Back up database*, or `POST /api/v1/backup`, writes a consistent
   copy to a `backups` folder beside the database while recording and reads carry
   on. It holds the database only, not retained audio, and retention leaves it
