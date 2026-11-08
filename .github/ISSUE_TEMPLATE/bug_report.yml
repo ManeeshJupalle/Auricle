@@ -1,0 +1,70 @@
+name: Bug report
+description: Something in Auricle doesn't work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. For a **security** problem, please don't use this form: see [SECURITY.md](https://github.com/ManeeshJupalle/Auricle/blob/main/SECURITY.md).
+
+        Please don't paste real transcripts, recordings, or screenshots of real meetings. A made-up example that shows the problem is just as useful.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a recording with whisper-local
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      options:
+        - Recording and transcription
+        - Dashboard
+        - Summaries
+        - Search
+        - Copilot overlay
+        - Dictation
+        - Privacy ledger or settings
+        - API, CLI, or MCP
+        - Installer or updates
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Auricle version
+      description: Shown on the dashboard's About tab, or run `auricle --version`. Say if you built from source, and which commit.
+      placeholder: 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Transcription provider and model
+      placeholder: whisper-local base.en / deepgram / groq-whisper
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Optional. The About tab's **Copy diagnostics** button copies the version and recent crash traces, with no meeting content. Lines from `%LOCALAPPDATA%\auricle\engine.log` help too; please check them for anything private first.
+      render: text
