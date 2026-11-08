@@ -37,11 +37,12 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["time", "macros", "sync", "io-util"] }
 
 [target.'cfg(windows)'.dependencies]
-# Dictation's paste layer and pill: the clipboard, SendInput, window focus,
-# and reading a target's elevation.
+# Dictation's paste layer and pill: the clipboard and the window that owns
+# it, SendInput, window focus, and reading a target's integrity level.
 windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",

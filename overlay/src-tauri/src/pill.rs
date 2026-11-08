@@ -102,13 +102,13 @@ pub fn view(
     })
 }
 
-/// How long a finished pill stays up: a failure long enough to read.
+/// How long a finished pill stays up: anything more than "Pasted." long
+/// enough to read.
 fn lasts(view: &View) -> Option<Duration> {
+    let reading = Duration::from_millis(view.text.chars().count() as u64 * 70);
     match view.kind {
-        "done" => Some(DONE_FOR),
-        "failed" => Some(Duration::from_millis(
-            (view.text.chars().count() as u64 * 70).max(5000),
-        )),
+        "done" => Some(reading.max(DONE_FOR)),
+        "failed" => Some(reading.max(Duration::from_secs(5))),
         _ => None,
     }
 }
@@ -492,6 +492,18 @@ mod tests {
             "dark",
         );
         assert_eq!(lasts(&done.unwrap()), Some(DONE_FOR));
+        let noted = view(
+            &Pill::Done("Pasted. Some words may be missing.".into()),
+            DictationMode::Hold,
+            "D",
+            false,
+            "dark",
+        )
+        .unwrap();
+        assert!(
+            lasts(&noted).unwrap() > DONE_FOR,
+            "a note gets time to be read"
+        );
         let long = "x".repeat(200);
         let failed = view(&Pill::Failed(long), DictationMode::Hold, "D", false, "dark").unwrap();
         assert_eq!(lasts(&failed), Some(Duration::from_millis(14_000)));

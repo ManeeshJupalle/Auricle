@@ -496,6 +496,8 @@ async fn install_update(
         ),
     );
     tokio::time::sleep(INSTALL_NOTICE).await;
+    // The installer handoff ends this process without an Exit event.
+    dictate::flush();
     let installed = update.install(bytes).map_err(|e| e.to_string());
     if installed.is_err() {
         // Staying on this version, so an engine we stopped has to come back.
@@ -932,6 +934,17 @@ pub fn run() {
                     }
                 }
             }
+            // Built now, hidden, so a dictation never waits on a webview.
+            // Without it dictation still pastes, so it is no reason to stop.
+            if let Err(e) = pill::build(app.handle(), &cfg.overlay.theme) {
+                let warning = format!(
+                    "The dictation pill could not be made ({e}). Dictation still pastes, \
+                     without showing what it is doing."
+                );
+                let state = app.state::<AppState>();
+                state.hotkey_warnings.lock().unwrap().push(warning);
+            }
+
             // The overlay starts hidden, and the warnings render inside it.
             let hotkeys_ok = app
                 .state::<AppState>()
@@ -983,8 +996,6 @@ pub fn run() {
             // never kill a recording).
             tauri::async_runtime::spawn(watch_engine(app.handle().clone()));
 
-            // Built now, hidden, so a dictation never waits on a webview.
-            pill::build(app.handle(), &cfg.overlay.theme)?;
             let state = app.state::<AppState>();
             let driver = dictation::Driver {
                 app: app.handle().clone(),
@@ -1050,7 +1061,13 @@ pub fn run() {
     let mut exit_requested = false;
     app.run(move |app, event| match event {
         tauri::RunEvent::ExitRequested { .. } => exit_requested = true,
-        tauri::RunEvent::Exit if !exit_requested => on_session_end(app),
+        tauri::RunEvent::Exit => {
+            // Dictated text still on offer would go with this process.
+            dictate::flush();
+            if !exit_requested {
+                on_session_end(app);
+            }
+        }
         _ => {}
     });
 }
