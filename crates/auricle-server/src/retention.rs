@@ -187,11 +187,13 @@ mod tests {
 
         // Still true the next day, and gone once a sweep has believed the clock.
         let (clock, notice) = clock.observe(T0 + 46 * DAY);
-        assert!(notice.unwrap().contains("past the newest meeting"));
+        let notice = notice.unwrap();
+        assert!(notice.contains("past the newest meeting"), "{notice}");
         let (clock, notice) = clock.observe(T0 + 52 * DAY);
         assert!(notice.is_none());
         let (_, notice) = clock.observe(T0 + 60 * DAY);
-        assert!(notice.unwrap().contains("past the last sweep"));
+        let notice = notice.unwrap();
+        assert!(notice.contains("past the last sweep"), "{notice}");
     }
 
     #[test]
@@ -199,5 +201,20 @@ mod tests {
         let (clock, _) = SweepClock::last_read(T0).observe(T0 + 60 * DAY);
         let stored = serde_json::to_string(&clock).unwrap();
         assert_eq!(serde_json::from_str::<SweepClock>(&stored).unwrap(), clock);
+    }
+
+    #[test]
+    fn a_record_saved_before_from_meeting_still_loads() {
+        // An unreadable record counts as none, which would drop a hold in
+        // progress and let a wrong clock through.
+        let old = format!(r#"{{"last_sweep":{T0},"held_since":{}}}"#, T0 + DAY);
+        let clock: SweepClock = serde_json::from_str(&old).unwrap();
+        assert_eq!(
+            clock,
+            SweepClock {
+                held_since: Some(T0 + DAY),
+                ..SweepClock::last_read(T0)
+            }
+        );
     }
 }

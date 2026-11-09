@@ -2708,7 +2708,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         };
-        watch_devices(
+        let watched = watch_devices(
             session,
             Duration::from_millis(5),
             || {
@@ -2719,8 +2719,10 @@ mod tests {
                 errors
             },
             |channel, _| reports.lock().unwrap().push(channel),
-        )
-        .await;
+        );
+        tokio::time::timeout(Duration::from_secs(5), watched)
+            .await
+            .expect("the watcher stopped polling");
         assert_eq!(
             *reports.lock().unwrap(),
             vec![ChannelId::Mic, ChannelId::Loopback]
