@@ -90,7 +90,7 @@ axum = { version = "0.8", features = ["ws"] }
 # server-only surface needs. rmcp depends on tower-service/http, not on
 # axum, so its StreamableHttpService nests into our axum 0.8 router
 # without a version fight.
-rmcp = { version = "3.4", default-features = false, features = [
+rmcp = { version = "3.9", default-features = false, features = [
     "server",
     "macros",
     "transport-streamable-http-server",
@@ -104,7 +104,7 @@ schemars = "1"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs"] }
 # `bundled` compiles SQLite in: Windows ships no system sqlite3.
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 # Companion to rust-embed: content-type headers for the embedded UI files
 # (not named in the architecture doc, but rust-embed serves raw bytes only).

@@ -26,6 +26,12 @@ Your coding agent can read your meetings.
   offset. Used by `auricle.search`; the dashboard's sidebar search is
   unchanged.
 
+### Security
+
+- **Bundled SQLite and the MCP server library are patched.** SQLite moves
+  to the release that fixes CVE-2026-119375 (rusqlite 0.41, RUSTSEC-2026-0459),
+  and `rmcp` to 3.9, which fixes RUSTSEC-2026-0457, 0461 and 0462.
+
 ### Fixed (external audit of the above)
 
 - **An MCP read is refused if the ledger can't be written.** The ledger write
