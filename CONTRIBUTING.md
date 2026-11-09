@@ -66,9 +66,10 @@ doesn't, an issue or a fix is a real contribution.
 
 ## Before you push
 
-CI runs these on Windows; run the ones for the parts you touched:
+CI runs these on Windows; run the ones for the parts you touched, from the
+repo root in Git Bash:
 
-```
+```sh
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -104,7 +105,8 @@ people's speech or private data; synthetic speech and made-up text are fine.
   never in config files, never in the database.
 - **Partials are never persisted.** Only finals reach SQLite.
 - **Nothing leaves the machine by surprise.** Anything that sends user data
-  to a cloud service is opt-in and writes an egress ledger row first.
+  to a cloud service is opt-in, and in the daemon writes an egress ledger row
+  first.
 - **No real meetings in issues, PRs, tests, or screenshots.** Make one up.
 
 ## Practicalities

@@ -16,6 +16,6 @@
 ## Checklist
 
 - [ ] No real meeting audio, transcripts, or screenshots in the diff, the tests, or this description.
-- [ ] Anything that sends user data off the machine is opt-in and writes an egress ledger row.
+- [ ] Anything that sends user data off the machine is opt-in, and in the daemon writes an egress ledger row.
 - [ ] New dependencies are named here, with the reason.
 - [ ] User-facing changes are in `CHANGELOG.md` (and `README.md` / `docs/API.md` where they apply).

@@ -47,9 +47,10 @@ on and does not trust the browser.
   than `/ws/live` and retained audio, or a comparison that leaks the token
   through timing.
 - **The egress ledger.** For example: user data (audio, a prompt, a summary, an
-  auto-title, dictation audio or polish text) that reaches a cloud provider with
-  no ledger row, a row that names the wrong destination or meeting, or an MCP
-  read filed as "stayed local".
+  auto-title, dictation audio or polish text) that the daemon sends to a cloud
+  provider with no ledger row, a row that names the wrong destination or
+  meeting, or an MCP read filed as "stayed local". The ledger covers the daemon
+  only: `auricle record` writing no rows is documented, not a vulnerability.
 - **The paste layer** (dictation in the overlay). For example: dictated text
   typed into a window other than the one the dictation started in, or into a
   higher-integrity window; text that lands in Windows clipboard history or
