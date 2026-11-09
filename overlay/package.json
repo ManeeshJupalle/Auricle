@@ -13,12 +13,12 @@
     "@fontsource/geist-mono": "^5.2.8",
     "@fontsource/geist-sans": "^5.2.5",
     "@tauri-apps/api": "^2.12.4",
-    "react": "^19.0.0",
+    "react": "^19.3.1",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",
-    "@types/react": "^19.0.0",
+    "@types/react": "^19.3.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.2.0",
     "typescript": "^5.7.0",
