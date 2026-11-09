@@ -72,9 +72,9 @@ CI runs these on Windows; run the ones for the parts you touched:
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-cd ui && npm test
-cd overlay && npm test
-cd overlay/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+(cd ui && npm test)
+(cd overlay && npm test)
+(cd overlay/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
 The overlay's Rust checks need `overlay/dist` (`npm run build` in `overlay/`)

@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement privately, through GitHub's private vulnerability reporting on this repository ([Report a vulnerability](https://github.com/ManeeshJupalle/Auricle/security/advisories/new)), or, when it does not need to be private, by [opening an issue](https://github.com/ManeeshJupalle/Auricle/issues/new/choose). There is no email contact. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement privately, through GitHub's private vulnerability reporting on this repository ([Report a vulnerability](https://github.com/ManeeshJupalle/Auricle/security/advisories/new)), or, when it does not need to be private, by [opening an issue](https://github.com/ManeeshJupalle/Auricle/issues/new/choose). If the private form isn't available, open an issue that says only that you need a private channel for a conduct report, with no names or details, and one will be arranged. There is no email contact. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 
