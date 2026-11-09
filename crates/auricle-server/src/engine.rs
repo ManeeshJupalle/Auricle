@@ -500,7 +500,7 @@ impl Engine {
         // With no record, the newest meeting is the last time known to be good.
         let clock = match kept {
             Some(clock) => clock,
-            None => SweepClock::last_read(self.store.latest_session_end()?.unwrap_or(now)),
+            None => SweepClock::newest_meeting(self.store.latest_session_end()?.unwrap_or(now)),
         };
         let (clock, held) = clock.observe(now);
         // Ahead of any delete: a crash mid-sweep must not forget a hold.
@@ -2699,21 +2699,30 @@ mod tests {
     #[tokio::test]
     async fn each_channel_is_reported_separately() {
         let reports = Mutex::new(Vec::new());
-        let mut polls = 0;
-        watch_devices(
-            tokio::time::sleep(Duration::from_millis(40)),
+        let polls = AtomicUsize::new(0);
+        // The session lasts until the third poll, not a fixed time: Windows
+        // timers tick every ~15.6 ms, and a loaded machine fits fewer polls
+        // into any wall-clock window.
+        let session = async {
+            while polls.load(Ordering::SeqCst) < 3 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        };
+        let watched = watch_devices(
+            session,
             Duration::from_millis(5),
             || {
-                polls += 1;
                 let mut errors = vec![(ChannelId::Mic, "gone".to_string())];
-                if polls > 2 {
+                if polls.fetch_add(1, Ordering::SeqCst) >= 2 {
                     errors.push((ChannelId::Loopback, "gone".to_string()));
                 }
                 errors
             },
             |channel, _| reports.lock().unwrap().push(channel),
-        )
-        .await;
+        );
+        tokio::time::timeout(Duration::from_secs(5), watched)
+            .await
+            .expect("the watcher stopped polling");
         assert_eq!(
             *reports.lock().unwrap(),
             vec![ChannelId::Mic, ChannelId::Loopback]

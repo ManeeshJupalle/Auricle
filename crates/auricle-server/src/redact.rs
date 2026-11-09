@@ -133,7 +133,12 @@ mod tests {
         assert_eq!(redact("host 192.168.0.1 up"), "host [ip] up");
         // A Luhn-valid Visa test number.
         assert_eq!(redact("card 4111 1111 1111 1111 end"), "card [card] end");
-        assert_eq!(redact("key AKIAIOSFODNN7EXAMPLE here"), "key [secret] here");
+        // Fake keys are split in two so secret scanners don't flag the source;
+        // the redactor still sees the joined string.
+        assert_eq!(
+            redact(concat!("key AKIA", "IOSFODNN7EXAMPLE here")),
+            "key [secret] here"
+        );
         assert!(redact("token sk-abcdefghij0123456789XYZ").contains("[secret]"));
     }
 
@@ -144,7 +149,10 @@ mod tests {
             "key [secret] here"
         );
         assert_eq!(
-            redact("key sk-ant-api03-Ab3dEfGh1jKlMnOp_QrStUvWx-yz here"),
+            redact(concat!(
+                "key sk-",
+                "ant-api03-Ab3dEfGh1jKlMnOp_QrStUvWx-yz here"
+            )),
             "key [secret] here"
         );
         assert_eq!(

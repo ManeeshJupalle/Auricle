@@ -34,6 +34,10 @@ pub(crate) struct SweepClock {
     last_sweep: i64,
     /// When the clock was first found past `MAX_SWEEP_GAP`.
     held_since: Option<i64>,
+    /// No sweep has believed the clock yet: `last_sweep` is when the newest
+    /// meeting ended. Only changes what a hold says.
+    #[serde(default)]
+    from_meeting: bool,
 }
 
 impl SweepClock {
@@ -42,6 +46,15 @@ impl SweepClock {
         SweepClock {
             last_sweep: at,
             held_since: None,
+            from_meeting: false,
+        }
+    }
+
+    /// The record before any sweep: the newest meeting ended at `at`.
+    pub(crate) fn newest_meeting(at: i64) -> SweepClock {
+        SweepClock {
+            from_meeting: true,
+            ..SweepClock::last_read(at)
         }
     }
 
@@ -59,15 +72,20 @@ impl SweepClock {
         if held_for >= CLOCK_HOLD {
             return (SweepClock::last_read(now), None);
         }
+        let since = if self.from_meeting {
+            "the newest meeting, and no sweep has confirmed the clock yet"
+        } else {
+            "the last sweep"
+        };
         let notice = format!(
-            "retention paused, nothing deleted: the system clock is {} day(s) past the last \
-             sweep. If the date is wrong, correct it. If it is right, sweeps resume in {} day(s)",
+            "retention paused, nothing deleted: the system clock is {} day(s) past {since}. \
+             If the date is wrong, correct it. If it is right, sweeps resume in {} day(s)",
             gap / SECS_PER_DAY,
             (CLOCK_HOLD - held_for + SECS_PER_DAY - 1) / SECS_PER_DAY,
         );
         let clock = SweepClock {
-            last_sweep: self.last_sweep,
             held_since: Some(held_since),
+            ..self
         };
         (clock, Some(notice))
     }
@@ -152,8 +170,30 @@ mod tests {
     fn a_held_sweep_says_how_far_and_how_long() {
         let (_, notice) = SweepClock::last_read(T0).observe(T0 + 60 * DAY);
         let notice = notice.unwrap();
-        assert!(notice.contains("60 day(s)"), "{notice}");
+        assert!(notice.contains("60 day(s) past the last sweep"), "{notice}");
         assert!(notice.contains("resume in 7 day(s)"), "{notice}");
+    }
+
+    #[test]
+    fn a_hold_before_any_sweep_does_not_claim_one() {
+        // An upgrade whose newest meeting is 45 days old: no sweep has run.
+        let (clock, notice) = SweepClock::newest_meeting(T0).observe(T0 + 45 * DAY);
+        let notice = notice.unwrap();
+        assert!(
+            notice.contains("45 day(s) past the newest meeting"),
+            "{notice}"
+        );
+        assert!(!notice.contains("last sweep"), "{notice}");
+
+        // Still true the next day, and gone once a sweep has believed the clock.
+        let (clock, notice) = clock.observe(T0 + 46 * DAY);
+        let notice = notice.unwrap();
+        assert!(notice.contains("past the newest meeting"), "{notice}");
+        let (clock, notice) = clock.observe(T0 + 52 * DAY);
+        assert!(notice.is_none());
+        let (_, notice) = clock.observe(T0 + 60 * DAY);
+        let notice = notice.unwrap();
+        assert!(notice.contains("past the last sweep"), "{notice}");
     }
 
     #[test]
@@ -161,5 +201,20 @@ mod tests {
         let (clock, _) = SweepClock::last_read(T0).observe(T0 + 60 * DAY);
         let stored = serde_json::to_string(&clock).unwrap();
         assert_eq!(serde_json::from_str::<SweepClock>(&stored).unwrap(), clock);
+    }
+
+    #[test]
+    fn a_record_saved_before_from_meeting_still_loads() {
+        // An unreadable record counts as none, which would drop a hold in
+        // progress and let a wrong clock through.
+        let old = format!(r#"{{"last_sweep":{T0},"held_since":{}}}"#, T0 + DAY);
+        let clock: SweepClock = serde_json::from_str(&old).unwrap();
+        assert_eq!(
+            clock,
+            SweepClock {
+                held_since: Some(T0 + DAY),
+                ..SweepClock::last_read(T0)
+            }
+        );
     }
 }

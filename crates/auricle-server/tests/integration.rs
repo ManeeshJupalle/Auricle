@@ -1279,7 +1279,7 @@ async fn a_clock_far_ahead_deletes_nothing_and_says_why() {
 
     assert_eq!(sweep.deleted, 0);
     let notice = sweep.notice.expect("a refused sweep must be logged");
-    assert!(notice.contains("clock"), "{notice}");
+    assert!(notice.contains("past the last sweep"), "{notice}");
     assert_eq!(session_ids(&engine), ["last-week", "yesterday"]);
     assert!(audio.exists());
 
@@ -1301,7 +1301,8 @@ async fn a_clock_far_ahead_on_the_very_first_sweep_deletes_nothing() {
         .unwrap();
 
     assert_eq!(sweep.deleted, 0);
-    assert!(sweep.notice.is_some());
+    let notice = sweep.notice.expect("a refused sweep must be logged");
+    assert!(notice.contains("past the newest meeting"), "{notice}");
     assert_eq!(session_ids(&engine), ["last-week", "yesterday"]);
 }
 
