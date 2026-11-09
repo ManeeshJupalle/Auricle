@@ -2699,14 +2699,21 @@ mod tests {
     #[tokio::test]
     async fn each_channel_is_reported_separately() {
         let reports = Mutex::new(Vec::new());
-        let mut polls = 0;
+        let polls = AtomicUsize::new(0);
+        // The session lasts until the third poll, not a fixed time: Windows
+        // timers tick every ~15.6 ms, and a loaded machine fits fewer polls
+        // into any wall-clock window.
+        let session = async {
+            while polls.load(Ordering::SeqCst) < 3 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        };
         watch_devices(
-            tokio::time::sleep(Duration::from_millis(40)),
+            session,
             Duration::from_millis(5),
             || {
-                polls += 1;
                 let mut errors = vec![(ChannelId::Mic, "gone".to_string())];
-                if polls > 2 {
+                if polls.fetch_add(1, Ordering::SeqCst) >= 2 {
                     errors.push((ChannelId::Loopback, "gone".to_string()));
                 }
                 errors
