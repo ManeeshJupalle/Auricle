@@ -371,7 +371,7 @@ Your coding agent can read your meetings.
 - **Keyboard and screen readers.** Controls take keyboard focus and carry
   labels, status changes are announced, and the session map is one tab stop that
   arrow keys step through.
-- **Narrow windows get their own layouts,** at 900 px and 640 px.
+- **Narrow windows get their own layouts,** at 1080 px and 640 px.
 - **The provider picker follows Settings.** A change there replaces a pick made
   in the sidebar, so a default switched to local for a confidential call can't
   lose to a stale cloud pick. A sidebar pick applies to the next session only.

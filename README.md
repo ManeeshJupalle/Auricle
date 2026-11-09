@@ -47,7 +47,7 @@
 
 - **Private by default.** Speech is transcribed on your machine by whisper.cpp,
   and summaries come from a local model through [Ollama](https://ollama.com)
-  (installed separately). Cloud providers are opt-in, and every time the engine
+  (installed separately). Cloud providers are opt-in, and every time the daemon
   sends your data to one, its egress ledger records it.
 - **Works with the calls you already have, with no bot.** Auricle records your
   system audio and your microphone, so it works with Zoom, Teams, Meet, or
@@ -135,7 +135,7 @@ claude mcp add --transport http auricle http://127.0.0.1:4820/mcp
 <br>
 <img src=".github/assets/narrow.webp" width="300" alt="The Auricle dashboard laid out for a narrow window, with the session map running across the top of the transcript">
 
-Narrow windows get their own layouts, at 900 px and 640 px. Controls take
+Narrow windows get their own layouts, at 1080 px and 640 px. Controls take
 keyboard focus and carry screen-reader labels, status changes are announced,
 and arrow keys step through the session map. There is no mobile app.
 </details>
@@ -533,7 +533,7 @@ once the Whisper model has downloaded.
 **What does it connect to on its own?** The app checks GitHub Releases for an
 update when it launches, and the engine downloads a Whisper model from Hugging
 Face the first time it needs one (SHA-256 verified). Anything else goes out
-only if you pick a cloud provider, and the ledger records it.
+only if you pick a cloud provider, and the daemon's ledger records it.
 
 **Where is my data?** Under `%LOCALAPPDATA%\auricle`: the SQLite database,
 retained audio if you turned it on, backups, the config files, and the
