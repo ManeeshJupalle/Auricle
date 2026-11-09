@@ -1,0 +1,95 @@
+/* The dictation pill. Its window is transparent and click-through; this is
+   the visible part, in the overlay's own tokens (styles.css). Red means
+   one thing, as in the overlay: the mic is live. */
+
+.pill-stage {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border-radius: 18px;
+  background: var(--panel-grad);
+  border: 1px solid var(--edge-strong);
+  box-shadow: var(--card-shadow);
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.pill[hidden] {
+  display: none;
+}
+
+.pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+  background: var(--dim-2);
+}
+
+.pill[data-kind='listening'] .pill-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  animation: pillPulse 1.4s ease-in-out infinite;
+}
+
+.pill[data-kind='working'] .pill-dot {
+  background: var(--focus);
+  animation: pillPulse 1.1s ease-in-out infinite;
+}
+
+.pill[data-kind='done'] .pill-dot {
+  background: var(--ok);
+}
+
+.pill[data-kind='failed'] {
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.pill[data-kind='failed'] .pill-dot {
+  background: var(--warn);
+}
+
+.pill-words {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 8px;
+}
+
+.pill-text {
+  font-weight: 500;
+  color: var(--text-strong);
+}
+
+.pill-hint {
+  color: var(--dim);
+}
+
+@keyframes pillPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+/* The state still reads from the dot's colour; only the motion goes. */
+@media (prefers-reduced-motion: reduce) {
+  .pill-dot {
+    animation: none !important;
+  }
+}

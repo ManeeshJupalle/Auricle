@@ -64,10 +64,56 @@ pub struct StartParams {
     pub audio: Option<AudioSource>,
 }
 
+/// `POST /dictation/start`'s body, all of it optional.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct DictationParams {
+    pub language: Option<String>,
+    #[serde(skip)]
+    pub audio: Option<AudioSource>,
+    /// Test hook: how long it may run before it stops itself.
+    #[serde(skip)]
+    pub max_duration: Option<Duration>,
+}
+
+/// A dictation that has the mic.
+#[derive(Debug, Clone)]
+pub struct DictationStarted {
+    pub id: String,
+    pub provider: String,
+    /// Whether its audio stays on this machine.
+    pub local: bool,
+}
+
+/// What a dictation heard.
+#[derive(Debug)]
+pub struct Dictated {
+    pub id: String,
+    pub text: String,
+    pub duration_ms: u64,
+    /// Whether `text` went through the LLM polish (`dictation_polish`).
+    pub polished: bool,
+    /// Why polish was on and `text` is as heard all the same.
+    pub polish_note: Option<String>,
+    /// Why some of what was said may be missing from `text`, if it may be.
+    pub missing: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum DictationError {
+    /// No dictation to stop or cancel, or not the one named — HTTP 404.
+    NotActive,
+    /// Transcription failed, and nothing was heard — HTTP 502.
+    Failed(String),
+    /// The dictation outlived its own bounds on finishing — HTTP 504.
+    TimedOut,
+}
+
 #[derive(Debug)]
 pub enum StartError {
     /// Another session is active — HTTP 409.
     Busy(String),
+    /// A dictation has the mic — HTTP 409.
+    Dictating,
     /// Bad provider/device names — HTTP 400.
     Invalid(String),
     /// A stop landed before capture began. The request was fine and the
@@ -82,6 +128,7 @@ impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StartError::Busy(active) => write!(f, "session {active} is already active"),
+            StartError::Dictating => f.write_str("a dictation is in progress"),
             StartError::Invalid(message) => f.write_str(message),
             StartError::Stopped => f.write_str("session was stopped before capture began"),
             StartError::ShuttingDown => f.write_str("the daemon is shutting down"),
@@ -120,6 +167,98 @@ struct OpenCapture {
     loop_pipeline: ChannelPipeline<SileroDetector>,
     mic_wav: Option<RetainedAudio>,
     loop_wav: Option<RetainedAudio>,
+}
+
+/// The longest a dictation runs before it stops itself, so that a stuck key
+/// can't hold the mic.
+const DICTATION_MAX: Duration = Duration::from_secs(5 * 60);
+/// Dictation's provider unless the `dictation_provider` setting names another.
+/// Never the meetings' default: setting meetings up for the cloud must not
+/// quietly send dictation there too.
+const DICTATION_PROVIDER: &str = "whisper-local";
+/// How long a stop or cancel waits on its dictation. The run bounds its own
+/// finish (`FINISH_TIMEOUT`, then `DRAIN_TIMEOUT`), so this only catches a fault.
+const DICTATION_WAIT: Duration = Duration::from_secs(150);
+/// How long the mic stays open after a stop. The key comes up as the last word
+/// ends, and that word is still on its way through the capture and resampler
+/// buffers; cutting at once clipped its last syllable.
+const DICTATION_TAIL: Duration = Duration::from_millis(250);
+
+/// Where a dictation's audio comes from.
+enum MicFeed {
+    Device(CaptureConsumer),
+    File(PathBuf),
+}
+
+/// A dictation with its STT session open, before the mic.
+struct PreparedDictation {
+    started: DictationStarted,
+    session: Box<dyn SttSession>,
+    mic_sel: String,
+}
+
+/// How the slow part of a dictation's start came out.
+enum Opening {
+    Prepared(std::result::Result<PreparedDictation, StartError>),
+    Ended(End),
+    CallerGone,
+}
+
+/// How a dictation's stop or cancel reaches its run.
+enum End {
+    Stop,
+    Cancel,
+}
+
+enum Outcome {
+    Heard {
+        text: String,
+        duration_ms: u64,
+        missing: Option<String>,
+    },
+    Failed(String),
+    Cancelled,
+}
+
+impl Outcome {
+    /// A dictation stopped before it heard anything.
+    fn unheard() -> Outcome {
+        Outcome::Heard {
+            text: String::new(),
+            duration_ms: 0,
+            missing: None,
+        }
+    }
+}
+
+type StartReply = oneshot::Sender<std::result::Result<DictationStarted, StartError>>;
+
+/// What a stop or cancel needs of the latest dictation.
+struct DictationHandle {
+    id: String,
+    end: oneshot::Sender<End>,
+    outcome: oneshot::Receiver<Outcome>,
+}
+
+/// Frees a dictation's slot and says it is over, however its run ends, a panic
+/// included.
+struct DictationSlot {
+    engine: Arc<Engine>,
+    id: String,
+    control: SessionControl,
+}
+
+impl Drop for DictationSlot {
+    fn drop(&mut self) {
+        // The mic goes before the slot does. After a panic this is the only
+        // thing that closes it: the lifecycle keeps these controls until the
+        // next start replaces them.
+        self.control.handles.lock().unwrap().clear();
+        self.engine.lifecycle.lock().unwrap().finish_stop(&self.id);
+        let _ = self.engine.important_tx.send(WsEvent::DictationStopped {
+            id: self.id.clone(),
+        });
+    }
 }
 
 /// Holds the reserved slot for whatever owns the session right now, first its
@@ -165,6 +304,9 @@ pub struct Engine {
     /// router, so that every delete reaches it, retention's included.
     ring: Arc<TranscriptRing>,
     ask_history: Arc<AskHistory>,
+    /// The latest dictation, from its start until a stop or cancel claims it.
+    /// Its text is held here, in memory, that long and no longer.
+    dictation: Mutex<Option<DictationHandle>>,
     /// Holds the data root's lock for as long as this engine lives.
     _data_root_lock: std::fs::File,
 }
@@ -214,6 +356,7 @@ impl Engine {
             titles_pending: AtomicUsize::new(0),
             ring,
             ask_history: Arc::default(),
+            dictation: Mutex::new(None),
             _data_root_lock: data_root_lock,
         }))
     }
@@ -263,7 +406,8 @@ impl Engine {
 
     pub fn lifecycle_state(&self) -> &'static str {
         match self.lifecycle.lock().unwrap().state() {
-            crate::lifecycle::State::Idle => "idle",
+            // Meetings only: a client that reads "recording" looks for one.
+            crate::lifecycle::State::Idle | crate::lifecycle::State::Dictating(_) => "idle",
             crate::lifecycle::State::Recording(_) => "recording",
             crate::lifecycle::State::Stopping(_) => "stopping",
         }
@@ -413,6 +557,7 @@ impl Engine {
             match lifecycle.start(&session_id) {
                 Ok(()) => lifecycle.control(),
                 Err(LifecycleError::Busy(active)) => return Err(StartError::Busy(active)),
+                Err(LifecycleError::Dictating) => return Err(StartError::Dictating),
                 Err(_) => return Err(StartError::ShuttingDown),
             }
         };
@@ -487,64 +632,9 @@ impl Engine {
         auricle_stt::check_language(&provider_id, &language)
             .map_err(|e| StartError::Invalid(e.to_string()))?;
 
-        let cache_key = format!("{provider_id}|{}", provider_cfg.stt.whisper_local.model);
-        let cached = match &*self.local_provider.lock().unwrap() {
-            Some((key, p)) if *key == cache_key => Some(p.clone()),
-            _ => None,
-        };
-        let provider: Arc<dyn SttProvider> = match (&self.provider_override, cached) {
-            (Some(p), _) => p.clone(),
-            (None, Some(p)) => p,
-            (None, None) => {
-                let models_dir = self.data_root.join("models");
-                let mut download_watch = None;
-                // First run of a local model blocks this request on a large
-                // download; tell WS clients so the UI isn't a silent hang.
-                if provider_id == "whisper-local" {
-                    let model_name = &provider_cfg.stt.whisper_local.model;
-                    if let Some(m) = auricle_stt::available_models()
-                        .iter()
-                        .find(|m| m.name == *model_name)
-                    {
-                        if !models_dir.join(m.file_name).exists() {
-                            let _ = self.important_tx.send(WsEvent::ModelDownloadStarted {
-                                session: session_id.to_string(),
-                                model: model_name.clone(),
-                                size_mb: m.size_bytes / 1_048_576,
-                            });
-                            download_watch = Some(tokio::spawn(report_download_progress(
-                                models_dir.join(format!("{}.part", m.file_name)),
-                                session_id.to_string(),
-                                model_name.clone(),
-                                m.size_bytes,
-                                self.important_tx.clone(),
-                                DOWNLOAD_PROGRESS_EVERY,
-                            )));
-                        }
-                    }
-                }
-                let created =
-                    auricle_stt::create_provider(&provider_id, &provider_cfg, &models_dir).await;
-                if let Some(watch) = download_watch {
-                    watch.abort();
-                }
-                let p = created.map_err(|e| match e {
-                    Error::Stt(ref m) | Error::Model(ref m) if m.contains("unknown") => {
-                        StartError::Invalid(e.to_string())
-                    }
-                    Error::Stt(ref m) if m.contains("not set") => {
-                        StartError::Invalid(e.to_string())
-                    }
-                    _ => StartError::Internal(e),
-                })?;
-                // Only local providers are worth caching (model load); cloud
-                // ones are cheap and re-read their key env on construction.
-                if p.kind() == SttKind::Local {
-                    *self.local_provider.lock().unwrap() = Some((cache_key, p.clone()));
-                }
-                p
-            }
-        };
+        let provider = self
+            .provider_for(&provider_id, &provider_cfg, session_id)
+            .await?;
 
         let session_cfg = SessionCfg {
             session_id: session_id.to_string(),
@@ -780,6 +870,75 @@ impl Engine {
         Ok(())
     }
 
+    /// The provider `provider_id` names, built once and cached if it is local.
+    /// A first run of a local model downloads it here, and the progress is
+    /// reported under `events_id`.
+    async fn provider_for(
+        &self,
+        provider_id: &str,
+        provider_cfg: &Config,
+        events_id: &str,
+    ) -> std::result::Result<Arc<dyn SttProvider>, StartError> {
+        let cache_key = format!("{provider_id}|{}", provider_cfg.stt.whisper_local.model);
+        let cached = match &*self.local_provider.lock().unwrap() {
+            Some((key, p)) if *key == cache_key => Some(p.clone()),
+            _ => None,
+        };
+        let provider: Arc<dyn SttProvider> = match (&self.provider_override, cached) {
+            (Some(p), _) => p.clone(),
+            (None, Some(p)) => p,
+            (None, None) => {
+                let models_dir = self.data_root.join("models");
+                let mut download_watch = None;
+                // First run of a local model blocks this request on a large
+                // download; tell WS clients so the UI isn't a silent hang.
+                if provider_id == "whisper-local" {
+                    let model_name = &provider_cfg.stt.whisper_local.model;
+                    if let Some(m) = auricle_stt::available_models()
+                        .iter()
+                        .find(|m| m.name == *model_name)
+                    {
+                        if !models_dir.join(m.file_name).exists() {
+                            let _ = self.important_tx.send(WsEvent::ModelDownloadStarted {
+                                session: events_id.to_string(),
+                                model: model_name.clone(),
+                                size_mb: m.size_bytes / 1_048_576,
+                            });
+                            download_watch =
+                                Some(AbortOnDrop(tokio::spawn(report_download_progress(
+                                    models_dir.join(format!("{}.part", m.file_name)),
+                                    events_id.to_string(),
+                                    model_name.clone(),
+                                    m.size_bytes,
+                                    self.important_tx.clone(),
+                                    DOWNLOAD_PROGRESS_EVERY,
+                                ))));
+                        }
+                    }
+                }
+                let created =
+                    auricle_stt::create_provider(provider_id, provider_cfg, &models_dir).await;
+                drop(download_watch);
+                let p = created.map_err(|e| match e {
+                    Error::Stt(ref m) | Error::Model(ref m) if m.contains("unknown") => {
+                        StartError::Invalid(e.to_string())
+                    }
+                    Error::Stt(ref m) if m.contains("not set") => {
+                        StartError::Invalid(e.to_string())
+                    }
+                    _ => StartError::Internal(e),
+                })?;
+                // Only local providers are worth caching (model load); cloud
+                // ones are cheap and re-read their key env on construction.
+                if p.kind() == SttKind::Local {
+                    *self.local_provider.lock().unwrap() = Some((cache_key, p.clone()));
+                }
+                p
+            }
+        };
+        Ok(provider)
+    }
+
     /// Everything about a start that can still fail once its STT sessions
     /// are open. It all happens before any thread or task exists, so a failure
     /// leaves the caller only those sessions to close: streams and WAV writers
@@ -894,6 +1053,446 @@ impl Engine {
         Ok(())
     }
 
+    /// Start a dictation: take the mic for it, then build its provider and STT
+    /// session and open the mic, in a task of its own as a meeting's start is.
+    /// Answers once it is listening.
+    ///
+    /// Nothing of a dictation is written down: no session row, no segment, no
+    /// audio file, nothing in the transcript ring. A cloud provider gets an
+    /// egress row, as every upload does, and the row holds no text.
+    pub async fn start_dictation(
+        self: &Arc<Self>,
+        params: DictationParams,
+    ) -> std::result::Result<DictationStarted, StartError> {
+        let id = format!("d{:x}", unix_ms());
+        let (end_tx, end_rx) = oneshot::channel();
+        let (outcome_tx, outcome_rx) = oneshot::channel();
+        let control = {
+            // Held across taking the slot, so that a stop landing any time
+            // after finds this dictation's handle, never none and never an
+            // older one's. Order: this lock, then the lifecycle's.
+            let mut latest = self.dictation.lock().unwrap();
+            let control = {
+                let mut lifecycle = self.lifecycle.lock().unwrap();
+                match lifecycle.start_dictation(&id) {
+                    Ok(()) => lifecycle.control(),
+                    Err(LifecycleError::Busy(active)) => return Err(StartError::Busy(active)),
+                    Err(LifecycleError::Dictating) => return Err(StartError::Dictating),
+                    Err(_) => return Err(StartError::ShuttingDown),
+                }
+            };
+            // Text a previous dictation left unclaimed goes.
+            *latest = Some(DictationHandle {
+                id: id.clone(),
+                end: end_tx,
+                outcome: outcome_rx,
+            });
+            control
+        };
+        let (started_tx, started_rx) = oneshot::channel();
+        let engine = self.clone();
+        tokio::spawn(async move {
+            let slot = DictationSlot {
+                engine: engine.clone(),
+                id,
+                control: control.clone(),
+            };
+            let outcome = engine
+                .run_dictation(slot, params, control, end_rx, started_tx)
+                .await;
+            let _ = outcome_tx.send(outcome);
+        });
+        match started_rx.await {
+            Ok(started) => started,
+            // The task panicked; its slot guard has released the mic.
+            Err(_) => Err(StartError::Internal(Error::Stt(
+                "dictation start panicked".to_string(),
+            ))),
+        }
+    }
+
+    /// A dictation from start to outcome: open everything, listen until a
+    /// stop, a cancel or the cap, then let the last chunk finish. The slot is
+    /// freed before anyone hears how it went.
+    ///
+    /// The mic opens only for a caller still waiting to hear that it has. One
+    /// that went away gets a cancel: no audio is taken, and none is sent.
+    async fn run_dictation(
+        self: &Arc<Self>,
+        slot: DictationSlot,
+        params: DictationParams,
+        control: SessionControl,
+        mut end: oneshot::Receiver<End>,
+        mut started: StartReply,
+    ) -> Outcome {
+        let id = slot.id.clone();
+        let id = id.as_str();
+        let DictationParams {
+            language,
+            audio,
+            max_duration,
+        } = params;
+        let limit = max_duration.unwrap_or(DICTATION_MAX);
+        // A first-run model download takes minutes and a load seconds, so a
+        // stop, a cancel or the caller leaving ends the start there and then.
+        // A download picks up from its `.part` file next time; a load already
+        // under way finishes on its own and is dropped.
+        let opening = tokio::select! {
+            prepared = self.prepare_dictation(id, language) => Opening::Prepared(prepared),
+            ended = &mut end => Opening::Ended(ended.unwrap_or(End::Cancel)),
+            () = started.closed() => Opening::CallerGone,
+        };
+        let prepared = match opening {
+            Opening::Prepared(Ok(prepared)) => prepared,
+            Opening::Prepared(Err(e)) => {
+                let outcome = Outcome::Failed(e.to_string());
+                self.release_unheard(slot);
+                self.refuse_start(id, started, e);
+                return outcome;
+            }
+            Opening::Ended(ended) => {
+                self.release_unheard(slot);
+                self.refuse_start(id, started, StartError::Stopped);
+                return match ended {
+                    End::Stop => Outcome::unheard(),
+                    End::Cancel => Outcome::Cancelled,
+                };
+            }
+            Opening::CallerGone => {
+                self.release_unheard(slot);
+                return Outcome::Cancelled;
+            }
+        };
+        let PreparedDictation {
+            started: info,
+            session,
+            mic_sel,
+        } = prepared;
+        // The caller can leave in the same poll that opened the session, and
+        // the select then picks the session.
+        if started.is_closed() {
+            drop(session);
+            self.release_unheard(slot);
+            return Outcome::Cancelled;
+        }
+        let (pipeline, feed, clock) = match self.open_mic(id, audio, &mic_sel, &control) {
+            Ok(opened) => opened,
+            Err(e) => {
+                close_unused_session(session).await;
+                self.release_unheard(slot);
+                let outcome = match e {
+                    // A cancel got here first: only it sets the flag this early.
+                    StartError::Stopped => Outcome::Cancelled,
+                    _ => Outcome::Failed(e.to_string()),
+                };
+                self.refuse_start(id, started, e);
+                return outcome;
+            }
+        };
+        let provider = info.provider.clone();
+        if started.send(Ok(info)).is_err() {
+            // Gone as the mic opened. Nothing has been fed yet, so the session
+            // is dropped unfinished and sends nothing, and the slot closes the mic.
+            drop(session);
+            self.release_unheard(slot);
+            return Outcome::Cancelled;
+        }
+        let _ = self.important_tx.send(WsEvent::DictationStarted {
+            id: id.to_string(),
+            provider,
+        });
+
+        let (batch_tx, batch_rx) = mpsc::unbounded_channel();
+        let drain = match feed {
+            MicFeed::Device(mic) => Some(spawn_drain(
+                mic,
+                control.stop.clone(),
+                move || clock.elapsed().as_millis() as u64,
+                batch_tx,
+                None::<RetainedAudio>,
+                // No levels: the dashboard's meters belong to meetings, and
+                // nobody listens on this sender.
+                VuSink {
+                    session: id.to_string(),
+                    tx: broadcast::channel(1).0,
+                },
+                self.important_tx.clone(),
+            )),
+            MicFeed::File(path) => {
+                tokio::spawn(feed_wav(path, batch_tx, control.stop.clone(), clock));
+                None
+            }
+        };
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let drive = tokio::spawn(drive_channel(
+            batch_rx,
+            pipeline,
+            session,
+            ChannelId::Mic,
+            ev_tx,
+            clock,
+        ));
+        let heard = tokio::spawn(collect_dictation(
+            ev_rx,
+            id.to_string(),
+            self.partial_tx.clone(),
+            self.important_tx.clone(),
+        ));
+
+        let cap = tokio::time::sleep(limit);
+        tokio::pin!(cap);
+        let ended = tokio::select! {
+            end = &mut end => end.unwrap_or(End::Cancel),
+            // The cap behaves like a stop, and its text waits for one.
+            () = &mut cap => End::Stop,
+        };
+        if matches!(ended, End::Stop) && !cap.is_elapsed() {
+            tokio::select! {
+                () = tokio::time::sleep(DICTATION_TAIL) => {}
+                () = &mut cap => {}
+            }
+        }
+        let duration_ms = clock.elapsed().as_millis() as u64;
+        self.end_dictation_capture(id);
+        let outcome = match ended {
+            End::Cancel => {
+                // Dropped unfinished, the session sends nothing it still holds.
+                drive.abort();
+                heard.abort();
+                Outcome::Cancelled
+            }
+            // The drive flushes the last chunk and waits for its text, within
+            // its own bounds.
+            End::Stop => {
+                let drive = drive.await;
+                match heard.await {
+                    Ok((text, Some(error))) if text.is_empty() => Outcome::Failed(error),
+                    Ok((text, error)) => Outcome::Heard {
+                        text,
+                        duration_ms,
+                        missing: missing_words(&drive, error.is_some()),
+                    },
+                    Err(e) => Outcome::Failed(format!("dictation task failed: {e}")),
+                }
+            }
+        };
+        if let Some(drain) = drain {
+            let _ = tokio::task::spawn_blocking(move || drain.join()).await;
+        }
+        // The mic goes before the slot does.
+        control.handles.lock().unwrap().clear();
+        drop(slot);
+        outcome
+    }
+
+    /// Everything a dictation needs before the mic: its provider and an STT
+    /// session. Every await of a start is in here, so a stop, a cancel or the
+    /// caller leaving can end it at any of them.
+    async fn prepare_dictation(
+        &self,
+        id: &str,
+        language: Option<String>,
+    ) -> std::result::Result<PreparedDictation, StartError> {
+        let store = self.store.clone();
+        let settings = crate::api::off_runtime(move || store.all_settings())
+            .await
+            .unwrap_or_default();
+        let setting_str = |key: &str| {
+            settings
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        };
+        let provider_id =
+            setting_str("dictation_provider").unwrap_or_else(|| DICTATION_PROVIDER.to_string());
+        let language = language
+            .or_else(|| setting_str("dictation_language"))
+            .or_else(|| setting_str("stt_language"))
+            .unwrap_or_else(|| self.cfg.stt.language.clone());
+        auricle_stt::check_language(&provider_id, &language)
+            .map_err(|e| StartError::Invalid(e.to_string()))?;
+        let mut provider_cfg = self.cfg.clone();
+        if let Some(model) = setting_str("whisper_model") {
+            provider_cfg.stt.whisper_local.model = model;
+        }
+        let mic_sel =
+            setting_str("mic_device").unwrap_or_else(|| self.cfg.audio.mic_device.clone());
+
+        let provider = self.provider_for(&provider_id, &provider_cfg, id).await?;
+        let session = provider
+            .start_session(&SessionCfg {
+                session_id: id.to_string(),
+                language,
+            })
+            .await
+            .map_err(StartError::Internal)?;
+        let on_device = provider.kind() == SttKind::Local;
+        let dest = if on_device {
+            ("local", None)
+        } else {
+            crate::egress::stt_egress(provider.id(), &provider_cfg)
+        };
+        let started = DictationStarted {
+            id: id.to_string(),
+            provider: provider_id,
+            local: dest.0 == "local",
+        };
+        if !on_device {
+            // Ahead of the mic, so no audio can leave before its row exists.
+            crate::egress::record(
+                &self.store,
+                None,
+                "dictation",
+                dest,
+                provider.id(),
+                None,
+                None,
+            );
+        }
+        Ok(PreparedDictation {
+            started,
+            session,
+            mic_sel,
+        })
+    }
+
+    /// Let go of a dictation that never listened: there is nothing for a stop
+    /// to collect, so its handle goes, and its slot.
+    fn release_unheard(&self, slot: DictationSlot) {
+        self.dictation.lock().unwrap().take_if(|h| h.id == slot.id);
+        drop(slot);
+    }
+
+    /// Tell a start's caller why it failed, or everyone if it has gone.
+    fn refuse_start(&self, id: &str, started: StartReply, e: StartError) {
+        if let Err(Err(e)) = started.send(Err(e)) {
+            self.publish_important(WsEvent::Error {
+                session: id.to_string(),
+                message: e.to_string(),
+            });
+        }
+    }
+
+    /// The mic, through a pipeline that cuts finals only. Blocking and quick,
+    /// so a failure leaves the caller only its STT session to close.
+    fn open_mic(
+        &self,
+        id: &str,
+        audio: Option<AudioSource>,
+        mic_sel: &str,
+        control: &SessionControl,
+    ) -> std::result::Result<(ChannelPipeline<SileroDetector>, MicFeed, Instant), StartError> {
+        // The last moment a stop can keep the mic from opening at all.
+        if !self.lifecycle.lock().unwrap().begin_capture(id) {
+            return Err(StartError::Stopped);
+        }
+        let detector = SileroDetector::new().map_err(StartError::Internal)?;
+        let pipeline = ChannelPipeline::new(id, ChannelId::Mic, detector, &dictation_pipeline());
+        let clock = Instant::now();
+        let feed = match audio.unwrap_or(AudioSource::Devices) {
+            AudioSource::Devices => {
+                let (handle, mic) = start_mic(mic_sel).map_err(map_device_err)?;
+                control.handles.lock().unwrap().push(handle);
+                MicFeed::Device(mic)
+            }
+            AudioSource::WavFile { path, .. } => MicFeed::File(path),
+        };
+        Ok((pipeline, feed, clock))
+    }
+
+    /// Stop `id`'s capture if it is the dictation with the mic. Its run
+    /// takes it from there.
+    fn end_dictation_capture(&self, id: &str) {
+        let control = {
+            let mut lifecycle = self.lifecycle.lock().unwrap();
+            if lifecycle.stop_dictation(id).is_err() {
+                return;
+            }
+            lifecycle.control()
+        };
+        for h in control.handles.lock().unwrap().iter() {
+            let _ = h.pause();
+        }
+    }
+
+    /// The latest dictation's handle, if it is the one `id` names. No `id`
+    /// takes whichever it is, for callers that don't know it yet: a key
+    /// released before the start has answered.
+    fn claim_dictation(
+        &self,
+        id: Option<&str>,
+    ) -> std::result::Result<DictationHandle, DictationError> {
+        self.dictation
+            .lock()
+            .unwrap()
+            .take_if(|h| id.is_none_or(|id| h.id == id))
+            .ok_or(DictationError::NotActive)
+    }
+
+    /// Stop the dictation and wait for its text: the mic stays open a moment
+    /// for the last word, then the last chunk is flushed and transcribed, and
+    /// polished if `dictation_polish` is on. After the cap has stopped it, this
+    /// collects the text the cap left. With `id`, only that dictation.
+    pub async fn stop_dictation(
+        &self,
+        id: Option<&str>,
+    ) -> std::result::Result<Dictated, DictationError> {
+        let DictationHandle { id, end, outcome } = self.claim_dictation(id)?;
+        // Its run ends the capture, after the tail; one still starting ends
+        // there and then.
+        let _ = end.send(End::Stop);
+        match tokio::time::timeout(DICTATION_WAIT, outcome).await {
+            Ok(Ok(Outcome::Heard {
+                text,
+                duration_ms,
+                missing,
+            })) => {
+                let mut dictated = Dictated {
+                    id,
+                    text,
+                    duration_ms,
+                    polished: false,
+                    polish_note: None,
+                    missing,
+                };
+                let store = self.store.clone();
+                let polish_on = !dictated.text.trim().is_empty()
+                    && crate::api::off_runtime(move || Ok(crate::polish::enabled(&store)))
+                        .await
+                        .unwrap_or(false);
+                if polish_on {
+                    match crate::polish::polish(&self.cfg, &self.store, &dictated.text).await {
+                        Ok(text) => {
+                            dictated.text = text;
+                            dictated.polished = true;
+                        }
+                        Err(note) => dictated.polish_note = Some(note),
+                    }
+                }
+                Ok(dictated)
+            }
+            Ok(Ok(Outcome::Failed(message))) => Err(DictationError::Failed(message)),
+            Ok(Ok(Outcome::Cancelled) | Err(_)) => Err(DictationError::Failed(
+                "the dictation ended without its text".to_string(),
+            )),
+            Err(_) => Err(DictationError::TimedOut),
+        }
+    }
+
+    /// Throw the dictation away, heard or not. Returns once the mic is free,
+    /// so the next press can start straight away. With `id`, only that
+    /// dictation.
+    pub async fn cancel_dictation(
+        &self,
+        id: Option<&str>,
+    ) -> std::result::Result<String, DictationError> {
+        let DictationHandle { id, end, outcome } = self.claim_dictation(id)?;
+        let _ = end.send(End::Cancel);
+        self.end_dictation_capture(&id);
+        let _ = tokio::time::timeout(DICTATION_WAIT, outcome).await;
+        Ok(id)
+    }
+
     /// Put what the session lost on record, so a hole in the transcript can
     /// be told apart from silence after the live warnings are gone.
     fn record_losses(
@@ -921,6 +1520,16 @@ impl Engine {
 
 /// How often a first-run model download reports how far it has got.
 const DOWNLOAD_PROGRESS_EVERY: Duration = Duration::from_secs(1);
+
+/// Aborts its task when dropped: a dictation stopped mid-download drops the
+/// download, and nothing must go on reporting it.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 /// Report a model download's progress from the size of its `.part` file, until
 /// the caller aborts this. The file is the only record of how far it has got,
@@ -1552,6 +2161,70 @@ async fn settle_session(
             )),
         ));
     }
+}
+
+/// Dictation's pipeline cuts finals only. An interim costs an inference that a
+/// stop would wait behind, and a short dictation is done in a single final.
+/// Each final restarts the interim clock and they come at least every
+/// `max_chunk_ms`, so an interval longer than that never comes round.
+fn dictation_pipeline() -> PipelineConfig {
+    let cfg = PipelineConfig::default();
+    PipelineConfig {
+        interim_interval_ms: 2 * cfg.max_chunk_ms,
+        ..cfg
+    }
+}
+
+/// Why a dictation's text may have holes, in plain words, from how its drive
+/// ended and whether its STT reported an error; `None` if nothing was lost.
+fn missing_words(
+    drive: &std::result::Result<SttDrops, tokio::task::JoinError>,
+    errored: bool,
+) -> Option<String> {
+    let why = match drive {
+        Ok(drops) if drops.finals > 0 => {
+            "transcription fell behind and dropped some of what was said"
+        }
+        Err(_) => "transcription stopped partway, so some of what was said may be missing",
+        _ if errored => "transcription hit an error, so some of what was said may be missing",
+        _ => return None,
+    };
+    Some(why.to_string())
+}
+
+/// `collect_events` for a dictation: the same overlap trimming between
+/// finals, but the text goes only to whoever stops it. Every `/ws/live`
+/// subscriber gets the partials, so they say only that a final landed.
+/// Returns the text and the first error, if any.
+async fn collect_dictation(
+    mut ev_rx: mpsc::UnboundedReceiver<(ChannelId, SttEvent)>,
+    id: String,
+    partial_tx: broadcast::Sender<WsEvent>,
+    important_tx: broadcast::Sender<WsEvent>,
+) -> (String, Option<String>) {
+    let mut assembler = Assembler::new(&id);
+    let mut text = String::new();
+    let mut error = None;
+    while let Some((_, ev)) = ev_rx.recv().await {
+        match assembler.ingest(ev) {
+            Some(PipelineEvent::Transcript(t)) if t.is_final => {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&t.text);
+                let _ = partial_tx.send(WsEvent::DictationPartial { id: id.clone() });
+            }
+            Some(PipelineEvent::SttError { message, .. }) => {
+                let _ = important_tx.send(WsEvent::Error {
+                    session: id.clone(),
+                    message: message.clone(),
+                });
+                error.get_or_insert(message);
+            }
+            _ => {}
+        }
+    }
+    (text, error)
 }
 
 /// Single consumer for both channels: assembles (dedup, speaker tags),
@@ -2217,6 +2890,20 @@ mod tests {
         for i in 1..=ms / 10 {
             tx.send((vec![0.8; BATCH], from_ms + i * 10)).unwrap();
         }
+    }
+
+    #[test]
+    fn dictation_cuts_finals_only() {
+        let mut pipeline =
+            ChannelPipeline::new("d", ChannelId::Mic, EnergyDetector, &dictation_pipeline());
+        let mut chunks = Vec::new();
+        for i in 1..=1_200 {
+            chunks.extend(pipeline.push_batch(&[0.8; BATCH], i * 10));
+        }
+        chunks.extend(pipeline.flush());
+
+        assert!(chunks.len() >= 2, "12 s of speech holds several finals");
+        assert!(chunks.iter().all(|c| c.kind == ChunkKind::Final));
     }
 
     #[tokio::test]

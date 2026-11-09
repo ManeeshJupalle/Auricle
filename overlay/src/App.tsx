@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { initialState, reduce, toastMs, type OverlayEvent } from './state';
 import { streamAsk } from './ask';
 import { nextPollDelay } from './connection';
+import { checkLines, type DictationCheck } from './dictation';
 import { Markdown } from '@shared/Markdown';
 
 interface InitInfo {
@@ -14,6 +15,7 @@ interface InitInfo {
   theme: string;
   summon_hotkey: string;
   quick_hotkey: string;
+  dictation_hotkey_failed: boolean;
 }
 
 type AskStart = { type: 'SUBMIT'; question: string; at: number } | { type: 'QUICK_ASSIST'; at: number };
@@ -42,6 +44,7 @@ export function App() {
   const [recording, setRecording] = useState(false);
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [dictationCheck, setDictationCheck] = useState<DictationCheck | null>(null);
   const [includeScreen, setIncludeScreen] = useState(true);
   const includeScreenRef = useRef(includeScreen);
   includeScreenRef.current = includeScreen;
@@ -99,14 +102,22 @@ export function App() {
       dispatch({ type: 'SUMMON' });
       showToast(e.payload);
     });
+    // Tray → Dictation setup. Rust has shown the window already.
+    const openSetup = () => {
+      dispatch({ type: 'SUMMON' });
+      void invoke<DictationCheck>('dictation_check').then(setDictationCheck);
+    };
+    const unSetup = listen('dictation-setup', openSetup);
     // After the listeners, so nothing falls between get_init handing over
     // the early messages and the live events taking over. Rust has already
     // shown the window for these, and only this tells the reducer.
-    void Promise.all([unSummon, unQuick, unToast])
+    void Promise.all([unSummon, unQuick, unToast, unSetup])
       .then(() => invoke<InitInfo>('get_init'))
       .then((info) => {
         setInit(info);
         document.documentElement.dataset.theme = info.theme;
+        // Rust has shown the window for the hotkey warning already.
+        if (info.dictation_hotkey_failed) openSetup();
         if (info.notices.length > 0) showToast(info.notices.join(' · '));
         if (info.notices.length > 0 || info.hotkey_warnings.length > 0) {
           dispatch({ type: 'SUMMON' });
@@ -117,6 +128,7 @@ export function App() {
       void unSummon.then((f) => f());
       void unQuick.then((f) => f());
       void unToast.then((f) => f());
+      void unSetup.then((f) => f());
     };
   }, [startAsk]);
 
@@ -277,6 +289,30 @@ export function App() {
       )}
 
       {toast && <div className="ov-warning">⚠ {toast}</div>}
+
+      {dictationCheck && (
+        <section className="ov-setup" aria-label="Dictation setup">
+          <div className="ov-setup-head">
+            <span>Dictation setup</span>
+            <button
+              className="ov-icon-btn"
+              title="Close"
+              aria-label="Close dictation setup"
+              onClick={() => setDictationCheck(null)}
+            >
+              ×
+            </button>
+          </div>
+          {checkLines(dictationCheck).map((line, i) => (
+            <div key={i} className="ov-setup-line" data-ok={line.ok || undefined}>
+              <span className="ov-setup-mark" aria-hidden="true">
+                {line.ok ? '✓' : '!'}
+              </span>
+              <span>{line.text}</span>
+            </div>
+          ))}
+        </section>
+      )}
 
       {state.quick && showAnswer && (
         <div className="ov-quick">

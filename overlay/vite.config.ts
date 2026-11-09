@@ -20,5 +20,12 @@ export default defineConfig({
   },
   build: {
     target: 'chrome110',
+    // The overlay, and the dictation pill's own window.
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('index.html', import.meta.url)),
+        pill: fileURLToPath(new URL('pill.html', import.meta.url)),
+      },
+    },
   },
 });

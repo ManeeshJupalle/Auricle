@@ -50,6 +50,9 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/auricle"],
+    "resources": {
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
     "windows": {
       "wix": {
         "language": "en-US",

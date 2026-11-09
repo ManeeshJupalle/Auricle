@@ -425,6 +425,17 @@ impl SttSession for DeepgramSession {
     }
 }
 
+/// Dropped without `finish` (a cancel), the session ends its worker: left
+/// alone, the closed channel would read as a stop and send what is still
+/// queued, or buffered from an outage, before closing the stream.
+impl Drop for DeepgramSession {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
+    }
+}
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
@@ -1355,6 +1366,37 @@ mod tests {
         let elapsed = started.elapsed();
         assert!(elapsed >= INITIAL_BACKOFF * 7, "{elapsed:?}");
         drop(session);
+    }
+
+    #[tokio::test]
+    async fn a_session_dropped_unfinished_sends_none_of_the_audio_it_still_holds() {
+        let (listener, addr) = bound().await;
+        let mut session = open_session(addr).await;
+        // The server has yet to take the connection, so this waits in the session.
+        session.feed(chunk(0, 1000)).await.unwrap();
+        session.feed(chunk(1000, 1000)).await.unwrap();
+        // A cancel: dropped without finish.
+        drop(session);
+
+        let audio = Arc::new(AtomicU32::new(0));
+        let seen = audio.clone();
+        let _ = tokio::time::timeout(Duration::from_secs(2), async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let Ok(mut ws) = tokio_tungstenite::accept_async(socket).await else {
+                return;
+            };
+            while let Some(Ok(message)) = ws.next().await {
+                match message {
+                    Message::Binary(_) => {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Message::Text(t) if t.as_str() == CLOSE_STREAM => return,
+                    _ => {}
+                }
+            }
+        })
+        .await;
+        assert_eq!(audio.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

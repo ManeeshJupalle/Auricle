@@ -115,6 +115,23 @@ second Quit within 10 seconds, which stops it; a recording it doesn't own keeps
 running. The app checks for updates on launch and from the tray; every update
 is signature-verified before it installs ([RELEASING.md](RELEASING.md)).
 
+**Dictation:** hold `Ctrl+Shift+D` in any app, talk, and let go: the text is
+pasted where your cursor was. Your clipboard is put back once that app has
+actually read the text; if it never does, the text stays on your clipboard and
+the pill says so, so a failed paste never loses your words. A small pill at
+the edge of the screen says when it's listening and when it's done, and `Esc`
+cancels. Prefer press-to-start, press-to-paste? Put `[dictation]` /
+`mode = "toggle"` in `%LOCALAPPDATA%\auricle\overlay.toml` (the dictate key is
+`[hotkeys] dictate`). Tray → **Dictation setup** checks the hotkey, the engine,
+and which provider will hear you: local `whisper-local` unless you choose
+otherwise. Dictation can't start while a meeting is recording. Settings →
+Transcription → **Tidy dictation with the LLM above** (off by default) has the
+summaries LLM fix punctuation, capitals and filler words before the paste; if
+it fails, takes over 8 seconds, or changes what you said instead of tidying it
+(answers a question you dictated, summarises, adds words), the text goes in as
+heard. When words may be missing (transcription hit an error or fell behind),
+the engine's reply says so.
+
 Cloud providers are opt-in via environment variables: `DEEPGRAM_API_KEY`
 (streaming STT, the low-latency option), `GROQ_API_KEY` (batch Whisper STT
 + LLM answers/summaries), or any OpenAI-compatible endpoint via config.
@@ -280,9 +297,23 @@ verbatim:
   copy to a `backups` folder beside the database. Retained audio is not in the
   backup, and retention leaves backups alone, so one keeps meetings you delete
   later.
+- **Dictation keeps nothing.** The engine can transcribe the mic alone for
+  dictation (`/api/v1/dictation/*`). It uses its own `dictation_provider`
+  setting, `whisper-local` unless you pick another, so a cloud setup for
+  meetings never makes dictation cloud. The text goes back to whoever stopped
+  the dictation and nowhere else: no meeting, no transcript line, no audio file,
+  nothing an ask or an MCP agent can read. Every `/ws/live` client, the
+  dashboard included, sees that a dictation is running and when each part is
+  transcribed (`dictation_partial`), but none of its words. A start whose
+  caller disconnects before the mic opens never opens it, and a cancel sends
+  nothing more to a cloud provider. A dictation stops itself after
+  5 minutes. The overlay pastes it through the clipboard and marks it so
+  Windows keeps it out of clipboard history (Win+V) and cloud clipboard sync.
+  Dictation polish is off by default; turned on with a cloud LLM, the text is
+  sent to that LLM, with a ledger row first.
 - **Verifiable, not just promised.** The daemon's egress ledger records every
-  time it sent user data to a cloud provider — session audio, prompt, summary,
-  or auto-title — with the destination and, for text, the rough size, and
+  time it sent user data to a cloud provider — session audio, dictation audio,
+  dictation polish, prompt, summary, or auto-title — with the destination and, for text, the rough size, and
   records local-only actions too. Metadata only; contents are never logged. See
   it on the dashboard's **Privacy** page or `GET /api/v1/egress`. It covers the
   daemon only: `auricle record` with a cloud provider writes no ledger rows.
@@ -365,6 +396,11 @@ A Deepgram final after a pause can take longer than this median: see
   article text, honest-but-imperfect on dense small fonts (`auricle` can
   come back as `auride` in a file tree).
 - One recording session at a time, by design.
+- **Dictation can't type into a window running as administrator.** Windows
+  drops keystrokes sent to it without telling the sender, so the overlay
+  doesn't try: the text is left on the clipboard for you to paste. In hold
+  mode, `Esc` cancels only once you've let go of the keys (with them held it
+  would be `Ctrl+Shift+Esc`); before then, letting go pastes.
 
 ## Roadmap
 

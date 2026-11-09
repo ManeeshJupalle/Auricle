@@ -34,7 +34,20 @@ serde_json = "1"
 toml = "0.9"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
-tokio = { version = "1", features = ["time", "macros", "sync"] }
+tokio = { version = "1", features = ["time", "macros", "sync", "io-util"] }
+
+[target.'cfg(windows)'.dependencies]
+# Dictation's paste layer and pill: the clipboard and the window that owns
+# it, SendInput, window focus, and reading a target's integrity level.
+windows = { version = "0.62", features = [
+    "Win32_Security",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 strip = true

@@ -16,6 +16,7 @@ mod events;
 mod export;
 mod lifecycle;
 mod mcp;
+mod polish;
 mod redact;
 mod retention;
 mod ring;
@@ -24,7 +25,10 @@ mod title;
 mod ws;
 
 pub use api::{build_router, build_router_with_reader, serve, serve_engine};
-pub use engine::{AudioSource, Engine, EngineOptions, StartParams, Sweep};
+pub use engine::{
+    AudioSource, Dictated, DictationError, DictationParams, DictationStarted, Engine,
+    EngineOptions, StartParams, Sweep,
+};
 pub use events::WsEvent;
 pub use export::render_markdown_full;
 pub use store::{AskRow, SegmentRow, SessionPage, SessionRow, Store, SummaryRow};

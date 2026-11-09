@@ -9,6 +9,8 @@ const KIND_LABEL: Record<string, string> = {
   prompt: 'Prompt',
   summary: 'Summary',
   title: 'Auto-title',
+  dictation: 'Dictation audio',
+  dictation_polish: 'Dictation polish',
   live_transcript: 'Live transcript',
   session_list: 'Meeting list',
   session_read: 'Meeting',

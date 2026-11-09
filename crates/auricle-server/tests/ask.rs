@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use auricle_core::{AudioChunk, ChannelId, ChunkKind, Config, Result, Segment, SttEvent};
 use auricle_server::{
-    build_router_with_reader, AudioSource, Engine, EngineOptions, StartParams, WsEvent,
+    build_router_with_reader, AudioSource, DictationParams, Engine, EngineOptions, StartParams,
+    WsEvent,
 };
 use auricle_stt::{SessionCfg, SttKind, SttProvider, SttSession};
 use auricle_vision::{ScreenContext, ScreenReader, VisionError};
@@ -493,6 +494,51 @@ async fn a_deleted_meeting_stops_reaching_asks() {
     ask_to_completion(&base, recap).await;
     let prompt = prompt_sent(&llm, 1).await;
     assert!(!prompt.contains(SECRET), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_dictation_never_reaches_an_ask() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let cfg = cfg_with_llm(&llm.uri());
+    let (base, engine) = spawn_server_hearing(cfg, "dictation", reader, SECRET).await;
+    let wav = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/tts_loopback_16k.wav");
+    engine
+        .start_dictation(DictationParams {
+            audio: Some(AudioSource::WavFile {
+                path: wav,
+                channel: ChannelId::Mic,
+            }),
+            ..DictationParams::default()
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let dictated = engine.stop_dictation(None).await.unwrap();
+    assert!(
+        dictated.text.contains(SECRET),
+        "nothing to leak: {dictated:?}"
+    );
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/ask"))
+        .json(&serde_json::json!({"question": "recap?", "include_transcript": true}))
+        .send()
+        .await
+        .unwrap();
+    let events = read_sse(resp).await;
+    assert_eq!(events[0]["transcript_segments"], 0, "{events:?}");
+    let prompt = prompt_sent(&llm, 0).await;
+    assert!(!prompt.contains(SECRET), "{prompt}");
+
+    // A meeting's words do reach the prompt, so the look above is real.
+    let id = start_fixture_session(&engine, "board meeting").await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    stop_and_wait(&engine, &id).await;
+    let recap = serde_json::json!({"question": "recap?", "include_transcript": true});
+    ask_to_completion(&base, recap).await;
+    assert!(prompt_sent(&llm, 1).await.contains(SECRET));
 }
 
 #[tokio::test]

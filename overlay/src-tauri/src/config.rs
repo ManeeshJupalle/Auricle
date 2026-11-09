@@ -6,13 +6,14 @@
 //! or unparseable content falls back to defaults — a broken config must never
 //! keep the copilot from starting.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct OverlayConfig {
     pub hotkeys: Hotkeys,
     pub overlay: OverlaySection,
+    pub dictation: DictationSection,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -20,6 +21,8 @@ pub struct OverlayConfig {
 pub struct Hotkeys {
     pub summon: String,
     pub quick: String,
+    /// Dictation: talk, and the text lands where the cursor was.
+    pub dictate: String,
 }
 
 impl Default for Hotkeys {
@@ -27,8 +30,26 @@ impl Default for Hotkeys {
         Hotkeys {
             summon: "Ctrl+Shift+Space".to_string(),
             quick: "Ctrl+Shift+A".to_string(),
+            dictate: "Ctrl+Shift+D".to_string(),
         }
     }
+}
+
+/// How the dictation hotkey works.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DictationMode {
+    /// Hold the keys while talking; letting go pastes.
+    #[default]
+    Hold,
+    /// One press starts, the next one pastes.
+    Toggle,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct DictationSection {
+    pub mode: DictationMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -103,6 +124,24 @@ mod tests {
         assert_eq!(cfg.overlay.engine_url, "http://127.0.0.1:4820");
         assert_eq!(cfg.overlay.transcript_window_min, 10);
         assert_eq!(cfg.overlay.theme, "dark");
+        assert_eq!(cfg.hotkeys.dictate, "Ctrl+Shift+D");
+        assert_eq!(cfg.dictation.mode, DictationMode::Hold);
+    }
+
+    #[test]
+    fn dictation_can_be_switched_to_toggle_and_rebound() {
+        let cfg = OverlayConfig::parse(
+            "[hotkeys]\ndictate = \"Alt+D\"\n\n[dictation]\nmode = \"toggle\"\n",
+        );
+        assert_eq!(cfg.hotkeys.dictate, "Alt+D");
+        assert_eq!(cfg.dictation.mode, DictationMode::Toggle);
+        assert_eq!(cfg.hotkeys.summon, "Ctrl+Shift+Space");
+    }
+
+    #[test]
+    fn an_unknown_dictation_mode_falls_back_to_defaults() {
+        let cfg = OverlayConfig::parse("[dictation]\nmode = \"sometimes\"\n");
+        assert_eq!(cfg, OverlayConfig::default());
     }
 
     #[test]

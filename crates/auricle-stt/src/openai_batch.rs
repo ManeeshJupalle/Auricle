@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use crate::hallucination::{is_hallucination, is_low_energy, is_noise_annotation};
 use crate::language::batch_language;
 use crate::queue::{SharedQueue, ShedReporter};
+use crate::repetition::collapse_repetition;
 use crate::{http_error, SessionCfg, SttDrops, SttKind, SttProvider, SttSession};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -183,11 +184,17 @@ impl SttSession for BatchSession {
     }
 }
 
-/// A session dropped without `finish` (a start that failed after opening it)
-/// must not leave its worker parked forever.
+/// A session dropped without `finish` (a start that failed after opening it,
+/// or a cancel) must not leave its worker parked forever, nor upload what it
+/// still holds: nobody is left to read the text, and a cancel means none of it
+/// goes. A worker `finish` took is left to wind down on its own.
 impl Drop for BatchSession {
     fn drop(&mut self) {
         self.shared.close();
+        self.shared.queue.lock().unwrap().clear();
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
     }
 }
 
@@ -256,6 +263,10 @@ async fn worker_loop(
                 let event = match chunk.kind {
                     ChunkKind::Interim => SttEvent::Partial(seg),
                     ChunkKind::Final => {
+                        let seg = Segment {
+                            text: collapse_repetition(&seg.text),
+                            ..seg
+                        };
                         shared.finals.lock().unwrap().push(seg.clone());
                         SttEvent::Final(seg)
                     }
@@ -637,6 +648,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_final_stuck_in_a_loop_keeps_one_copy() {
+        let server = MockServer::start().await;
+        let looped = format!("We ship Friday. {}", "Thanks for watching. ".repeat(10));
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": looped})),
+            )
+            .mount(&server)
+            .await;
+        let mut session = session_on(&server, "en").await;
+        session.feed(final_chunk()).await.unwrap();
+
+        let finals = session.finish().await.unwrap();
+        assert_eq!(finals[0].text, "We ship Friday. Thanks for watching.");
+    }
+
+    #[tokio::test]
     async fn the_session_reports_what_its_queue_shed() {
         let server = MockServer::start().await;
         let mut session = session_on(&server, "en").await;
@@ -725,6 +753,37 @@ mod tests {
         })
         .await
         .expect("worker exits after the session is dropped");
+    }
+
+    #[tokio::test]
+    async fn a_session_dropped_unfinished_sends_none_of_the_audio_it_still_holds() {
+        let server = MockServer::start().await;
+        // Silence: no text, so no event whose failed send would end the worker.
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": ""}))
+                    .set_delay(Duration::from_millis(300)),
+            )
+            .mount(&server)
+            .await;
+        let mut session = session_on(&server, "en").await;
+        for _ in 0..3 {
+            session.feed(final_chunk()).await.unwrap();
+        }
+        // The first is with the server, the other two wait their turn.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while server.received_requests().await.unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the first upload never went");
+
+        // A cancel: dropped without finish.
+        drop(session);
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[test]

@@ -14,8 +14,12 @@
 
 mod ask;
 mod config;
+mod dictate;
+mod dictation;
 mod engine;
+mod pill;
 mod sse;
+mod ws;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,7 +32,7 @@ use tauri::ipc::Channel;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
 use config::{Corner, OverlayConfig};
@@ -64,6 +68,8 @@ struct AppState {
     /// Wakes the watcher to bring an engine up now.
     engine_kick: tokio::sync::Notify,
     quit_guard: Mutex<engine::QuitGuard>,
+    /// Whether the dictate hotkey is live, and why not, for the setup check.
+    dictation_hotkey: Mutex<Result<(), String>>,
 }
 
 impl AppState {
@@ -255,6 +261,31 @@ fn get_init(app: tauri::AppHandle) -> serde_json::Value {
         "theme": state.cfg.overlay.theme,
         "summon_hotkey": state.cfg.hotkeys.summon,
         "quick_hotkey": state.cfg.hotkeys.quick,
+        // Opens the dictation setup check at launch when dictation can't work.
+        "dictation_hotkey_failed": state.dictation_hotkey.lock().unwrap().is_err(),
+    })
+}
+
+/// The dictation setup check: is the hotkey live, is the engine up, and
+/// which provider will hear the user.
+#[tauri::command]
+async fn dictation_check(app: tauri::AppHandle) -> serde_json::Value {
+    let state = app.state::<AppState>();
+    let hotkey = state.dictation_hotkey.lock().unwrap().clone();
+    let (http, base) = (&state.http, state.base_url());
+    let engine_up = engine::health_ok(http, base).await;
+    let provider = if engine_up {
+        dictation::provider(http, base).await
+    } else {
+        None
+    };
+    json!({
+        "hotkey": state.cfg.hotkeys.dictate,
+        "mode": state.cfg.dictation.mode,
+        "registered": hotkey.is_ok(),
+        "hotkey_error": hotkey.err(),
+        "engine_up": engine_up,
+        "provider": provider,
     })
 }
 
@@ -465,6 +496,8 @@ async fn install_update(
         ),
     );
     tokio::time::sleep(INSTALL_NOTICE).await;
+    // The installer handoff ends this process without an Exit event.
+    dictate::flush();
     let installed = update.install(bytes).map_err(|e| e.to_string());
     if installed.is_err() {
         // Staying on this version, so an engine we stopped has to come back.
@@ -805,8 +838,24 @@ pub fn run() {
         }
     };
 
+    let dictate_sc: Option<Shortcut> = match cfg.hotkeys.dictate.parse() {
+        Ok(sc) => Some(sc),
+        Err(e) => {
+            warnings.push(format!(
+                "dictate hotkey \"{}\" is invalid: {e}",
+                cfg.hotkeys.dictate
+            ));
+            None
+        }
+    };
+    // Registered only while a dictation runs (dictation::run).
+    let esc_sc = Shortcut::new(None, Code::Escape);
+
     let handler_summon = summon_sc;
     let handler_quick = quick_sc;
+    let handler_dictate = dictate_sc;
+    let (dictation_tx, dictation_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handler_dictation = dictation_tx.clone();
 
     let app = tauri::Builder::default()
         // Single instance, registered first: without it, users who launch
@@ -821,8 +870,25 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
+                // This runs with the plugin's shortcut table locked, so it
+                // must never register or unregister one itself.
                 .with_handler(move |app, shortcut, event| {
+                    if handler_dictate.as_ref() == Some(shortcut) {
+                        let input = match event.state() {
+                            // First, before anything can move focus.
+                            ShortcutState::Pressed => {
+                                dictation::Input::Press(dictate::foreground_target())
+                            }
+                            ShortcutState::Released => dictation::Input::Release,
+                        };
+                        let _ = handler_dictation.send(input);
+                        return;
+                    }
                     if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if *shortcut == esc_sc {
+                        let _ = handler_dictation.send(dictation::Input::Escape);
                         return;
                     }
                     if handler_summon.as_ref() == Some(shortcut) {
@@ -843,6 +909,10 @@ pub fn run() {
             engine_hold: AtomicBool::new(false),
             engine_kick: tokio::sync::Notify::new(),
             quit_guard: Mutex::default(),
+            dictation_hotkey: Mutex::new(match dictate_sc {
+                Some(_) => Ok(()),
+                None => Err(format!("\"{}\" is not a hotkey", cfg.hotkeys.dictate)),
+            }),
         })
         .setup(move |app| {
             // Hotkey registration: a conflict (another app owns the
@@ -850,19 +920,31 @@ pub fn run() {
             for (label, sc, text) in [
                 ("summon", summon_sc, cfg.hotkeys.summon.clone()),
                 ("quick-assist", quick_sc, cfg.hotkeys.quick.clone()),
+                ("dictate", dictate_sc, cfg.hotkeys.dictate.clone()),
             ] {
                 if let Some(sc) = sc {
                     if let Err(e) = app.global_shortcut().register(sc) {
-                        app.state::<AppState>()
-                            .hotkey_warnings
-                            .lock()
-                            .unwrap()
-                            .push(format!(
-                                "{label} hotkey {text} could not be registered: {e}"
-                            ));
+                        let state = app.state::<AppState>();
+                        if label == "dictate" {
+                            *state.dictation_hotkey.lock().unwrap() = Err(e.to_string());
+                        }
+                        state.hotkey_warnings.lock().unwrap().push(format!(
+                            "{label} hotkey {text} could not be registered: {e}"
+                        ));
                     }
                 }
             }
+            // Built now, hidden, so a dictation never waits on a webview.
+            // Without it dictation still pastes, so it is no reason to stop.
+            if let Err(e) = pill::build(app.handle(), &cfg.overlay.theme) {
+                let warning = format!(
+                    "The dictation pill could not be made ({e}). Dictation still pastes, \
+                     without showing what it is doing."
+                );
+                let state = app.state::<AppState>();
+                state.hotkey_warnings.lock().unwrap().push(warning);
+            }
+
             // The overlay starts hidden, and the warnings render inside it.
             let hotkeys_ok = app
                 .state::<AppState>()
@@ -881,6 +963,7 @@ pub fn run() {
                 .separator()
                 .text("dashboard", "Open dashboard")
                 .text("summon", "Summon copilot")
+                .text("dictation-setup", "Dictation setup")
                 .separator()
                 .text("check-updates", "Check for updates")
                 .text("quit", "Quit overlay")
@@ -894,6 +977,10 @@ pub fn run() {
                     "stop" => tray_action(app.clone(), "stop"),
                     "dashboard" => open_dashboard(app.clone()),
                     "summon" => summon(app, false),
+                    "dictation-setup" => {
+                        summon(app, false);
+                        let _ = app.emit("dictation-setup", ());
+                    }
                     "check-updates" => {
                         tauri::async_runtime::spawn(check_for_updates(app.clone(), true));
                     }
@@ -908,6 +995,17 @@ pub fn run() {
             // (managed child; not lifetime-tied — an overlay crash must
             // never kill a recording).
             tauri::async_runtime::spawn(watch_engine(app.handle().clone()));
+
+            let state = app.state::<AppState>();
+            let driver = dictation::Driver {
+                app: app.handle().clone(),
+                mode: cfg.dictation.mode,
+                hotkey: cfg.hotkeys.dictate.clone(),
+                http: state.http.clone(),
+                base: state.base_url().to_string(),
+                esc: esc_sc,
+            };
+            tauri::async_runtime::spawn(dictation::run(driver, dictation_rx, dictation_tx));
 
             // Silent update check on launch: nudge (never auto-install) if a
             // newer signed release is waiting.
@@ -951,7 +1049,8 @@ pub fn run() {
             get_health,
             get_init,
             hide_overlay,
-            resize_overlay
+            resize_overlay,
+            dictation_check
         ])
         .build(tauri::generate_context!())
         .expect("error while running the overlay");
@@ -962,7 +1061,13 @@ pub fn run() {
     let mut exit_requested = false;
     app.run(move |app, event| match event {
         tauri::RunEvent::ExitRequested { .. } => exit_requested = true,
-        tauri::RunEvent::Exit if !exit_requested => on_session_end(app),
+        tauri::RunEvent::Exit => {
+            // Dictated text still on offer would go with this process.
+            dictate::flush();
+            if !exit_requested {
+                on_session_end(app);
+            }
+        }
         _ => {}
     });
 }
