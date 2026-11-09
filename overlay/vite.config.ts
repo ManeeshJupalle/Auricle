@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -6,6 +7,11 @@ import react from '@vitejs/plugin-react';
 // machine quirk recorded in docs/PHASE5_UI_REPORT.md).
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: { '@shared': fileURLToPath(new URL('../shared', import.meta.url)) },
+    // shared/ has no node_modules, so its React has to come from this app.
+    dedupe: ['react'],
+  },
   css: { postcss: {} },
   clearScreen: false,
   server: {

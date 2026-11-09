@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use auricle_core::{AudioChunk, ChunkKind, Config, Result, Segment, SttEvent};
+use auricle_core::{Config, Result, Segment, SttEvent};
 use auricle_stt::{SessionCfg, SttSession};
 
 /// Shared swap target. The hotkey thread advances it; each channel driver
@@ -116,8 +116,6 @@ pub struct DriveState {
     pub current_idx: usize,
     pub provider_id: &'static str,
     pub session: Box<dyn SttSession>,
-    /// Finals fed but not yet transcribed (backpressure for interims).
-    pub outstanding_finals: i64,
     /// Finals returned by finished (swapped-away) sessions.
     pub collected_finals: Vec<Segment>,
 }
@@ -129,7 +127,6 @@ impl DriveState {
             current_idx: idx,
             provider_id,
             session,
-            outstanding_finals: 0,
             collected_finals: Vec::new(),
         })
     }
@@ -164,7 +161,6 @@ impl DriveState {
                 self.current_idx = target;
                 self.provider_id = id;
                 self.session = session;
-                self.outstanding_finals = 0;
                 Ok(())
             }
             Err(e) => {
@@ -182,22 +178,8 @@ impl DriveState {
                 let (id, session) = factory.create(self.current_idx).await?;
                 self.provider_id = id;
                 self.session = session;
-                self.outstanding_finals = 0;
                 Ok(())
             }
-        }
-    }
-
-    /// Feed one chunk, applying interim backpressure (skip partial windows
-    /// while more than one final is awaiting inference).
-    pub async fn feed_chunk(&mut self, chunk: AudioChunk) -> Result<()> {
-        match chunk.kind {
-            ChunkKind::Final => {
-                self.outstanding_finals += 1;
-                self.session.feed(chunk).await
-            }
-            ChunkKind::Interim if self.outstanding_finals <= 1 => self.session.feed(chunk).await,
-            ChunkKind::Interim => Ok(()), // shed: model is behind
         }
     }
 }
@@ -205,7 +187,7 @@ impl DriveState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auricle_core::ChannelId;
+    use auricle_core::{AudioChunk, ChannelId, ChunkKind};
     use std::sync::Mutex;
     use tokio::sync::mpsc;
 
@@ -310,7 +292,7 @@ mod tests {
                 .apply_swap_if_requested(&swap, &factory, |_, _| {})
                 .await
                 .unwrap();
-            state.feed_chunk(chunk(seq)).await.unwrap();
+            state.session.feed(chunk(seq)).await.unwrap();
         }
         assert_eq!(swap.request_next(), "deepgram");
         for seq in 2..4 {
@@ -318,7 +300,7 @@ mod tests {
                 .apply_swap_if_requested(&swap, &factory, |_, _| {})
                 .await
                 .unwrap();
-            state.feed_chunk(chunk(seq)).await.unwrap();
+            state.session.feed(chunk(seq)).await.unwrap();
         }
 
         let log = log.lock().unwrap();
@@ -346,7 +328,7 @@ mod tests {
     async fn failed_swap_stays_on_current_provider_and_resets_target() {
         let (log, factory, swap) = setup(Some(1)); // deepgram creation fails
         let mut state = DriveState::start(&factory, 0).await.unwrap();
-        state.feed_chunk(chunk(0)).await.unwrap();
+        state.session.feed(chunk(0)).await.unwrap();
 
         swap.request_next(); // -> deepgram (will fail)
         let mut errors = Vec::new();
@@ -358,7 +340,7 @@ mod tests {
             })
             .await
             .unwrap();
-        state.feed_chunk(chunk(1)).await.unwrap();
+        state.session.feed(chunk(1)).await.unwrap();
 
         assert_eq!(swap.target_idx(), 0, "target reset to current");
         assert_eq!(state.provider_id, "whisper-local");

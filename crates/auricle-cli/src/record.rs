@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use auricle_capture::{drain_into, start_loopback, start_mic, CaptureConsumer, MonoResampler};
-use auricle_core::{ChannelId, Config, Error, Result, Segment, SttEvent};
+use auricle_core::{ChannelId, Error, Result, Segment, SttEvent};
 use auricle_pipeline::{
     Assembler, ChannelPipeline, PipelineConfig, PipelineEvent, SileroDetector, TranscriptEvent,
 };
@@ -26,6 +26,7 @@ type EventTuple = (ChannelId, &'static str, DriverEvent, u64);
 pub struct RecordArgs {
     pub stt: Option<String>,
     pub model: Option<String>,
+    pub language: Option<String>,
     pub config: Option<PathBuf>,
 }
 
@@ -47,12 +48,18 @@ impl SessionClock {
 async fn run_async(args: RecordArgs) -> Result<()> {
     enable_vt();
 
-    let mut cfg = match &args.config {
-        Some(p) => Config::load(p)?,
-        None => Config::default(),
+    // A flag replaces the file's value, so a bad one there can't matter.
+    let required: &[&str] = if args.language.is_some() {
+        &["audio."]
+    } else {
+        &["audio.", "stt.language"]
     };
+    let mut cfg = crate::load_config(args.config.as_deref(), required)?;
     if let Some(m) = &args.model {
         cfg.stt.whisper_local.model = m.clone();
+    }
+    if let Some(language) = args.language {
+        cfg.stt.language = language;
     }
     let initial_id = args.stt.unwrap_or_else(|| cfg.stt.provider.clone());
     let initial_static = provider_ids()
@@ -65,6 +72,18 @@ async fn run_async(args: RecordArgs) -> Result<()> {
                 provider_ids().join(", ")
             ))
         })?;
+    // The other providers' sections only matter if a swap reaches them.
+    cfg.validate(&[&format!("stt.{initial_id}.")])?;
+    auricle_stt::check_language(initial_static, &cfg.stt.language)?;
+    // whisper.cpp only reads the language on multilingual models, so this
+    // would otherwise be a silent no-op.
+    if let Some(warning) = auricle_stt::english_only_warning(
+        initial_static,
+        &cfg.stt.whisper_local.model,
+        &cfg.stt.language,
+    ) {
+        eprintln!("warning: {warning}");
+    }
 
     let data_dir = auricle_stt::default_data_dir()?;
 
@@ -89,7 +108,7 @@ async fn run_async(args: RecordArgs) -> Result<()> {
     );
     let session_cfg = SessionCfg {
         session_id: session_id.clone(),
-        language: "en".to_string(),
+        language: cfg.stt.language.clone(),
     };
 
     let factory = Arc::new(ProviderFactory::new(
@@ -164,7 +183,11 @@ async fn run_async(args: RecordArgs) -> Result<()> {
         clock.clone(),
     ));
 
-    let collector = tokio::spawn(collect_events(ev_rx, session_id.clone()));
+    let collector = tokio::spawn(collect_events(
+        ev_rx,
+        session_id.clone(),
+        cfg.stt.drop_mic_bleed,
+    ));
 
     tokio::signal::ctrl_c()
         .await
@@ -181,7 +204,7 @@ async fn run_async(args: RecordArgs) -> Result<()> {
     let loop_finals = loop_driver
         .await
         .map_err(|e| Error::Stt(format!("loopback driver panicked: {e}")))??;
-    let (transcript, latencies) = collector
+    let (transcript, latencies, bleed_finals) = collector
         .await
         .map_err(|e| Error::Stt(format!("collector panicked: {e}")))?;
 
@@ -203,6 +226,7 @@ async fn run_async(args: RecordArgs) -> Result<()> {
         loop_finals.len(),
         mic_dropped,
         loop_dropped,
+        bleed_finals,
     );
     Ok(())
 }
@@ -286,13 +310,13 @@ async fn drive_channel(
                                 clock.now_ms(),
                             ));
                         }
-                        state.feed_chunk(chunk).await?;
+                        state.session.feed(chunk).await?;
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     for chunk in pipeline.flush() {
-                        state.feed_chunk(chunk).await?;
+                        state.session.feed(chunk).await?;
                     }
                     feeding_done = true;
                     break;
@@ -302,11 +326,13 @@ async fn drive_channel(
         if feeding_done {
             break;
         }
+        // The 50 ms wait below paces this, and the queue has just run dry,
+        // so a late-running loop can't pass for a stalled stream.
+        for chunk in pipeline.tick(clock.now_ms()) {
+            state.session.feed(chunk).await?;
+        }
         match tokio::time::timeout(Duration::from_millis(50), state.session.next_event()).await {
             Ok(Some(ev)) => {
-                if matches!(ev, SttEvent::Final(_)) {
-                    state.outstanding_finals -= 1;
-                }
                 let _ = ev_tx.send((
                     channel,
                     state.provider_id,
@@ -337,8 +363,10 @@ async fn drive_channel(
 async fn collect_events(
     mut ev_rx: mpsc::UnboundedReceiver<EventTuple>,
     session_id: String,
-) -> (Vec<TranscriptEvent>, HashMap<&'static str, Vec<u64>>) {
+    drop_mic_bleed: bool,
+) -> (Vec<TranscriptEvent>, HashMap<&'static str, Vec<u64>>, u64) {
     let mut assembler = Assembler::new(&session_id);
+    assembler.set_drop_mic_bleed(drop_mic_bleed);
     let mut printer = Printer::new();
     let mut latencies: HashMap<&'static str, Vec<u64>> = HashMap::new();
 
@@ -370,7 +398,11 @@ async fn collect_events(
         }
     }
     printer.clear_partial();
-    (assembler.transcript().to_vec(), latencies)
+    (
+        assembler.transcript().to_vec(),
+        latencies,
+        assembler.bleed_finals(),
+    )
 }
 
 struct Printer {
@@ -445,6 +477,7 @@ fn print_summary(
     loop_finals: usize,
     mic_dropped: u64,
     loop_dropped: u64,
+    bleed_finals: u64,
 ) {
     let you = transcript.iter().filter(|t| t.speaker == "You").count();
     let them = transcript.iter().filter(|t| t.speaker == "Them").count();
@@ -471,6 +504,9 @@ fn print_summary(
         }
     }
     println!("  ring overruns: mic {mic_dropped} samples, loopback {loop_dropped} samples");
+    if bleed_finals > 0 {
+        println!("  mic lines dropped as speaker bleed: {bleed_finals}");
+    }
 }
 
 fn percentiles(values: &[u64]) -> Option<(u64, u64)> {

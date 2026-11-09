@@ -12,6 +12,9 @@ default = ["cloud"]
 # Cloud providers: deepgram (streaming), groq-whisper / openai-compat (batch).
 # hound is needed to WAV-encode chunks for the batch upload endpoints.
 cloud = ["dep:tokio-tungstenite", "dep:futures-util", "dep:serde_json", "dep:hound"]
+# GPU inference via whisper.cpp's Vulkan backend. Needs the Vulkan SDK at build
+# time (see BUILDING.md); `[stt.whisper-local] use_gpu` turns it on at run time.
+vulkan = ["whisper-rs/vulkan"]
 
 [dependencies]
 auricle-core = { workspace = true }

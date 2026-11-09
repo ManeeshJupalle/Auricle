@@ -129,6 +129,109 @@ async fn upstream_error_is_a_clean_error_not_a_stream() {
     assert!(err.contains("not found"), "{err}");
 }
 
+/// Serve a hand-written SSE body and collect what the provider makes of it.
+async fn stream_body(body: &str) -> (Vec<String>, auricle_core::Result<Option<TokenUsage>>) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(body.to_string(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+    let provider = OpenAiChatProvider::new("ollama", &server.uri(), "m", None);
+    stream_all(&provider).await
+}
+
+const DELTA: &str = r#"data: {"choices":[{"delta":{"content":"partial answer"}}]}"#;
+
+#[tokio::test]
+async fn length_finish_keeps_the_answer_and_adds_a_notice() {
+    let frames = [
+        DELTA,
+        r#"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+        "data: [DONE]",
+    ];
+    let (deltas, result) = stream_body(&(frames.join("\n\n") + "\n\n")).await;
+
+    result.expect("a truncated answer is still an answer");
+    assert_eq!(deltas[0], "partial answer");
+    assert!(deltas.concat().contains("Truncated"), "{deltas:?}");
+}
+
+#[tokio::test]
+async fn stream_cut_off_before_done_is_an_error() {
+    let (deltas, result) = stream_body(&format!("{DELTA}\n\n")).await;
+
+    assert_eq!(deltas, vec!["partial answer"]);
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("before the answer finished"), "{err}");
+}
+
+#[tokio::test]
+async fn finish_reason_without_done_counts_as_complete() {
+    // Some compatible servers end the body right after the finish chunk.
+    let frames = [
+        DELTA,
+        r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+    ];
+    let (deltas, result) = stream_body(&(frames.join("\n\n") + "\n\n")).await;
+
+    result.unwrap();
+    assert_eq!(deltas, vec!["partial answer"], "no notice on a clean stop");
+}
+
+#[tokio::test]
+async fn mid_stream_error_frame_is_an_error() {
+    let frames = [
+        DELTA,
+        r#"data: {"error":{"message":"model runner crashed"}}"#,
+        "data: [DONE]",
+    ];
+    let (_, result) = stream_body(&(frames.join("\n\n") + "\n\n")).await;
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("model runner crashed"), "{err}");
+}
+
+#[tokio::test]
+async fn partial_usage_frame_does_not_abort_the_answer() {
+    let frames = [
+        DELTA,
+        r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5}}"#,
+        "data: [DONE]",
+    ];
+    let (deltas, result) = stream_body(&(frames.join("\n\n") + "\n\n")).await;
+
+    assert_eq!(result.unwrap(), None, "unusable usage is simply absent");
+    assert_eq!(deltas, vec!["partial answer"]);
+}
+
+#[tokio::test]
+async fn rate_limited_stream_retries_before_any_answer_starts() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            fixture_bytes("ollama_qwen25_usage_stream.txt"),
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+    let provider = OpenAiChatProvider::new("groq", &server.uri(), "m", None);
+
+    let (deltas, result) = stream_all(&provider).await;
+
+    assert!(result.unwrap().is_some());
+    assert!(!deltas.is_empty());
+}
+
 #[tokio::test]
 async fn default_trait_fallback_wraps_complete() {
     // A provider that never implemented chat_stream still streams: one

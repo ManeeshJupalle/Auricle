@@ -5,7 +5,7 @@
 //! STT is simulated deterministically per chunk (real whisper end-to-end is
 //! the `#[ignore]`d test in auricle-stt, which needs the model file).
 
-use auricle_core::{ChannelId, ChunkKind, Segment, SttEvent};
+use auricle_core::{AudioChunk, ChannelId, ChunkKind, Segment, SttEvent};
 use auricle_pipeline::{Assembler, ChannelPipeline, PipelineConfig, PipelineEvent, SileroDetector};
 
 fn load_fixture() -> Vec<f32> {
@@ -109,6 +109,55 @@ fn fixture_speech_produces_ordered_tagged_finals() {
         "loopback channel is speaker-tagged Them"
     );
     assert!(transcript.iter().all(|t| !t.text.is_empty()));
+}
+
+fn final_chunks(samples: &[f32], cfg: &PipelineConfig) -> Vec<AudioChunk> {
+    let mut pipeline = ChannelPipeline::new(
+        "cut-session",
+        ChannelId::Loopback,
+        SileroDetector::new().expect("silero loads"),
+        cfg,
+    );
+    let mut chunks = Vec::new();
+    for (i, batch) in samples.chunks(160).enumerate() {
+        chunks.extend(pipeline.push_batch(batch, (i as u64 + 1) * 10));
+    }
+    chunks.extend(pipeline.flush());
+    chunks.retain(|c| c.kind == ChunkKind::Final);
+    chunks
+}
+
+/// On real speech and the real VAD, the audio just before each mid-span cut
+/// is quieter than the chunk it ends. The fixture's spans are shorter than
+/// the default window, so a smaller one forces cuts into continuous speech.
+#[test]
+fn fixture_mid_span_cuts_land_at_quiet_points() {
+    let samples = load_fixture();
+    let cfg = PipelineConfig {
+        max_chunk_ms: 3_000,
+        ..PipelineConfig::default()
+    };
+    let finals = final_chunks(&samples, &cfg);
+
+    // Overlapping neighbours are the two sides of a cut inside one span.
+    let cuts: Vec<_> = finals
+        .windows(2)
+        .filter(|w| w[1].t_start_ms + cfg.overlap_ms == w[0].t_end_ms)
+        .map(|w| &w[0])
+        .collect();
+    let ranges: Vec<_> = finals.iter().map(|c| (c.t_start_ms, c.t_end_ms)).collect();
+    assert!(!cuts.is_empty(), "no mid-span cut in {ranges:?}");
+
+    let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt();
+    for cut in cuts {
+        assert!(cut.duration_ms() >= cfg.max_chunk_ms - 1_000);
+        let last_frame = &cut.samples[cut.samples.len() - 512..];
+        assert!(
+            rms(last_frame) < rms(&cut.samples),
+            "cut at {} ms",
+            cut.t_end_ms
+        );
+    }
 }
 
 /// The same fixture fed with a 20 s hole in the middle (wall clock advances,

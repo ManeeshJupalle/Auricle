@@ -6,7 +6,7 @@ function fmtTime(unixSecs: number): string {
   return new Date(unixSecs * 1000).toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
   });
 }
@@ -43,31 +43,32 @@ export function About() {
   return (
     <div className="about">
       <section className="panel">
-        <h2>
-          auricle<span className="brand-dot">.</span>
-        </h2>
-        <p>
-          A local-first meeting transcription engine. Your microphone is <strong>You</strong>,
-          your system audio is <strong>Them</strong> — no bot joins your calls, and with the
-          local Whisper backend no audio leaves this machine.
+        <h1 className="page-title">Auricle</h1>
+        <p className="about-lede">
+          The outer ear: the part of you that listens. It sits on your head, not in the cloud.
         </p>
-        <p className="dim">
-          Version {version || '…'} · MIT licensed ·{' '}
+        <p>
+          Auricle writes down your meetings from your own machine. Your microphone is You and what
+          your computer plays is Them. No bot joins your calls, and with local Whisper no audio
+          leaves this computer.
+        </p>
+        <p className="note">
+          Version {version || '…'}, MIT licensed.{' '}
           <a href="https://github.com/ManeeshJupalle/Auricle" target="_blank" rel="noreferrer">
             github.com/ManeeshJupalle/Auricle
           </a>
         </p>
-        <p className="dim">
-          This web UI is just a client: everything it does is available over the REST/WebSocket
-          API on this same port (see <code>docs/API.md</code>).
+        <p className="note">
+          This page is one client of the engine. Everything it does is also available over the REST
+          and WebSocket API on this same port (see <code>docs/API.md</code>).
         </p>
       </section>
 
       <section className="panel">
         <h2>Diagnostics</h2>
-        <p className="dim">
-          Crashes are recorded to a local file only — nothing is ever sent anywhere. If you hit a
-          bug, copy the diagnostics below and attach them to a{' '}
+        <p className="note">
+          Crashes are written to a local file and never sent anywhere. If you hit a bug, copy the
+          diagnostics and attach them to a{' '}
           <a
             href="https://github.com/ManeeshJupalle/Auricle/issues"
             target="_blank"
@@ -78,11 +79,11 @@ export function About() {
           .
         </p>
         <div className="diag-row">
-          <span className="dim mono">
-            {diag ? `${diag.system.os}/${diag.system.arch} · v${diag.system.version}` : '…'} ·{' '}
+          <span className="note">
+            {diag ? `Version ${diag.system.version} on ${diag.system.os}, ${diag.system.arch}. ` : '… '}
             {crashes.length === 0
-              ? 'no crashes recorded'
-              : `${crashes.length} crash report${crashes.length === 1 ? '' : 's'}`}
+              ? 'No crashes on record.'
+              : `${crashes.length} crash ${crashes.length === 1 ? 'report' : 'reports'} on record.`}
           </span>
           <button className="btn" onClick={() => void copyDiagnostics()} disabled={!diag}>
             {copied ? 'Copied' : 'Copy diagnostics'}
@@ -92,7 +93,7 @@ export function About() {
           <ul className="diag-list">
             {crashes.slice(0, 5).map((c, i) => (
               <li key={i}>
-                <span className="dim mono diag-when">{fmtTime(c.ts)}</span>
+                <span className="dim diag-when">{fmtTime(c.ts)}</span>
                 <span className="diag-msg">{c.message}</span>
                 <span className="dim mono diag-at">{c.location}</span>
               </li>

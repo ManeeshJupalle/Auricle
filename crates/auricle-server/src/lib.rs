@@ -17,16 +17,17 @@ mod export;
 mod lifecycle;
 mod mcp;
 mod redact;
+mod retention;
 mod ring;
 mod store;
 mod title;
 mod ws;
 
-pub use api::{build_router, build_router_with_reader, serve};
-pub use engine::{AudioSource, Engine, EngineOptions, StartParams};
+pub use api::{build_router, build_router_with_reader, serve, serve_engine};
+pub use engine::{AudioSource, Engine, EngineOptions, StartParams, Sweep};
 pub use events::WsEvent;
 pub use export::render_markdown_full;
-pub use store::{SegmentRow, SessionRow, Store, SummaryRow};
+pub use store::{AskRow, SegmentRow, SessionPage, SessionRow, Store, SummaryRow};
 
 use std::path::PathBuf;
 

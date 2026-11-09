@@ -21,8 +21,8 @@ Ollama's `reasoning` field, and friends).
   will check.
 - **STT/LLM inference never blocks capture.** Workers own bounded queues;
   when overloaded, shed partials, never transcript.
-- **Keys via env vars only.** Never persisted, never logged, never in
-  config files.
+- **Keys via env vars or Windows Credential Manager only.** Never logged,
+  never in config files, never in the database.
 - **Partials are never persisted.** Only finals reach SQLite.
 
 ## Practicalities

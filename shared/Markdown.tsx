@@ -4,6 +4,9 @@ import { Fragment, type ReactNode } from 'react';
 // checklists, bold/italic/inline-code. Parses to data (unit-testable) and
 // renders as React elements — no innerHTML, so LLM output can't inject
 // markup. Unrecognized syntax falls through as plain text.
+//
+// The dashboard and the overlay both import this one file. As two copies they
+// drifted, and took separate fixes for the same hang.
 
 export type Block =
   | { kind: 'heading'; level: number; text: string }
@@ -14,7 +17,9 @@ export type Block =
 
 export function parseBlocks(src: string): Block[] {
   const blocks: Block[] = [];
-  const lines = src.split(/\r?\n/);
+  // Every terminator regex `.` refuses to cross, not just \n: a line holding
+  // one would pass the prefix tests below but fail the full block patterns.
+  const lines = src.split(/\r\n|[\n\r\u2028\u2029]/);
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -59,8 +64,10 @@ export function parseBlocks(src: string): Block[] {
       blocks.push({ kind: 'ordered', items });
       continue;
     }
-    // Paragraph: consecutive non-empty, non-structural lines.
-    const para: string[] = [];
+    // Paragraph: this line, then consecutive non-empty, non-structural lines.
+    // The first is taken unconditionally so the outer loop always advances.
+    const para = [trimmed];
+    i += 1;
     while (i < lines.length) {
       const t = lines[i].trim();
       if (

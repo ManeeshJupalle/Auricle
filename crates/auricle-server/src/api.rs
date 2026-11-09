@@ -2,23 +2,26 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use auricle_core::{Config, Error, Result};
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{MatchedPath, Path, Query, State};
+use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
+use tokio::sync::{broadcast, Notify};
 
 use crate::engine::{Engine, EngineOptions, StartError, StartParams, StopError};
+use crate::events::WsEvent;
 use crate::export::render_markdown_full;
-use crate::store::Store;
+use crate::store::{SegmentRow, SessionPage, SessionRow, Store, SummaryRow};
 
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<Engine>,
-    /// Bearer token required on every request (None on localhost binds).
+    /// Bearer token required on every route (None on localhost binds).
     pub token: Option<Arc<String>>,
     /// On-demand screen capture + OCR for /peek and /ask (mocked in tests).
     pub screen_reader: Arc<dyn auricle_vision::ScreenReader>,
@@ -26,6 +29,13 @@ pub struct AppState {
     pub(crate) ring: Arc<crate::ring::TranscriptRing>,
     /// In-memory follow-up memory for /ask.
     pub(crate) ask_history: Arc<crate::ask::AskHistory>,
+    /// Streamed answer fragments for /ws/live. Kept off the engine's
+    /// important lane so a long answer can't use up the slots a slow
+    /// consumer's finals wait in.
+    pub(crate) answers: broadcast::Sender<WsEvent>,
+    /// Fired once `POST /shutdown` has stopped the active session. `serve`
+    /// exits on it; a router built without `serve` has nothing listening.
+    shutdown: Arc<Notify>,
 }
 
 /// Build the router. Exposed for the integration tests, which bind an
@@ -46,14 +56,26 @@ pub fn build_router_with_reader(
     token: Option<String>,
     screen_reader: Arc<dyn auricle_vision::ScreenReader>,
 ) -> Router {
-    let ring = crate::ring::TranscriptRing::new(engine.config().copilot.transcript_window_min);
+    router(engine, token, screen_reader, Arc::new(Notify::new()))
+}
+
+fn router(
+    engine: Arc<Engine>,
+    token: Option<String>,
+    screen_reader: Arc<dyn auricle_vision::ScreenReader>,
+    shutdown: Arc<Notify>,
+) -> Router {
+    let ring = engine.ring();
     ring.spawn_feeder(engine.subscribe_important());
+    let (answers, _) = broadcast::channel(crate::ws::ANSWER_CAPACITY);
     let state = AppState {
+        ask_history: engine.ask_history(),
         engine,
         token: token.map(Arc::new),
         screen_reader,
         ring,
-        ask_history: Arc::new(crate::ask::AskHistory::default()),
+        answers,
+        shutdown,
     };
     Router::new()
         .route("/api/v1/health", get(health))
@@ -75,10 +97,15 @@ pub fn build_router_with_reader(
             "/api/v1/secrets/{provider}",
             put(put_secret).delete(delete_secret),
         )
+        .route("/api/v1/search", get(search_lines))
         .route("/api/v1/egress", get(egress))
         .route("/api/v1/diagnostics", get(diagnostics))
         .route("/api/v1/peek", post(peek))
         .route("/api/v1/ask", post(crate::ask::ask))
+        .route("/api/v1/asks", get(list_asks))
+        .route("/api/v1/asks/{id}", delete(delete_ask))
+        .route("/api/v1/backup", post(backup))
+        .route("/api/v1/shutdown", post(request_shutdown))
         .route("/ws/live", get(crate::ws::ws_handler))
         // MCP (Streamable HTTP) for local agents. Merged as its own router so
         // the enable gate wraps only this path; the global auth layer below
@@ -92,6 +119,12 @@ pub fn build_router_with_reader(
                     mcp_gate,
                 )),
         )
+        // Covers every route above by construction, so a route added later
+        // cannot be left outside it. Only the fallback below escapes.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            token_middleware,
+        ))
         // Embedded web UI (ui/dist via rust-embed): everything that isn't
         // an API route serves static files, unknown paths fall back to
         // index.html (SPA).
@@ -100,6 +133,7 @@ pub fn build_router_with_reader(
             state.clone(),
             auth_middleware,
         ))
+        .layer(axum::middleware::map_response(security_headers))
         .with_state(state)
 }
 
@@ -126,7 +160,49 @@ async fn static_handler(uri: axum::http::Uri) -> Response {
     }
 }
 
-/// Run the daemon: open the store, bind, serve until the process ends.
+/// Everything the dashboard loads is same-origin: its script, stylesheet and
+/// fonts, `/api` fetches, retained audio, and the `/ws/live` socket (`'self'`
+/// covers ws: on the same host and port). React applies `style` props through
+/// the CSSOM, which `style-src` does not govern, so no `'unsafe-inline'`.
+/// `data:` is for whatever Vite decides is small enough to inline.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' data:; \
+     font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; \
+     frame-ancestors 'none'";
+
+async fn security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    // An <audio> or <img> on a foreign page sends no Origin, so the origin
+    // check can't see it; without this, such a page could play retained audio
+    // from a tokenless daemon.
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    response
+}
+
+/// How long `POST /shutdown` waits on the active session. The engine bounds
+/// its own stop, so this only matters if that stop wedges, and an HTTP caller
+/// has no second Ctrl+C to force the issue.
+const SHUTDOWN_STOP_TIMEOUT: Duration = Duration::from_secs(150);
+/// How long `POST /shutdown` lets a post-stop auto-title run. Under the LLM's
+/// own 20 s because the overlay gives the whole shutdown 30 s; a title that
+/// misses this leaves the placeholder, which the user can still rename.
+const SHUTDOWN_TITLE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Head start the 202 gets before `serve` returns and the process ends.
+const SHUTDOWN_FLUSH: Duration = Duration::from_millis(100);
+/// Time between retention sweeps, after the one at startup.
+const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Run the daemon: bind, open the store, serve until asked to stop.
 pub async fn serve(cfg: Config, data_root: PathBuf, bind_override: Option<String>) -> Result<()> {
     // Capture panics (this thread and spawned tasks) to a local file for
     // diagnostics. Local only — nothing is sent anywhere.
@@ -150,49 +226,201 @@ pub async fn serve(cfg: Config, data_root: PathBuf, bind_override: Option<String
         })?)
     };
 
-    let engine = Engine::new(EngineOptions {
-        cfg,
-        data_root: data_root.clone(),
-        provider_override: None,
-    })?;
-    let app = build_router(engine.clone(), token);
-
+    // Bind before touching the database, so a port clash fails with nothing
+    // disturbed. A second daemon on another port gets past this, and is
+    // refused by the data root's lock in Engine::new.
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(Error::Io)?;
+
+    let engine = Engine::new(EngineOptions {
+        cfg,
+        data_root,
+        provider_override: None,
+    })?;
+    serve_engine(engine, listener, token).await
+}
+
+/// Everything `serve` does once it has an engine and a port: answer requests
+/// and sweep retention until asked to stop. Exposed for the integration tests,
+/// which inject a fake provider through the engine options.
+pub async fn serve_engine(
+    engine: Arc<Engine>,
+    listener: tokio::net::TcpListener,
+    token: Option<String>,
+) -> Result<()> {
+    let addr = listener.local_addr()?;
+    let shutdown = Arc::new(Notify::new());
+    let app = router(
+        engine.clone(),
+        token,
+        Arc::new(auricle_vision::WindowsOcrReader::new()),
+        shutdown.clone(),
+    );
+
     eprintln!(
         "auricle listening on http://{addr} (data: {})",
-        data_root.display()
+        engine.data_root().display()
     );
-    // Run until Ctrl+C, then stop any active session cleanly before exiting
-    // — an intentional shutdown must not be recorded as an interrupted
-    // session. (No graceful connection drain: open WebSockets would hold
-    // the process forever; clients auto-reconnect.)
+    // Run until asked to stop, then stop any active session cleanly before
+    // exiting — an intentional shutdown must not be recorded as an
+    // interrupted session. (No graceful connection drain: open WebSockets
+    // would hold the process forever; clients auto-reconnect.)
     tokio::select! {
         result = axum::serve(listener, app) => result.map_err(Error::Io),
-        _ = shutdown_on_ctrl_c(engine) => Ok(()),
+        _ = retention_loop(engine.clone()) => Ok(()),
+        _ = shutdown_on_signal(engine) => Ok(()),
+        _ = shutdown.notified() => Ok(()),
     }
 }
 
-async fn shutdown_on_ctrl_c(engine: Arc<Engine>) {
-    if tokio::signal::ctrl_c().await.is_err() {
-        // Can't install a handler: never resolve, run until killed.
-        std::future::pending::<()>().await;
+/// Apply the retention setting now and then daily. It is read on every sweep,
+/// so a change takes effect from the next one. Logs counts and nothing else:
+/// which meetings went is the user's business, not a diagnostic.
+async fn retention_loop(engine: Arc<Engine>) {
+    let mut daily = tokio::time::interval(RETENTION_INTERVAL);
+    loop {
+        daily.tick().await; // the first tick is immediate: the startup sweep
+        let engine = engine.clone();
+        match off_runtime(move || engine.sweep_retention()).await {
+            Ok(sweep) => {
+                if sweep.deleted > 0 {
+                    eprintln!("retention: deleted {} expired session(s)", sweep.deleted);
+                }
+                if let Some(notice) = sweep.notice {
+                    eprintln!("{notice}");
+                }
+            }
+            Err(e) => eprintln!("retention sweep failed: {e}"),
+        }
     }
+}
+
+async fn shutdown_on_signal(engine: Arc<Engine>) {
+    stop_signal().await;
+    engine.begin_shutdown();
     if let Some(id) = engine.active_session() {
         eprintln!("\nstopping active session {id} (Ctrl+C again to force quit) ...");
-        let _ = engine.stop_session(&id);
-        let stopped = async {
-            while engine.active_session().is_some() {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        };
         tokio::select! {
-            _ = stopped => {}
-            _ = tokio::signal::ctrl_c() => eprintln!("force quit; session left for crash recovery"),
+            _ = stop_and_wait(&engine, &id) => {}
+            _ = stop_signal() => eprintln!("force quit; session left for crash recovery"),
         }
     }
     eprintln!("auricle stopped");
+}
+
+/// Begin stopping `id`, then wait for the engine to finish persisting it.
+pub(crate) async fn stop_and_wait(engine: &Engine, id: &str) {
+    let _ = engine.stop_session(id);
+    while engine.active_session().as_deref() == Some(id) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Stop `id` on the way out, within `SHUTDOWN_STOP_TIMEOUT`. A stop cannot
+/// interrupt a start, and a start can be minutes into a model download. Until
+/// it has opened capture it has recorded nothing, so nothing is worth the wait.
+async fn stop_for_exit(engine: &Engine, id: &str) {
+    let _ = engine.stop_session(id);
+    if !engine.capture_began(id) {
+        return;
+    }
+    let stopped = stop_and_wait(engine, id);
+    if tokio::time::timeout(SHUTDOWN_STOP_TIMEOUT, stopped)
+        .await
+        .is_err()
+    {
+        eprintln!("session did not stop in time; left for crash recovery");
+    }
+}
+
+/// Resolves when the user or Windows asks the daemon to stop. A source whose
+/// handler can't be installed never resolves: run until killed.
+async fn stop_signal() {
+    let ctrl_c = async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(windows)]
+    let session_ending = async {
+        if windows_session_ending().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(not(windows))]
+    let session_ending = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = session_ending => {}
+    }
+}
+
+/// The console closing, the user logging off, or the machine shutting down.
+/// Tokio parks Windows' handler thread for these, so the process lives until
+/// it exits by itself or Windows' deadline (about 5 s) passes. A stop that
+/// misses the deadline is left for crash recovery, like any other kill.
+///
+/// Windows sends logoff and shutdown only to services: a daemon started from
+/// a console or by the overlay is terminated at logoff without hearing either.
+/// Those two matter only when running as a service.
+#[cfg(windows)]
+async fn windows_session_ending() -> std::io::Result<()> {
+    use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+    let (mut close, mut logoff, mut shutdown) = (ctrl_close()?, ctrl_logoff()?, ctrl_shutdown()?);
+    tokio::select! {
+        _ = close.recv() => {}
+        _ = logoff.recv() => {}
+        _ = shutdown.recv() => {}
+    }
+    Ok(())
+}
+
+/// POST /api/v1/shutdown — stop any active session cleanly, then exit, for
+/// callers that need the daemon gone (the overlay, before an update). Answers
+/// at once because the stop lasts as long as the final transcription does;
+/// the caller sees completion as the port closing.
+async fn request_shutdown(State(state): State<AppState>) -> Response {
+    // Before the reply: whoever hears 202 must not be able to start a session.
+    state.engine.begin_shutdown();
+    let engine = state.engine.clone();
+    let exit = state.shutdown.clone();
+    tokio::spawn(async move {
+        if let Some(id) = engine.active_session() {
+            eprintln!("stopping active session {id} ...");
+            stop_for_exit(&engine, &id).await;
+        }
+        // A title is generated once and never retried, so exiting mid-call
+        // would leave the placeholder on this session for good.
+        let titled = engine.titles_settled();
+        if tokio::time::timeout(SHUTDOWN_TITLE_TIMEOUT, titled)
+            .await
+            .is_err()
+        {
+            eprintln!("auto-title did not finish in time; keeping the placeholder");
+        }
+        tokio::time::sleep(SHUTDOWN_FLUSH).await;
+        eprintln!("auricle stopped");
+        exit.notify_one();
+    });
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"status": "shutting_down"})),
+    )
+        .into_response()
+}
+
+/// Run store work on the blocking pool, the way `POST /peek` runs capture.
+/// These reads are unbounded and wait on the store mutex: inline, they would
+/// occupy a Tokio worker the capture pipeline needs to persist segments.
+pub(crate) async fn off_runtime<T, F>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::Io(std::io::Error::other(format!("store task failed: {e}"))))?
 }
 
 /// Answer 404 on every `/mcp` request while the MCP server is switched off,
@@ -201,16 +429,16 @@ async fn shutdown_on_ctrl_c(engine: Arc<Engine>) {
 /// The setting is read per request rather than at router build time: the
 /// toggle in Settings then takes effect immediately instead of at the next
 /// restart. The settings table is a handful of rows, and MCP is not a hot
-/// path, so the read is not worth caching.
+/// path, so the read is not worth caching, but it does take the store mutex,
+/// so it runs off the async workers. A read that fails leaves MCP off.
 async fn mcp_gate(
     State(state): State<AppState>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let enabled = state
-        .engine
-        .store()
-        .all_settings()
+    let store = state.engine.store();
+    let enabled = off_runtime(move || store.all_settings())
+        .await
         .ok()
         .and_then(|s| s.get("mcp_enabled").and_then(|v| v.as_bool()))
         .unwrap_or(false);
@@ -225,9 +453,10 @@ async fn auth_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    // Browser-attached Origins must be same-origin (or another local page).
-    // CORS does not protect WebSocket handshakes: without this, any website
-    // could open ws://127.0.0.1:4820/ws/live and read meetings live.
+    // Browser-attached Origins must be same-origin. CORS does not protect
+    // WebSocket handshakes: without this, any website could open
+    // ws://127.0.0.1:4820/ws/live and read meetings live. Nor does it stop a
+    // POST with no body, which needs no preflight, from ending the daemon.
     let host = request
         .headers()
         .get("host")
@@ -247,13 +476,50 @@ async fn auth_middleware(
     if state.token.is_none() && !host.as_deref().is_some_and(authority_is_loopback) {
         return forbidden("requests must address the daemon as localhost");
     }
+    next.run(request).await
+}
+
+/// Routes where the token may ride in `?token=`, because a browser cannot set
+/// a header on a WebSocket handshake or an `<audio>` request. A URL turns up in
+/// more places than a header does, so nowhere else.
+const QUERY_TOKEN_ROUTES: [&str; 2] = ["/ws/live", "/api/v1/sessions/{id}/audio/{channel}"];
+
+#[derive(serde::Deserialize)]
+struct TokenQuery {
+    token: String,
+}
+
+/// The `?token=` on a request to one of `QUERY_TOKEN_ROUTES`. Goes by the
+/// route that matched, not the path as sent, so no spelling of a URL can reach
+/// the allowance from another route.
+fn query_token(request: &axum::extract::Request) -> Option<String> {
+    let route = request.extensions().get::<MatchedPath>()?;
+    if !QUERY_TOKEN_ROUTES.contains(&route.as_str()) {
+        return None;
+    }
+    let Query(query) = Query::<TokenQuery>::try_from_uri(request.uri()).ok()?;
+    Some(query.token)
+}
+
+/// Demand the token on every route, as a bearer header or where
+/// `QUERY_TOKEN_ROUTES` allows it. The embedded UI's static files are served
+/// by the router's fallback, which this layer does not wrap: they hold no user
+/// data, and a browser cannot attach a header to a page load, so the dashboard
+/// could never start on a token-protected bind otherwise.
+async fn token_middleware(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
     if let Some(expected) = &state.token {
+        let matches = |t: &str| constant_time_eq(t.as_bytes(), expected.as_bytes());
         let ok = request
             .headers()
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
+            .is_some_and(matches)
+            || query_token(&request).is_some_and(|t| matches(&t));
         if !ok {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -277,17 +543,20 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// An Origin is acceptable when it is same-origin with the request's Host,
-/// or itself a local page (the Vite dev server on :5173 proxies here with
-/// its own origin; a local page is as trusted as any local process).
+/// An Origin is acceptable only when it is same-origin with the request's
+/// Host: a page on another localhost port gets no more than any other site.
+/// `npm run dev` needs no exception, because Vite's `/api` and `/ws` proxies
+/// keep the browser's Host, so its origin arrives same-origin.
 fn origin_allowed(origin: &str, host: Option<&str>) -> bool {
-    let Some(authority) = origin
+    origin_authority(origin) // None: "null", file://, or malformed: no way to vouch
+        .zip(host)
+        .is_some_and(|(authority, host)| authority.eq_ignore_ascii_case(host))
+}
+
+fn origin_authority(origin: &str) -> Option<&str> {
+    origin
         .strip_prefix("http://")
         .or_else(|| origin.strip_prefix("https://"))
-    else {
-        return false; // "null", file://, or malformed: no way to vouch
-    };
-    host.is_some_and(|h| authority.eq_ignore_ascii_case(h)) || authority_is_loopback(authority)
 }
 
 /// True when a `host[:port]` authority is localhost or a loopback IP
@@ -315,6 +584,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
         "state": state.engine.lifecycle_state(),
         "active_session": state.engine.active_session(),
     }))
@@ -365,9 +635,16 @@ pub(crate) fn overlay_llm_settings(cfg: &mut Config, store: &Store) {
 
 async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
     let mut cfg = state.engine.config().clone();
-    overlay_llm_settings(&mut cfg, &state.engine.store());
+    let store = state.engine.store();
+    overlay_llm_settings(&mut cfg, &store);
+    // The provider a start with no choice of its own would use.
+    if let Ok(settings) = store.all_settings() {
+        if let Some(p) = settings.get("default_provider").and_then(|v| v.as_str()) {
+            cfg.stt.provider = p.to_string();
+        }
+    }
     let cfg = &cfg;
-    let data_root = crate::default_data_root().unwrap_or_default();
+    let data_root = state.engine.data_root();
     let statuses: Vec<_> = auricle_stt::provider_statuses(cfg, &data_root.join("models"))
         .iter()
         .map(|s| {
@@ -460,29 +737,43 @@ async fn delete_secret(State(state): State<AppState>, Path(id): Path<String>) ->
     }
 }
 
+/// `limit` and `offset` as a query string gave them, in the range every
+/// paged route accepts.
+fn page_bounds(limit: Option<i64>, offset: Option<i64>) -> (i64, i64) {
+    (
+        limit.unwrap_or(200).clamp(1, 1000),
+        offset.unwrap_or(0).max(0),
+    )
+}
+
 #[derive(serde::Deserialize)]
 struct EgressQuery {
     session: Option<String>,
     limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 /// GET /api/v1/egress — the egress ledger: what user data left the machine
 /// (and what explicitly stayed local), newest first. Metadata only; the
 /// audio, prompt, and answer are never recorded, only where they went.
 async fn egress(State(state): State<AppState>, Query(q): Query<EgressQuery>) -> Response {
-    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+    let (limit, offset) = page_bounds(q.limit, q.offset);
     let store = state.engine.store();
     // `entries` is one page; `totals` covers the whole ledger, so the UI's
     // "nothing has left this machine" line never becomes an artifact of how
     // many rows fit on a page.
-    match (
-        store.list_egress(q.session.as_deref(), limit),
-        store.egress_totals(),
-    ) {
-        (Ok(entries), Ok(totals)) => {
+    let ledger = off_runtime(move || {
+        Ok((
+            store.list_egress(q.session.as_deref(), limit, offset)?,
+            store.egress_totals()?,
+        ))
+    })
+    .await;
+    match ledger {
+        Ok((entries, totals)) => {
             Json(json!({ "entries": entries, "totals": totals })).into_response()
         }
-        (Err(e), _) | (_, Err(e)) => internal(e.to_string()),
+        Err(e) => internal(e.to_string()),
     }
 }
 
@@ -515,13 +806,13 @@ async fn summarize_session(
     overlay_llm_settings(&mut cfg, &store);
     // Precedence: request body > settings store > config file.
     let provider_id = body.provider.unwrap_or_else(|| cfg.llm.provider.clone());
-    let session = match store.get_session(&id) {
-        Ok(Some(s)) => s,
-        Ok(None) => return not_found(&id),
-        Err(e) => return internal(e.to_string()),
+    let loaded = {
+        let (store, id) = (store.clone(), id.clone());
+        off_runtime(move || Ok((store.get_session(&id)?, store.get_segments(&id)?))).await
     };
-    let segments = match store.get_segments(&id) {
-        Ok(s) => s,
+    let (session, segments) = match loaded {
+        Ok((Some(session), segments)) => (session, segments),
+        Ok((None, _)) => return not_found(&id),
         Err(e) => return internal(e.to_string()),
     };
     if segments.is_empty() {
@@ -532,9 +823,7 @@ async fn summarize_session(
             .into_response();
     }
 
-    let templates_dir = crate::default_data_root()
-        .unwrap_or_default()
-        .join("templates");
+    let templates_dir = state.engine.data_root().join("templates");
     let template = match auricle_llm::load_template(&templates_dir, &template_name) {
         Ok(t) => t,
         Err(e) => {
@@ -588,6 +877,9 @@ async fn summarize_session(
         &content,
         created_at,
     ) {
+        // Deleted during the LLM call: nothing was written, and 201 with
+        // id 0 would claim a summary that does not exist.
+        Ok(0) => return not_found(&id),
         Ok(rowid) => rowid,
         Err(e) => return internal(e.to_string()),
     };
@@ -621,6 +913,14 @@ async fn start_session(State(state): State<AppState>, Json(params): Json<StartPa
         Err(StartError::Invalid(msg)) => {
             (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
         }
+        Err(e @ StartError::Stopped) => {
+            (StatusCode::CONFLICT, Json(json!({"error": e.to_string()}))).into_response()
+        }
+        Err(e @ StartError::ShuttingDown) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
         Err(StartError::Internal(e)) => internal(e.to_string()),
     }
 }
@@ -639,11 +939,39 @@ async fn stop_session(State(state): State<AppState>, Path(id): Path<String>) -> 
 #[derive(serde::Deserialize)]
 struct ListQuery {
     q: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
+/// GET /api/v1/sessions — newest first, every match unless `limit` or `offset`
+/// asks for a page. `total` counts every match either way.
 async fn list_sessions(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Response {
-    match state.engine.store().list_sessions(q.q.as_deref()) {
-        Ok(rows) => Json(json!({"sessions": rows})).into_response(),
+    let store = state.engine.store();
+    let page = off_runtime(move || {
+        if q.limit.is_none() && q.offset.is_none() {
+            let sessions = store.list_sessions(q.q.as_deref())?;
+            let total = sessions.len() as i64;
+            return Ok(SessionPage { sessions, total });
+        }
+        let (limit, offset) = page_bounds(q.limit, q.offset);
+        store.find_sessions_page(q.q.as_deref(), limit, offset)
+    })
+    .await;
+    match page {
+        Ok(page) => Json(page).into_response(),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+/// Matching lines across every meeting. `?q=` on `/sessions` says which
+/// meetings mention something; this says where, so a person can go to the
+/// moment rather than reread the meeting.
+async fn search_lines(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Response {
+    let (limit, offset) = page_bounds(q.limit, q.offset);
+    let query = q.q.unwrap_or_default();
+    let store = state.engine.store();
+    match off_runtime(move || store.search_segments_page(&query, limit, offset)).await {
+        Ok(page) => Json(page).into_response(),
         Err(e) => internal(e.to_string()),
     }
 }
@@ -667,19 +995,17 @@ async fn rename_session(
             .into_response();
     }
     let store = state.engine.store();
-    match store.rename_session(&id, title) {
-        Ok(true) => {
-            // A user-chosen name is permanent: clear the auto-title flag so
-            // the post-stop generator never overwrites it.
-            if let Ok(Some(session)) = store.get_session(&id) {
-                if session.meta["auto_title"] == serde_json::Value::Bool(true) {
-                    let mut meta = session.meta.clone();
-                    meta["auto_title"] = serde_json::json!(false);
-                    let _ = store.update_session_meta(&id, &meta);
-                }
-            }
-            Json(json!({"id": id, "title": title})).into_response()
+    // A user-chosen name is permanent: clear the auto-title flag so the
+    // post-stop generator never overwrites it. Before the rename, not after:
+    // the generator writes only while the flag is set, so whichever way the
+    // two interleave, this name is the one left standing.
+    if let Ok(Some(session)) = store.get_session(&id) {
+        if session.meta["auto_title"] == serde_json::Value::Bool(true) {
+            let _ = store.set_session_meta(&id, "auto_title", &json!(false));
         }
+    }
+    match store.rename_session(&id, title) {
+        Ok(true) => Json(json!({"id": id, "title": title})).into_response(),
         Ok(false) => not_found(&id),
         Err(e) => internal(e.to_string()),
     }
@@ -693,28 +1019,70 @@ async fn delete_session(State(state): State<AppState>, Path(id): Path<String>) -
         )
             .into_response();
     }
-    // Retained audio (if any) lives outside the DB; remove it with the
-    // rows. Build the dir from this engine's own data root (not the
-    // process default — an engine on a custom root would otherwise orphan
-    // its WAVs), and only when the id is a single path component so a
-    // tampered id cannot escape the sessions dir via `..` or separators.
-    let audio_dir = {
-        let mut comps = std::path::Path::new(&id).components();
-        match (comps.next(), comps.next()) {
-            (Some(std::path::Component::Normal(_)), None) => {
-                Some(state.engine.data_root().join("sessions").join(&id))
-            }
-            _ => None,
-        }
-    };
-    match state.engine.store().delete_session(&id) {
-        Ok(true) => {
-            if let Some(dir) = audio_dir {
-                let _ = std::fs::remove_dir_all(dir); // best-effort
-            }
-            Json(json!({"id": id, "deleted": true})).into_response()
-        }
+    let engine = state.engine.clone();
+    let target = id.clone();
+    let deleted = off_runtime(move || engine.delete_session(&target)).await;
+    match deleted {
+        Ok(true) => Json(json!({"id": id, "deleted": true})).into_response(),
         Ok(false) => not_found(&id),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct AsksQuery {
+    session: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// GET /api/v1/asks — asks kept under `copilot.retain_context`, newest first.
+async fn list_asks(State(state): State<AppState>, Query(q): Query<AsksQuery>) -> Response {
+    let (limit, offset) = page_bounds(q.limit, q.offset);
+    let store = state.engine.store();
+    match off_runtime(move || store.list_asks(q.session.as_deref(), limit, offset)).await {
+        Ok(asks) => Json(json!({"asks": asks})).into_response(),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+async fn delete_ask(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    let store = state.engine.store();
+    match off_runtime(move || store.delete_ask(id)).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("no ask {id}")})),
+        )
+            .into_response(),
+        Err(e) => internal(e.to_string()),
+    }
+}
+
+/// POST /api/v1/backup — write a consistent copy of the database under the
+/// data root. Recording and reads carry on while it runs.
+async fn backup(State(state): State<AppState>) -> Response {
+    let dir = state.engine.data_root().join("backups");
+    let path = dir.join(format!("auricle-{}.db", crate::engine::unix_secs()));
+    let store = state.engine.store();
+    let target = path.clone();
+    let written = off_runtime(move || {
+        std::fs::create_dir_all(dir)?;
+        store.backup_to(&target)
+    })
+    .await;
+    match written {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"path": path.display().to_string()})),
+        )
+            .into_response(),
+        // Names are per second, and a backup never overwrites.
+        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "a backup was taken this second; try again"})),
+        )
+            .into_response(),
         Err(e) => internal(e.to_string()),
     }
 }
@@ -777,14 +1145,25 @@ async fn session_audio(
     }
 }
 
+type SessionDetail = (SessionRow, Vec<SegmentRow>, Vec<SummaryRow>);
+
+/// A session with its transcript and summaries; None when the id is unknown.
+fn load_session(store: &Store, id: &str) -> Result<Option<SessionDetail>> {
+    let Some(session) = store.get_session(id)? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        session,
+        store.get_segments(id)?,
+        store.get_summaries(id)?,
+    )))
+}
+
 async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let store = state.engine.store();
-    match (
-        store.get_session(&id),
-        store.get_segments(&id),
-        store.get_summaries(&id),
-    ) {
-        (Ok(Some(session)), Ok(segments), Ok(summaries)) => Json(json!({
+    let target = id.clone();
+    match off_runtime(move || load_session(&store, &target)).await {
+        Ok(Some((session, segments, summaries))) => Json(json!({
             "id": session.id,
             "title": session.title,
             "started_at": session.started_at,
@@ -795,8 +1174,8 @@ async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> R
             "summaries": summaries,
         }))
         .into_response(),
-        (Ok(None), _, _) => not_found(&id),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => internal(e.to_string()),
+        Ok(None) => not_found(&id),
+        Err(e) => internal(e.to_string()),
     }
 }
 
@@ -819,17 +1198,19 @@ async fn export_session(
             .into_response();
     }
     let store = state.engine.store();
-    match (
-        store.get_session(&id),
-        store.get_segments(&id),
-        store.get_summaries(&id),
-    ) {
-        (Ok(Some(session)), Ok(segments), Ok(summaries)) => {
-            let md = render_markdown_full(&session, &segments, &summaries);
-            ([("content-type", "text/markdown; charset=utf-8")], md).into_response()
-        }
-        (Ok(None), _, _) => not_found(&id),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => internal(e.to_string()),
+    let target = id.clone();
+    let rendered = off_runtime(move || {
+        Ok(
+            load_session(&store, &target)?.map(|(session, segments, summaries)| {
+                render_markdown_full(&session, &segments, &summaries)
+            }),
+        )
+    })
+    .await;
+    match rendered {
+        Ok(Some(md)) => ([("content-type", "text/markdown; charset=utf-8")], md).into_response(),
+        Ok(None) => not_found(&id),
+        Err(e) => internal(e.to_string()),
     }
 }
 
@@ -851,6 +1232,31 @@ async fn put_settings(
         )
             .into_response();
     };
+    // This one deletes meetings: a value the sweep would ignore must not look
+    // like it was accepted.
+    if obj
+        .get("retention_days")
+        .is_some_and(|days| days.as_i64().is_none_or(|days| days < 0))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "retention_days must be a whole number of days, 0 for off"})),
+        )
+            .into_response();
+    }
+    // Ends up in a provider's URL, and a bad value would otherwise surface
+    // only as a failed Start in the middle of someone's meeting.
+    if obj.get("stt_language").is_some_and(|language| {
+        language
+            .as_str()
+            .is_none_or(|tag| auricle_stt::validate_language(tag).is_err())
+    }) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "stt_language must be \"auto\" or a tag like en or pt-BR"})),
+        )
+            .into_response();
+    }
     let store = state.engine.store();
     for (k, v) in obj {
         if let Err(e) = store.set_setting(k, v) {
@@ -943,19 +1349,24 @@ mod tests {
     }
 
     #[test]
-    fn origin_policy_same_origin_or_local() {
+    fn origin_policy_is_same_origin_only() {
         let host = Some("127.0.0.1:4820");
-        // Same-origin (the bundled UI) and local dev pages are fine.
+        // The bundled UI, and `npm run dev` with the Host Vite's proxy keeps.
         assert!(origin_allowed("http://127.0.0.1:4820", host));
-        assert!(origin_allowed("http://localhost:5173", host)); // vite dev
-        assert!(origin_allowed("http://[::1]:4820", host));
+        assert!(origin_allowed(
+            "http://localhost:5173",
+            Some("localhost:5173")
+        ));
+        // Another page on this machine is no more trusted than a website.
+        assert!(!origin_allowed("http://localhost:5173", host));
+        assert!(!origin_allowed("http://[::1]:4820", host));
         // Cross-site pages are exactly what the check exists to stop.
         assert!(!origin_allowed("https://evil.com", host));
         assert!(!origin_allowed("http://evil.com:4820", host));
         assert!(!origin_allowed("null", host));
         assert!(!origin_allowed("file://evil", host));
-        // Non-loopback origin is accepted only when truly same-origin
-        // (token-protected remote binds serve the UI from their own host).
+        assert!(!origin_allowed("http://127.0.0.1:4820", None));
+        // Token-protected remote binds serve the UI from their own host.
         assert!(origin_allowed("http://myhost:9000", Some("myhost:9000")));
         assert!(!origin_allowed(
             "http://myhost:9000",

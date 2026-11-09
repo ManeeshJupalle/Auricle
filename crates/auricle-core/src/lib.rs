@@ -7,9 +7,10 @@ mod secret;
 mod types;
 
 pub use config::{
-    AudioConfig, Config, CopilotConfig, DeepgramConfig, GroqLlmConfig, GroqWhisperConfig,
-    LlmConfig, OllamaConfig, OpenAiCompatConfig, OpenAiLlmConfig, ServerConfig, SttConfig,
-    WhisperLocalConfig,
+    is_loopback_url, AudioConfig, Config, CopilotConfig, DeepgramConfig, GroqLlmConfig,
+    GroqWhisperConfig, LlmConfig, LoadedConfig, OllamaConfig, OpenAiCompatConfig, OpenAiLlmConfig,
+    ServerConfig, SttConfig, WhisperLocalConfig, CONFIG_FILE_NAME, LLM_PROVIDER_IDS,
+    STT_PROVIDER_IDS,
 };
 pub use env::env_lookup;
 pub use error::{Error, Result};

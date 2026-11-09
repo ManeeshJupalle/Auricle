@@ -1,5 +1,22 @@
-import { describe, expect, it } from 'vitest';
-import { applyAskEvent } from './ask';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { applyAskEvent, streamAsk } from './ask';
+import type { OverlayEvent } from './state';
+
+// Only streamAsk touches Tauri; a run's channel and invoke are stand-ins.
+const bridge = vi.hoisted(() => ({
+  channels: [] as { onmessage: (ev: Record<string, unknown>) => void }[],
+  invoke: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: bridge.invoke,
+  Channel: class {
+    onmessage: (ev: Record<string, unknown>) => void = () => {};
+    constructor() {
+      bridge.channels.push(this);
+    }
+  },
+}));
 
 // applyAskEvent is the SSE-client core: raw engine events → reducer
 // events, transport-independent (the HTTP legwork lives in Rust).
@@ -88,5 +105,36 @@ describe('ask SSE event mapping', () => {
       provider: null,
       chips: [{ icon: 'transcript', label: 'transcript: empty window' }],
     });
+  });
+});
+
+describe('streamAsk', () => {
+  const req = { question: 'q', include_screen: false, include_transcript: true, follow_up: false };
+
+  beforeEach(() => {
+    bridge.channels.length = 0;
+    bridge.invoke.mockReset();
+  });
+
+  it('tags every event with the run that produced it', async () => {
+    bridge.invoke.mockResolvedValue(undefined);
+    const seen: OverlayEvent[] = [];
+    await streamAsk(req, 1, 10, (ev) => seen.push(ev));
+    await streamAsk(req, 2, 10, (ev) => seen.push(ev));
+    // Interleaved, as a superseded stream would be.
+    bridge.channels[1].onmessage({ type: 'answer_delta', text: 'new' });
+    bridge.channels[0].onmessage({ type: 'answer_delta', text: 'old' });
+    expect(seen).toEqual([
+      { type: 'DELTA', text: 'new', gen: 2 },
+      { type: 'DELTA', text: 'old', gen: 1 },
+    ]);
+  });
+
+  it('forwards the request and tags a transport failure too', async () => {
+    bridge.invoke.mockRejectedValue('engine unreachable');
+    const seen: OverlayEvent[] = [];
+    await streamAsk(req, 7, 10, (ev) => seen.push(ev));
+    expect(bridge.invoke.mock.calls[0][1].req).toEqual(req);
+    expect(seen).toEqual([{ type: 'ERROR', message: 'engine unreachable', gen: 7 }]);
   });
 });

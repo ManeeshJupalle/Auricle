@@ -42,7 +42,8 @@ pub struct PipelineConfig {
     pub overlap_ms: u64,
     /// Emit an interim (partial) chunk each time this much new audio arrives.
     pub interim_interval_ms: u64,
-    /// Wall-vs-sample-clock divergence treated as a stream gap.
+    /// Wall-vs-sample-clock divergence that re-anchors the clock, and the time
+    /// without a batch that makes it a stream gap.
     pub gap_threshold_ms: u64,
     /// Minimum remainder worth emitting as a final chunk at span close.
     pub min_final_ms: u64,

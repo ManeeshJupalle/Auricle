@@ -5,13 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -29,9 +32,9 @@ jobs:
         working-directory: ui
         run: npm test
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Version and components come from rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
 
       # whisper-rs-sys needs CMake + libclang (see BUILDING.md). The repo's
       # .cargo/config.toml pins developer-machine paths, but Cargo [env]
@@ -43,7 +46,7 @@ jobs:
           "CMAKE=$((Get-Command cmake).Source)" | Out-File -Append $env:GITHUB_ENV
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_ENV
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: rustfmt
         run: cargo fmt --all --check
@@ -53,3 +56,111 @@ jobs:
 
       - name: tests
         run: cargo test
+
+  overlay:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: overlay/package-lock.json
+
+      # tauri::generate_context! embeds overlay/dist at compile time, so the
+      # frontend must build first.
+      - name: Build overlay frontend
+        working-directory: overlay
+        run: |
+          npm ci
+          npm run build
+
+      - name: Overlay frontend tests (vitest)
+        working-directory: overlay
+        run: npm test
+
+      # Version and components come from rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      # `tauri build` refuses a tauri crate and @tauri-apps/api on different
+      # minors, but only the release job runs it, so skew from a one-sided bump
+      # would surface at release time. `tauri info` reports it yet exits 0, and
+      # a run that failed or could not read a side reports no skew either: it
+      # prints "not installed!" or "No version detected" and still exits 0. So
+      # both sides need a real version before their silence means they agree.
+      - name: Tauri crate and npm versions agree
+        working-directory: overlay
+        shell: bash
+        run: |
+          info=$(npx tauri info 2>&1) || {
+            echo "$info"
+            echo '::error::tauri info failed, so the versions were not compared.'
+            exit 1
+          }
+          echo "$info"
+          # LC_ALL=C: in a UTF-8 locale this grep's `.` won't cross the row's emoji.
+          for package in tauri-build @tauri-apps/api; do
+            if ! LC_ALL=C grep -Eq "$package .*: [0-9]+\.[0-9]+" <<< "$info"; then
+              echo "::error::tauri info found no version of $package, so the versions were not compared."
+              exit 1
+            fi
+          done
+          if grep -q 'version mismatched' <<< "$info"; then
+            echo '::error::The tauri crate and the @tauri-apps npm packages are on different versions.'
+            exit 1
+          fi
+
+      # tauri-build fails if the externalBin file is missing but never reads
+      # it, and the real engine is gitignored build output. An empty file
+      # saves this job from compiling whisper.cpp.
+      - name: Stage a placeholder sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force overlay/src-tauri/binaries | Out-Null
+          New-Item -ItemType File overlay/src-tauri/binaries/auricle-x86_64-pc-windows-msvc.exe | Out-Null
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: overlay/src-tauri
+
+      - name: rustfmt
+        working-directory: overlay/src-tauri
+        run: cargo fmt --check
+
+      - name: clippy
+        working-directory: overlay/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: tests
+        working-directory: overlay/src-tauri
+        run: cargo test
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Version and components come from rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      # Fails on vulnerabilities. Unmaintained, unsound and yanked notices only
+      # warn; the overlay's are Linux/macOS-only dependencies of Tauri.
+      - name: cargo audit (engine)
+        run: cargo audit
+
+      - name: cargo audit (overlay)
+        run: cargo audit --file overlay/src-tauri/Cargo.lock
+
+      - name: npm audit (dashboard)
+        working-directory: ui
+        run: npm audit --omit=dev
+
+      - name: npm audit (overlay)
+        working-directory: overlay
+        run: npm audit --omit=dev

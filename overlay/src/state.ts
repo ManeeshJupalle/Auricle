@@ -20,6 +20,14 @@ export interface OverlayState {
   chips: Chip[];
   error: string | null;
   askId: string | null;
+  /**
+   * The run this view follows. Stream events are tagged with the run they
+   * came from, so anything tagged otherwise belongs to a superseded ask;
+   * null after a dismiss, when no run is followed. Tagged client-side, per
+   * channel, because ask_id only arrives with ask_started and the first
+   * delta may beat it.
+   */
+  gen: number | null;
   /** Set when the NEXT submit should carry follow_up: true. */
   hasHistory: boolean;
   /** True when the current ask came from the quick-assist hotkey. */
@@ -40,6 +48,7 @@ export const initialState: OverlayState = {
   chips: [],
   error: null,
   askId: null,
+  gen: null,
   hasHistory: false,
   quick: false,
   provider: null,
@@ -49,26 +58,44 @@ export const initialState: OverlayState = {
 };
 
 /** The templated quick-assist question (Ctrl+Shift+A: no typing). */
+/**
+ * How long a toast stays up. Some carry steps to follow, and a few are the
+ * only warning there will be, so a long one has to last long enough to read.
+ */
+export const toastMs = (message: string): number => Math.max(6_000, message.length * 70);
+
 export const QUICK_ASSIST_QUESTION =
   "What's happening right now? Briefly summarize what's being discussed and what's on my screen.";
 
-export type OverlayEvent =
-  | { type: 'SUMMON' }
-  | { type: 'QUICK_ASSIST'; at: number }
-  | { type: 'SUBMIT'; question: string; at: number }
+/** What one ask's stream can report, before it is tagged with its run. */
+export type AskStreamEvent =
   | { type: 'ASK_STARTED'; askId: string; chips: Chip[]; provider: string | null }
   | { type: 'DELTA'; text: string }
   | { type: 'DONE'; usage: { total_tokens: number } | null; at: number }
-  | { type: 'ERROR'; message: string }
+  | { type: 'ERROR'; message: string };
+
+export type OverlayEvent =
+  | { type: 'SUMMON' }
+  | { type: 'QUICK_ASSIST'; at: number; gen: number }
+  | { type: 'SUBMIT'; question: string; at: number; gen: number }
+  | (AskStreamEvent & { gen: number })
+  | { type: 'NEW_CHAT' }
   | { type: 'DISMISS' };
 
 const busy = (phase: Phase) => phase === 'asking' || phase === 'streaming';
 
 /** Everything one new ask resets. */
-function freshAsk(state: OverlayState, question: string, quick: boolean, at: number): OverlayState {
+function freshAsk(
+  state: OverlayState,
+  question: string,
+  quick: boolean,
+  at: number,
+  gen: number,
+): OverlayState {
   return {
     ...state,
     phase: 'asking',
+    gen,
     question,
     answer: '',
     chips: [],
@@ -93,17 +120,19 @@ export function reduce(state: OverlayState, ev: OverlayEvent): OverlayState {
     case 'QUICK_ASSIST':
       // Immediate ask — works from any non-busy state, including hidden.
       if (busy(state.phase)) return state;
-      return freshAsk(state, QUICK_ASSIST_QUESTION, true, ev.at);
+      return freshAsk(state, QUICK_ASSIST_QUESTION, true, ev.at, ev.gen);
 
     case 'SUBMIT': {
       if (busy(state.phase) || state.phase === 'hidden') return state;
       const q = ev.question.trim();
       if (q === '') return state;
-      return freshAsk(state, q, false, ev.at);
+      return freshAsk(state, q, false, ev.at, ev.gen);
     }
 
     case 'ASK_STARTED':
-      if (state.phase !== 'asking') return state;
+      // Busy, not just asking: on the fallback path below a delta may have
+      // arrived first, and the chips must still report what was captured.
+      if (ev.gen !== state.gen || !busy(state.phase)) return state;
       return {
         ...state,
         phase: 'streaming',
@@ -115,11 +144,11 @@ export function reduce(state: OverlayState, ev: OverlayEvent): OverlayState {
     case 'DELTA':
       // First delta may arrive before ask_started on the fallback
       // (non-streaming) provider path — accept from asking too.
-      if (!busy(state.phase)) return state;
+      if (ev.gen !== state.gen || !busy(state.phase)) return state;
       return { ...state, phase: 'streaming', answer: state.answer + ev.text };
 
     case 'DONE':
-      if (!busy(state.phase)) return state;
+      if (ev.gen !== state.gen || !busy(state.phase)) return state;
       return {
         ...state,
         phase: 'answered',
@@ -129,15 +158,21 @@ export function reduce(state: OverlayState, ev: OverlayEvent): OverlayState {
       };
 
     case 'ERROR':
-      if (state.phase === 'hidden') return state;
+      if (ev.gen !== state.gen) return state;
       return { ...state, phase: 'error', error: ev.message };
+
+    case 'NEW_CHAT':
+      // Clears the screen and the next ask's follow_up flag. Not while an
+      // ask runs: its stream would have nothing left to land on.
+      if (busy(state.phase) || state.phase === 'hidden') return state;
+      return { ...initialState, phase: 'ready' };
 
     case 'DISMISS':
       // Dismiss hides the window; a completed answer is kept (re-summon
       // shows it, and engine-side ask history still enables follow-ups).
-      // Dismissing mid-stream abandons the overlay's view of the ask —
-      // later deltas find phase 'hidden' and are dropped; the engine
-      // finishes the ask regardless and mirrors it on /ws/live.
-      return { ...state, phase: 'hidden' };
+      // Dismissing mid-stream abandons the ask: the Rust side drops the
+      // stream, and clearing gen makes anything already in flight stale.
+      // The engine finishes the ask regardless and mirrors it on /ws/live.
+      return { ...state, phase: 'hidden', gen: null };
   }
 }

@@ -39,6 +39,8 @@ reqwest = { workspace = true }
 # connection, to prove an MCP read refuses rather than disclosing content it
 # could not write to the egress ledger.
 rusqlite = { workspace = true }
+# Unit tests build a `CaptureConsumer`, to drive the drain thread with no device.
+rtrb = { workspace = true }
 tokio-tungstenite = { workspace = true }
 async-trait = { workspace = true }
 wiremock = { workspace = true }

@@ -108,7 +108,6 @@ async fn main() {
         let start = Instant::now();
         let mut fed_batches = 0u64;
         let mut done_feeding = false;
-        let mut outstanding: i64 = 0;
         let total_batches = samples.len().div_ceil(160);
 
         loop {
@@ -122,16 +121,7 @@ async fn main() {
                 let hi = (lo + 160).min(samples.len());
                 let wall_ms = start.elapsed().as_millis() as u64;
                 for chunk in pipeline.push_batch(&samples[lo..hi], wall_ms) {
-                    let feed = match chunk.kind {
-                        auricle_core::ChunkKind::Final => {
-                            outstanding += 1;
-                            true
-                        }
-                        auricle_core::ChunkKind::Interim => outstanding <= 1,
-                    };
-                    if feed {
-                        session.feed(chunk).await.expect("feed");
-                    }
+                    session.feed(chunk).await.expect("feed");
                 }
                 fed_batches += 1;
                 if fed_batches as usize >= total_batches {
@@ -157,7 +147,6 @@ async fn main() {
                         partial_lat.push(now.saturating_sub(seg.t_end_ms));
                     }
                     SttEvent::Final(seg) => {
-                        outstanding -= 1;
                         finals_count += 1;
                         final_lat.push(now.saturating_sub(seg.t_end_ms));
                     }

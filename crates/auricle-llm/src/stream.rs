@@ -90,13 +90,19 @@ pub struct FrameOut {
     /// Usage when this frame carried it (Groq: on the finish chunk even
     /// without `stream_options`; both: on the `choices: []` usage frame).
     pub usage: Option<TokenUsage>,
+    /// Message from a mid-stream `{"error": ...}` frame. The HTTP status was
+    /// already 200 by then, so this is the only sign the answer failed.
+    pub error: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct StreamFrame {
     #[serde(default)]
     choices: Vec<StreamChoice>,
-    usage: Option<TokenUsage>,
+    /// Loose on purpose: usage is a nicety, so a frame missing a field must
+    /// cost the usage figures, never the answer.
+    usage: Option<serde_json::Value>,
+    error: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -119,7 +125,8 @@ struct StreamDelta {
 pub fn parse_stream_frame(payload: &str) -> Result<FrameOut, serde_json::Error> {
     let frame: StreamFrame = serde_json::from_str(payload)?;
     let mut out = FrameOut {
-        usage: frame.usage,
+        usage: frame.usage.and_then(|u| serde_json::from_value(u).ok()),
+        error: frame.error.as_ref().map(error_message),
         ..FrameOut::default()
     };
     if let Some(choice) = frame.choices.into_iter().next() {
@@ -133,9 +140,50 @@ pub fn parse_stream_frame(payload: &str) -> Result<FrameOut, serde_json::Error> 
     Ok(out)
 }
 
+/// `{"error": {"message": "..."}}` (OpenAI shape) or `{"error": "..."}`.
+fn error_message(error: &serde_json::Value) -> String {
+    error
+        .get("message")
+        .unwrap_or(error)
+        .as_str()
+        .map_or_else(|| error.to_string(), str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_usage_frame_costs_the_usage_not_the_answer() {
+        let out = parse_stream_frame(
+            r#"{"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":5}}"#,
+        )
+        .unwrap();
+        assert_eq!(out.delta.as_deref(), Some("hi"));
+        assert_eq!(out.usage, None);
+    }
+
+    #[test]
+    fn error_frames_are_reported_in_both_shapes() {
+        let nested = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
+        assert_eq!(
+            parse_stream_frame(nested).unwrap().error.as_deref(),
+            Some("overloaded")
+        );
+        let flat = r#"{"error":"model unloaded"}"#;
+        assert_eq!(
+            parse_stream_frame(flat).unwrap().error.as_deref(),
+            Some("model unloaded")
+        );
+        assert_eq!(
+            parse_stream_frame(r#"{"error":{"code":500}}"#)
+                .unwrap()
+                .error
+                .as_deref(),
+            Some(r#"{"code":500}"#),
+            "an unknown shape still reports something"
+        );
+    }
 
     fn fixture_bytes(name: &str) -> Vec<u8> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

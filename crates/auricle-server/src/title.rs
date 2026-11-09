@@ -82,19 +82,28 @@ pub async fn autotitle_session(
     if session.meta["auto_title"] != serde_json::Value::Bool(true) {
         return; // user named it (or a pre-feature session)
     }
-    let Ok(segments) = store.get_segments(&session_id) else {
+    let segments = {
+        let (store, id) = (store.clone(), session_id.clone());
+        crate::api::off_runtime(move || store.get_segments(&id)).await
+    };
+    let Ok(segments) = segments else {
         return;
     };
     if segments.is_empty() {
         return; // nothing was said; the placeholder is honest
     }
 
-    let title = llm_title(&cfg, &store, &segments)
+    let title = llm_title(&cfg, &store, &session_id, &segments)
         .await
         .or_else(|| title_from_words(&segments));
     let Some(title) = title else { return };
 
-    if store.rename_session(&session_id, &title).unwrap_or(false) {
+    // The LLM call can run for LLM_TIMEOUT: only a session that is still
+    // auto-titled gets this name, or it would replace the user's own.
+    if store
+        .rename_auto_titled(&session_id, &title)
+        .unwrap_or(false)
+    {
         let _ = events.send(WsEvent::SessionUpdated {
             session: session_id,
             title,
@@ -102,12 +111,37 @@ pub async fn autotitle_session(
     }
 }
 
-async fn llm_title(cfg: &Config, store: &Store, segments: &[SegmentRow]) -> Option<String> {
+/// Cut `s` to at most `max` characters. `String::truncate` takes a byte index
+/// and panics inside a multibyte character.
+fn truncate_chars(s: &mut String, max: usize) {
+    if let Some((end, _)) = s.char_indices().nth(max) {
+        s.truncate(end);
+    }
+}
+
+async fn llm_title(
+    cfg: &Config,
+    store: &Store,
+    session_id: &str,
+    segments: &[SegmentRow],
+) -> Option<String> {
     let mut cfg = cfg.clone();
     crate::api::overlay_llm_settings(&mut cfg, store);
-    let provider = auricle_llm::create_llm_provider(&cfg.llm.provider, &cfg).ok()?;
+    let provider_id = cfg.llm.provider.clone();
+    let provider = auricle_llm::create_llm_provider(&provider_id, &cfg).ok()?;
     let mut transcript = crate::export::render_transcript_text(segments);
-    transcript.truncate(MAX_PROMPT_CHARS);
+    truncate_chars(&mut transcript, MAX_PROMPT_CHARS);
+    // Egress ledger: the opening of the transcript goes to the titling LLM
+    // (or stays local). Metadata only, as for summaries.
+    crate::egress::record(
+        store,
+        Some(session_id),
+        "title",
+        crate::egress::llm_egress(&provider_id, &cfg),
+        &provider_id,
+        Some(transcript.chars().count() as i64),
+        Some("auto-title"),
+    );
     let raw = tokio::time::timeout(LLM_TIMEOUT, provider.complete(TITLE_SYSTEM, &transcript))
         .await
         .ok()?
@@ -128,6 +162,19 @@ mod tests {
             text: text.into(),
             provider: "x".into(),
         }
+    }
+
+    #[test]
+    fn prompt_cap_counts_characters_and_survives_multibyte_text() {
+        // Byte 4000 falls inside a 'é': a byte-indexed cut panics here.
+        let mut text = format!("a{}", "é".repeat(5_000));
+        truncate_chars(&mut text, MAX_PROMPT_CHARS);
+        assert_eq!(text.chars().count(), MAX_PROMPT_CHARS);
+        assert!(text.ends_with('é'));
+
+        let mut short = "日本語".to_string();
+        truncate_chars(&mut short, MAX_PROMPT_CHARS);
+        assert_eq!(short, "日本語");
     }
 
     #[test]

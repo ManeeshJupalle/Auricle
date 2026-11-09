@@ -1,13 +1,27 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { SecretField } from '../components/SecretField';
+import { canPick, firstUseNote } from '../components/Sidebar';
+import { useAuricle } from '../store';
 import { applyTheme, currentTheme, type Theme } from '../theme';
+import { providerName } from '../words';
 import type {
   DeviceInfo,
   LlmProviderInfo,
   ProviderInfo,
   Settings as SettingsMap,
 } from '../types';
+
+/** The days a retention field holds, or null for anything but a whole number. */
+export function parseRetentionDays(text: string): number | null {
+  const days = Number(text.trim());
+  return /^\d+$/.test(text.trim()) && Number.isSafeInteger(days) ? days : null;
+}
+
+/** True when a change would delete meetings the current setting keeps. */
+export function retentionDeletesMore(next: number, current: number): boolean {
+  return next > 0 && (current === 0 || next < current);
+}
 
 /**
  * Settings persist via PUT /api/v1/settings and overlay the daemon's TOML
@@ -20,6 +34,11 @@ export function Settings() {
   const [settings, setSettings] = useState<SettingsMap>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What the field shows while it is being edited; null shows the saved value.
+  const [retentionDraft, setRetentionDraft] = useState<string | null>(null);
+  const [backingUp, setBackingUp] = useState(false);
+  const [backupPath, setBackupPath] = useState<string | null>(null);
+  const settingsChanged = useAuricle((s) => s.settingsChanged);
 
   useEffect(() => {
     Promise.all([api.devices(), api.providers(), api.settings()])
@@ -34,6 +53,7 @@ export function Settings() {
 
   // Re-read provider/LLM readiness after a key is stored or removed.
   const reloadProviders = () => {
+    settingsChanged();
     api
       .providers()
       .then((p) => {
@@ -49,17 +69,17 @@ export function Settings() {
   const sttReady = (id: string) => providers.find((p) => p.id === id)?.ready ?? false;
   const llmReady = (id: string) => llm.find((p) => p.id === id)?.ready ?? false;
   const keySlots = [
-    { id: 'deepgram', label: 'Deepgram', used: 'streaming STT', ready: sttReady('deepgram') },
+    { id: 'deepgram', label: 'Deepgram', used: 'live transcription', ready: sttReady('deepgram') },
     {
       id: 'groq',
       label: 'Groq',
-      used: 'batch STT + summaries & answers',
+      used: 'transcription, summaries, and answers',
       ready: sttReady('groq-whisper') || llmReady('groq'),
     },
     {
       id: 'openai',
       label: 'OpenAI-compatible',
-      used: 'batch STT + summaries & answers',
+      used: 'transcription, summaries, and answers',
       ready: sttReady('openai-compat') || llmReady('openai-compat'),
     },
   ];
@@ -70,6 +90,7 @@ export function Settings() {
       .putSettings(patch)
       .then((all) => {
         setSettings(all);
+        settingsChanged();
         const key = Object.keys(patch)[0];
         setSaved(key ?? null);
         setTimeout(() => setSaved(null), 1500);
@@ -79,6 +100,35 @@ export function Settings() {
 
   const str = (key: string, fallback = 'default'): string =>
     typeof settings[key] === 'string' ? (settings[key] as string) : fallback;
+
+  const retentionDays = typeof settings.retention_days === 'number' ? settings.retention_days : 0;
+
+  const saveRetention = () => {
+    const days = retentionDraft === null ? null : parseRetentionDays(retentionDraft);
+    setRetentionDraft(null);
+    if (days === null || days === retentionDays) return;
+    if (
+      retentionDeletesMore(days, retentionDays) &&
+      !window.confirm(
+        `Permanently delete every meeting older than ${days} ${days === 1 ? 'day' : 'days'}, ` +
+          'with its transcript, summaries, and audio? This cannot be undone.',
+      )
+    ) {
+      return;
+    }
+    save({ retention_days: days });
+  };
+
+  const backUp = () => {
+    setBackingUp(true);
+    setBackupPath(null);
+    setError(null);
+    api
+      .backup()
+      .then((b) => setBackupPath(b.path))
+      .catch((e) => setError(`The backup failed: ${(e as Error).message}`))
+      .finally(() => setBackingUp(false));
+  };
 
   const mics = devices.filter((d) => d.kind === 'input');
   const loops = devices.filter((d) => d.kind === 'loopback');
@@ -92,7 +142,10 @@ export function Settings() {
 
   return (
     <div className="settings">
-      {error && <div className="banner warn">{error}</div>}
+      <h1 className="page-title">Settings</h1>
+      <div className="status-slot" role="status">
+        {error && <div className="banner">{error}</div>}
+      </div>
 
       <section className="panel">
         <h2>Appearance</h2>
@@ -112,14 +165,14 @@ export function Settings() {
               Light
             </button>
           </div>
-          {saved === 'ui_theme' && <span className="saved">saved</span>}
+          {saved === 'ui_theme' && <span className="saved">Saved</span>}
         </label>
       </section>
 
       <section className="panel">
         <h2>Audio devices</h2>
         <label>
-          <span>Microphone (“You”)</span>
+          <span>Your microphone</span>
           <select value={str('mic_device')} onChange={(e) => save({ mic_device: e.target.value })}>
             <option value="default">System default</option>
             {mics.map((d) => (
@@ -128,10 +181,10 @@ export function Settings() {
               </option>
             ))}
           </select>
-          {saved === 'mic_device' && <span className="saved">saved</span>}
+          {saved === 'mic_device' && <span className="saved">Saved</span>}
         </label>
         <label>
-          <span>System audio (“Them”)</span>
+          <span>What your computer plays</span>
           <select
             value={str('loopback_device')}
             onChange={(e) => save({ loopback_device: e.target.value })}
@@ -143,64 +196,97 @@ export function Settings() {
               </option>
             ))}
           </select>
-          {saved === 'loopback_device' && <span className="saved">saved</span>}
+          {saved === 'loopback_device' && <span className="saved">Saved</span>}
         </label>
-        <p className="dim note">
-          System audio is captured via WASAPI loopback on the output device — no audio while
-          nothing plays is normal.
+        <p className="note">
+          The microphone is You and what your computer plays is Them. Them stays quiet while nothing
+          is playing, and that is normal.
         </p>
       </section>
 
       <section className="panel">
         <h2>Transcription</h2>
         <label>
-          <span>Default provider</span>
+          <span>Transcribe with</span>
           <select
             value={str('default_provider', providers.find((p) => p.default)?.id ?? '')}
             onChange={(e) => save({ default_provider: e.target.value })}
           >
             {providers.map((p) => (
-              <option key={p.id} value={p.id} disabled={!p.ready}>
-                {p.id} ({p.kind}){p.ready ? '' : ' — not ready'}
+              <option key={p.id} value={p.id} disabled={!canPick(p)}>
+                {providerName(p.id)} {p.kind === 'local' ? 'on this machine' : 'in the cloud'}
+                {p.ready ? '' : firstUseNote(p) ? ', downloads on first use' : ', not ready'}
               </option>
             ))}
           </select>
-          {saved === 'default_provider' && <span className="saved">saved</span>}
+          {saved === 'default_provider' && <span className="saved">Saved</span>}
         </label>
+        {providers.some(firstUseNote) && (
+          <p className="note">
+            The local model isn&rsquo;t on this machine yet. It downloads the first time you record
+            with Whisper, then transcription runs here with nothing sent out.
+          </p>
+        )}
         <label>
-          <span>Local whisper model</span>
+          <span>Local Whisper model</span>
           <select
             value={str('whisper_model', 'base.en')}
             onChange={(e) => save({ whisper_model: e.target.value })}
           >
-            <option value="base.en">base.en — keeps up with live speech</option>
-            <option value="small.en">small.en — more accurate; too slow for live on most laptops</option>
+            <option value="base.en">base.en: English, keeps up with live speech</option>
+            <option value="small.en">small.en: English, more accurate, too slow for live on most laptops</option>
+            <option value="base">base: any language</option>
+            <option value="small">small: any language, too slow for live on most laptops</option>
           </select>
-          {saved === 'whisper_model' && <span className="saved">saved</span>}
+          {saved === 'whisper_model' && <span className="saved">Saved</span>}
         </label>
         <label>
-          <span>Summaries & titles LLM</span>
+          <span>Language</span>
+          <select
+            value={str('stt_language', 'en')}
+            onChange={(e) => save({ stt_language: e.target.value })}
+          >
+            <option value="en">English</option>
+            <option value="auto">Detect automatically</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="pt">Portuguese</option>
+            <option value="hi">Hindi</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+          </select>
+          {saved === 'stt_language' && <span className="saved">Saved</span>}
+        </label>
+        {str('stt_language', 'en') !== 'en' && str('whisper_model', 'base.en').endsWith('.en') && (
+          <p className="note">
+            The .en models only understand English. With Whisper, pick base or small for other
+            languages.
+          </p>
+        )}
+        <label>
+          <span>Summaries and titles</span>
           <select
             value={str('llm_provider', 'ollama')}
             onChange={(e) => save({ llm_provider: e.target.value })}
           >
-            <option value="ollama">ollama — local, private</option>
-            <option value="groq">groq — cloud, fast</option>
-            <option value="openai-compat">openai-compat</option>
+            <option value="ollama">Ollama on this machine</option>
+            <option value="groq">Groq in the cloud</option>
+            <option value="openai-compat">OpenAI-compatible in the cloud</option>
           </select>
-          {saved === 'llm_provider' && <span className="saved">saved</span>}
+          {saved === 'llm_provider' && <span className="saved">Saved</span>}
         </label>
         <label>
-          <span>Ollama model (summaries)</span>
+          <span>Ollama model</span>
           <input
             type="text"
             defaultValue={str('ollama_model', '')}
-            placeholder="e.g. qwen3:8b — a model from `ollama list`"
+            placeholder="A model you have installed, like qwen3:8b"
             onBlur={(e) => {
               if (e.target.value.trim()) save({ ollama_model: e.target.value.trim() });
             }}
           />
-          {saved === 'ollama_model' && <span className="saved">saved</span>}
+          {saved === 'ollama_model' && <span className="saved">Saved</span>}
         </label>
         <div className="keys">
           <span>Cloud API keys</span>
@@ -214,10 +300,9 @@ export function Settings() {
               onChanged={reloadProviders}
             />
           ))}
-          <p className="dim note">
-            Keys are stored in the OS credential store (Windows Credential Manager), never in
-            config files, and are never displayed. An environment variable of the same name still
-            takes precedence if set.
+          <p className="note">
+            Keys are kept in Windows Credential Manager, never in a config file, and are never shown
+            again. An environment variable of the same name still wins if one is set.
           </p>
         </div>
       </section>
@@ -230,12 +315,12 @@ export function Settings() {
             checked={settings['retain_raw_audio'] === true}
             onChange={(e) => save({ retain_raw_audio: e.target.checked })}
           />
-          <span>Keep raw audio recordings (per-channel 16 kHz WAVs beside the database)</span>
-          {saved === 'retain_raw_audio' && <span className="saved">saved</span>}
+          <span>Keep audio recordings</span>
+          {saved === 'retain_raw_audio' && <span className="saved">Saved</span>}
         </label>
-        <p className="dim note">
-          Off by default. When enabled, future sessions store their audio locally and note the
-          paths in session metadata.
+        <p className="note">
+          Off by default. Future meetings keep their audio on this machine, as two 16 kHz WAV files
+          beside the database, and you can play them back from the transcript.
         </p>
         <label className="toggle">
           <input
@@ -243,13 +328,13 @@ export function Settings() {
             checked={settings['redact_pii'] === true}
             onChange={(e) => save({ redact_pii: e.target.checked })}
           />
-          <span>Redact PII from transcripts (emails, cards, SSNs, phone numbers, IPs, API keys)</span>
-          {saved === 'redact_pii' && <span className="saved">saved</span>}
+          <span>Remove personal details from transcripts</span>
+          {saved === 'redact_pii' && <span className="saved">Saved</span>}
         </label>
-        <p className="dim note">
-          Off by default. When enabled, matches are replaced with a visible label (e.g. [email])
-          before the text is stored or sent to any cloud provider. Applies to future sessions and
-          covers transcript text only.
+        <p className="note">
+          Off by default. Emails, card numbers, SSNs, phone numbers, IP addresses, and API keys are
+          replaced with a label like [email] before the text is stored or sent to a cloud provider.
+          Applies to future meetings, and to transcript text only.
         </p>
         <label className="toggle">
           <input
@@ -257,14 +342,51 @@ export function Settings() {
             checked={settings['mcp_enabled'] === true}
             onChange={(e) => save({ mcp_enabled: e.target.checked })}
           />
-          <span>Let local AI agents read your transcripts (MCP server at /mcp)</span>
-          {saved === 'mcp_enabled' && <span className="saved">saved</span>}
+          <span>Let local AI agents read your transcripts</span>
+          {saved === 'mcp_enabled' && <span className="saved">Saved</span>}
         </label>
-        <p className="dim note">
-          Off by default. When enabled, any agent on this machine that speaks MCP — Claude Code,
-          Cursor — can read your live and past transcripts. Read-only: agents cannot start a
-          recording, see your screen, or run a model. Every read is listed in the egress ledger,
-          but where an agent sends what it read is outside Auricle&rsquo;s view.
+        <p className="note">
+          Off by default. Any agent on this machine that speaks MCP can read your live and past
+          transcripts at <span className="mono">/mcp</span>. Agents cannot start a recording, see
+          your screen, or run a model. Every read appears on the Privacy page, but where an agent
+          sends what it read is out of Auricle&rsquo;s sight.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>Your data</h2>
+        <label className="has-suffix">
+          <span>Delete meetings after</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            className="retention-days"
+            value={retentionDraft ?? String(retentionDays)}
+            onChange={(e) => setRetentionDraft(e.target.value)}
+            onBlur={saveRetention}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+            }}
+          />
+          <span className="dim">days (0 keeps them forever)</span>
+          {saved === 'retention_days' && <span className="saved">Saved</span>}
+        </label>
+        <p className="note">
+          Off by default. With a number of days set, Auricle permanently deletes older meetings,
+          with their transcripts, summaries, and audio, at every start and once a day. There is no
+          undo and no trash. A meeting in progress is never touched.
+        </p>
+        <div className="backup-row">
+          <button className="btn" onClick={backUp} disabled={backingUp}>
+            {backingUp ? 'Backing up…' : 'Back up database'}
+          </button>
+          <span className="mono dim" role="status">
+            {backupPath && `Saved to ${backupPath}`}
+          </span>
+        </div>
+        <p className="note">
+          Writes a copy of the database to a backups folder beside it. Audio files are not part of
+          the backup.
         </p>
       </section>
     </div>

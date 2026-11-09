@@ -1,11 +1,10 @@
 //! Overlay configuration: `%LOCALAPPDATA%\auricle\overlay.toml`.
 //!
-//! The engine reads no config file by default (`auricle serve` runs on
-//! built-in defaults unless --config is passed), so the overlay keeps its
-//! own small TOML next to the engine's data. Defaults mirror the
-//! `[copilot]` section of the architecture. Missing file or unparseable
-//! content falls back to defaults — a broken config must never keep the
-//! copilot from starting.
+//! The engine reads `auricle.toml` from this same directory when one exists.
+//! The overlay doesn't share it: it keeps its own small TOML alongside.
+//! Defaults mirror the `[copilot]` section of the architecture. Missing file
+//! or unparseable content falls back to defaults — a broken config must never
+//! keep the copilot from starting.
 
 use serde::Deserialize;
 
@@ -67,6 +66,12 @@ impl Default for OverlaySection {
     }
 }
 
+/// `%LOCALAPPDATA%\auricle`: the engine's data root, which the overlay's
+/// own files share.
+pub fn data_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|base| std::path::PathBuf::from(base).join("auricle"))
+}
+
 impl OverlayConfig {
     pub fn parse(text: &str) -> OverlayConfig {
         toml::from_str(text).unwrap_or_default()
@@ -75,13 +80,10 @@ impl OverlayConfig {
     /// Load from `%LOCALAPPDATA%\auricle\overlay.toml`; defaults when the
     /// file is absent or invalid.
     pub fn load() -> OverlayConfig {
-        let Some(base) = std::env::var_os("LOCALAPPDATA") else {
+        let Some(dir) = data_dir() else {
             return OverlayConfig::default();
         };
-        let path = std::path::PathBuf::from(base)
-            .join("auricle")
-            .join("overlay.toml");
-        match std::fs::read_to_string(path) {
+        match std::fs::read_to_string(dir.join("overlay.toml")) {
             Ok(text) => OverlayConfig::parse(&text),
             Err(_) => OverlayConfig::default(),
         }

@@ -121,8 +121,9 @@ pub async fn create_provider(
                     ))
                 })?;
             let path = crate::model::ensure_model(model, data_dir).await?;
+            let use_gpu = cfg.stt.whisper_local.use_gpu;
             let provider = tokio::task::spawn_blocking(move || {
-                crate::whisper_local::WhisperLocalProvider::load(&path)
+                crate::whisper_local::WhisperLocalProvider::load_with(&path, use_gpu)
             })
             .await
             .map_err(|e| Error::Stt(format!("model load task failed: {e}")))??;

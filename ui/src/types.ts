@@ -11,8 +11,16 @@ export type WsEvent =
       text: string;
       latency_ms?: number;
     }
+  | { type: 'partial_cleared'; session: string; channel: string }
   | { type: 'vu'; session: string; channel: string; rms: number }
   | { type: 'model_download_started'; session: string; model: string; size_mb: number }
+  | {
+      type: 'model_download_progress';
+      session: string;
+      model: string;
+      done_mb: number;
+      size_mb: number;
+    }
   | { type: 'session_started'; session: string; title: string; stt_provider: string }
   | { type: 'session_stopped'; session: string }
   | { type: 'session_updated'; session: string; title: string }
@@ -62,11 +70,49 @@ export interface SessionSummary {
   meta: Record<string, unknown>;
 }
 
+/** One page of the session list; `total` counts every session. */
+export interface SessionPage {
+  sessions: SessionSummary[];
+  total: number;
+}
+
 export interface SummaryInfo {
   id: number;
   template: string;
   model: string;
   content: string;
+  created_at: number;
+}
+
+/** One line of a transcript that a search found. */
+export interface SearchMatch {
+  session_id: string;
+  session_title: string;
+  /** Unix seconds. */
+  started_at: number;
+  /** The same channel number as SegmentInfo: 0 is the microphone. */
+  channel: number;
+  speaker: string;
+  t_start_ms: number;
+  t_end_ms: number;
+  text: string;
+}
+
+/** One page of matches, most recent meeting first; `total` counts them all. */
+export interface SearchPage {
+  matches: SearchMatch[];
+  total: number;
+}
+
+/** A copilot question kept by `copilot.retain_context`. */
+export interface AskInfo {
+  id: number;
+  session_id: string | null;
+  question: string;
+  /** JSON of what was on screen, or null when the ask took no screen text. */
+  screen_context: string | null;
+  answer: string;
+  provider: string;
   created_at: number;
 }
 
@@ -125,7 +171,7 @@ export interface EgressEntry {
   /** Provider name, or for 'agent' rows the MCP client's self-reported name. */
   provider: string;
   host: string | null;
-  /** 'audio' | 'prompt' | 'summary' | one of the MCP read kinds */
+  /** 'audio' | 'prompt' | 'summary' | 'title' | one of the MCP read kinds */
   kind: string;
   /** Rough size (chars for text; null for audio). */
   items: number | null;

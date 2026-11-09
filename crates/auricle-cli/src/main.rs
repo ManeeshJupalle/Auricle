@@ -26,7 +26,8 @@ const TARGET_RATE_HZ: u32 = 16_000;
     about = "Local-first meeting transcription engine"
 )]
 struct Cli {
-    /// Path to auricle.toml (built-in defaults are used when omitted)
+    /// Path to auricle.toml (default: auricle.toml in the data directory if
+    /// present, otherwise built-in defaults)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
@@ -55,6 +56,9 @@ enum Command {
         /// Whisper model for whisper-local: base.en | small.en
         #[arg(long)]
         model: Option<String>,
+        /// Spoken language hint, e.g. de (defaults to [stt].language from config)
+        #[arg(long)]
+        language: Option<String>,
     },
     /// List STT providers and their readiness (model/key present)
     Providers,
@@ -87,9 +91,14 @@ fn main() -> ExitCode {
         Command::Capture { seconds, out_dir } => {
             cmd_capture(cli.config.as_deref(), seconds, &out_dir)
         }
-        Command::Record { stt, model } => record::run(record::RecordArgs {
+        Command::Record {
             stt,
             model,
+            language,
+        } => record::run(record::RecordArgs {
+            stt,
+            model,
+            language,
             config: cli.config,
         }),
         Command::Providers => cmd_providers(cli.config.as_deref()),
@@ -106,11 +115,19 @@ fn main() -> ExitCode {
     }
 }
 
-fn load_config(path: Option<&Path>) -> Result<Config> {
-    match path {
-        Some(p) => Config::load(p),
-        None => Ok(Config::default()),
+/// `required` is what this command can't run without: see [`Config::discover`].
+fn load_config(path: Option<&Path>, required: &[&str]) -> Result<Config> {
+    // An unavailable data root only means there is no default file to find.
+    let data_root = auricle_server::default_data_root().ok();
+    let loaded = Config::discover(path, data_root.as_deref(), required)?;
+    // A file can change where audio goes, so it never takes effect unannounced.
+    if let Some(path) = &loaded.path {
+        eprintln!("using config {}", path.display());
     }
+    for warning in loaded.warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(loaded.config)
 }
 
 fn cmd_devices() -> Result<()> {
@@ -156,7 +173,7 @@ fn cmd_devices() -> Result<()> {
 }
 
 fn cmd_providers(config: Option<&Path>) -> Result<()> {
-    let cfg = load_config(config)?;
+    let cfg = load_config(config, &[])?;
     let data_dir = auricle_stt::default_data_dir()?;
     let statuses = auricle_stt::provider_statuses(&cfg, &data_dir);
 
@@ -175,7 +192,14 @@ fn cmd_providers(config: Option<&Path>) -> Result<()> {
 }
 
 fn cmd_serve(config: Option<&Path>, bind: Option<String>) -> Result<()> {
-    let cfg = load_config(config)?;
+    // Everything else is only used once a session or request reaches it, and
+    // reports its own error there. The daemon has to be up to say so.
+    let required: &[&str] = if bind.is_some() {
+        &[]
+    } else {
+        &["server.bind"]
+    };
+    let cfg = load_config(config, required)?;
     let data_root = auricle_server::default_data_root()?;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(auricle_server::serve(cfg, data_root, bind))
@@ -299,7 +323,7 @@ fn spawn_drain(
 }
 
 fn cmd_capture(config: Option<&Path>, seconds: u64, out_dir: &Path) -> Result<()> {
-    let cfg = load_config(config)?;
+    let cfg = load_config(config, &["audio."])?;
     std::fs::create_dir_all(out_dir)?;
 
     let (mic_handle, mic_consumer) = start_mic(&cfg.audio.mic_device)?;
@@ -409,4 +433,30 @@ fn write_wav(path: &Path, sample_rate_hz: u32, samples: &[f32]) -> Result<()> {
         .finalize()
         .map_err(|e| Error::Io(std::io::Error::other(format!("{}: {e}", path.display()))))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_takes_a_language() {
+        let cli = Cli::try_parse_from(["auricle", "record", "--language", "de"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Record { language: Some(l), .. } if l == "de"
+        ));
+    }
+
+    /// Config validation can't see these crates, so it keeps its own lists.
+    /// A provider missing from them would be rejected as a typo.
+    #[test]
+    fn config_validation_knows_every_registered_provider() {
+        for id in auricle_stt::provider_ids() {
+            assert!(auricle_core::STT_PROVIDER_IDS.contains(id), "{id}");
+        }
+        for id in auricle_llm::llm_provider_ids() {
+            assert!(auricle_core::LLM_PROVIDER_IDS.contains(id), "{id}");
+        }
+    }
 }
