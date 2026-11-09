@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/ManeeshJupalle/Auricle/blob/main/SECURITY.md#reporting-a-vulnerability
+    about: Please report security problems privately, not in a public issue. See SECURITY.md.
+  - name: API reference
+    url: https://github.com/ManeeshJupalle/Auricle/blob/main/docs/API.md
+    about: Every REST, WebSocket, and MCP endpoint, with real captured examples.

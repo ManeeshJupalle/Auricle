@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest something Auricle should do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/ManeeshJupalle/Auricle#roadmap) and [limitations](https://github.com/ManeeshJupalle/Auricle#limitations-honest-ones) first; your idea may already be there. Auricle is Windows-only today, and some things are out of scope by design: a meeting bot, hiding the overlay from screen capture, and capturing the screen without a key press.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+      description: How you picture it working. Sketches welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: privacy
+    attributes:
+      label: Does it send anything off the machine?
+      description: Anything that does must be opt-in and show up on the egress ledger.
+      options:
+        - No, it stays local
+        - Yes, it would talk to a cloud service
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself.
