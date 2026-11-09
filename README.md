@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Auricle transcribes your calls on your own PC, without a bot joining them, as two voices
+  Auricle transcribes your calls on your own PC by default, without a bot joining them, as two voices
   (you and them), summarizes them with a local or cloud model, answers questions about the
   meeting you're in, and types what you dictate into any app.
 </p>
@@ -115,7 +115,7 @@ release.)*
 <img src=".github/assets/privacy.webp" width="900" alt="Auricle's Privacy page: a headline saying what left the machine and where, then every ledger row marked as stayed here, read by a local agent, or sent off the machine">
 
 The Privacy page lists every audio stream, prompt, summary, and auto-title the
-engine sent to a cloud provider, with where it went and roughly how big it was,
+daemon sent to a cloud provider, with where it went and roughly how big it was,
 never what it said, and every read by a local agent over MCP. Work done locally
 is listed too, so a quiet ledger is never a gap.
 
