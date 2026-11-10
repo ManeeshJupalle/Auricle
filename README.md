@@ -106,8 +106,7 @@ anything, and `Esc` dismisses it.
 Hold `Ctrl+Shift+D` in any app, talk, and let go: the text is pasted where your
 cursor was, transcribed by local `whisper-local` unless you choose otherwise. A
 small pill says when it's listening and when it's done. Nothing is kept: no
-meeting, no transcript line, no audio file. *(On `main`; ships with the next
-release.)*
+meeting, no transcript line, no audio file.
 
 ### A ledger of everything that left your machine
 
