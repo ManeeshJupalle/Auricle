@@ -160,8 +160,8 @@ app, transcribed locally by default, with the source open.
 
 ## Get started
 
-**The app:** download `Auricle.Copilot_<version>_x64_en-US.msi` from the
-[latest release](https://github.com/ManeeshJupalle/Auricle/releases/latest).
+**The app:** download the `.msi` installer (`Auricle Copilot_<version>_x64_en-US.msi`)
+from the [latest release](https://github.com/ManeeshJupalle/Auricle/releases/latest).
 It installs per-user (no admin prompt) and bundles everything: the engine, the
 dashboard, and the copilot overlay. Launching it opens the dashboard in its own
 window, and a first-run setup picks your audio devices, fully-local or cloud

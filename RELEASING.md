@@ -95,9 +95,21 @@ zero-warning trust, higher cost, and token handling in CI.
 4. Smoke-test the MSI, then **publish** the draft. Publishing is what makes it
    the "latest" release the updater endpoint resolves to — existing installs
    pick it up on their next check.
+5. Check that the update downloads. `latest.json` points the updater at a
+   GitHub API URL (`api.github.com/repos/.../releases/assets/<id>`), not a
+   `releases/download` link, and only a published release serves it:
+
+   ```
+   curl -sIL -o /dev/null -w "%{http_code}" -H "Accept: application/octet-stream" <url from latest.json>
+   ```
+
+   should print `200`. These downloads count toward GitHub's unauthenticated
+   API limit of 60 requests an hour per IP address.
 
 To re-run a release by hand, start the workflow from the tag (Actions → Release
-→ Run workflow → "Use workflow from" → **Tags**). From a branch it fails.
+→ Run workflow → "Use workflow from" → **Tags**). From a branch it fails. Do it
+before the draft is published: the workflow won't upload into a published
+release, and opens a second draft instead.
 
 ## The release gate
 
