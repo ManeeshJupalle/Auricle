@@ -25,7 +25,7 @@ jobs:
       # to CMake.
       GGML_NATIVE: 'OFF'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nothing here pushes with git (tauri-action uses the REST API), so
           # don't leave the write token in .git/config during npm and cargo.
@@ -56,7 +56,7 @@ jobs:
           }
           if ($failed) { exit 1 }
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -137,7 +137,7 @@ jobs:
       # 3. Build the overlay, sign the updater artifacts, generate latest.json,
       #    and open a draft Release with the MSI + latest.json attached.
       - name: Build overlay and publish draft release
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signature (integrity of the update payload). Generate once
@@ -155,4 +155,4 @@ jobs:
           releaseName: 'Auricle Copilot ${{ github.ref_name }}'
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
