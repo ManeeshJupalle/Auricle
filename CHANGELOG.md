@@ -32,6 +32,11 @@ Your coding agent can read your meetings.
   to the release that fixes CVE-2026-119375 (rusqlite 0.41, RUSTSEC-2026-0459),
   and `rmcp` to 3.9, which fixes RUSTSEC-2026-0457, 0461 and 0462.
 
+### Changed
+
+- **Building the web UI needs Node ^22.12, ^24, or >=26.** The dashboard and
+  overlay moved to Vite 8 and Vitest 5, and Vitest 5 dropped Node 20.
+
 ### Fixed (external audit of the above)
 
 - **An MCP read is refused if the ledger can't be written.** The ledger write

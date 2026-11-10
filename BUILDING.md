@@ -8,7 +8,7 @@
 | Visual Studio Build Tools 2022 (C++ workload) | MSVC linker + whisper.cpp | VS installer |
 | CMake | whisper.cpp build | bundled with VS Build Tools, or `winget install Kitware.CMake` |
 | **libclang** | bindgen for whisper-rs | `pip install libclang` **or** `winget install LLVM.LLVM` |
-| Node.js ^20.19 or >=22.12 | building the web UI (Vite's requirement) | nodejs.org |
+| Node.js ^22.12, ^24, or >=26 | building and testing the web UI (Vitest's requirement) | nodejs.org |
 
 ### The libclang finding (read this if the build fails on whisper-rs-sys)
 
