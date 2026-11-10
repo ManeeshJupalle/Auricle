@@ -15,7 +15,7 @@ Questions in the issue are welcome.
 ### Dashboard only (no Rust toolchain)
 
 The dashboard is a Vite/React app in `ui/`. Its type check and tests need only
-Node (^20.19 or >=22.12):
+Node (^22.12, ^24, or >=26):
 
 ```
 cd ui
