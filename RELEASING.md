@@ -109,7 +109,7 @@ zero-warning trust, higher cost, and token handling in CI.
 To re-run a release by hand, start the workflow from the tag (Actions → Release
 → Run workflow → "Use workflow from" → **Tags**). From a branch it fails. Do it
 before the draft is published: the workflow won't upload into a published
-release, and opens a second draft instead.
+release: it fails or opens a separate draft.
 
 ## The release gate
 
