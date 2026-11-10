@@ -78,6 +78,9 @@ F32 mix format.
    frames. Additionally the sinc filter swallows its startup delay
    (`sinc_len × ratio / 2` ≈ 21 output frames ≈ 1.3 ms at 16 kHz) from the
    total; the unit tests assert output length to within exactly that bound.
+   (Since rubato 5 the partial chunk goes through `Indexing::partial_len`, and
+   the delay arrives at the start of the stream instead; `MonoResampler` drops
+   it there, so output still lines up with input, which a unit test pins.)
 
 5. **A silent mic can be *digitally* silent.** The default mic (wireless
    headset) produced exact 0.0 samples at 100 % frame coverage in unattended
@@ -108,6 +111,7 @@ with the available-device list (no panic).
   `default_output_config()`.
 - Ring buffers: `rtrb`, capacity 4 s of mono audio per channel; callbacks are
   allocation-free/lock-free (downmix + push + atomic drop counter only).
-- Resampler: rubato `SincFixedIn`, 1024-frame chunks, per-channel instance,
+- Resampler: rubato `SincFixedIn` (`Async` with `FixedAsync::Input` since
+  rubato 5), 1024-frame chunks, per-channel instance,
   flush-truncation as described in #4.
 - WAV output: 32-bit float, mono.

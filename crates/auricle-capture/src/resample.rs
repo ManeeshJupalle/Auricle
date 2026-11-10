@@ -15,6 +15,10 @@ pub struct MonoResampler {
     /// None when input and output rates match (passthrough).
     inner: Option<Async<f32>>,
     pending: Vec<f32>,
+    /// Output frames still to drop: the filter's startup delay. rubato 5
+    /// puts it at the start of the stream, so without this every resampled
+    /// stream would run late (1.3 ms at 48 kHz, 8 ms at 8 kHz).
+    delay: usize,
     pub in_rate_hz: u32,
     pub out_rate_hz: u32,
 }
@@ -41,6 +45,7 @@ impl MonoResampler {
             )
         };
         Ok(MonoResampler {
+            delay: inner.as_ref().map_or(0, |rs| rs.output_delay()),
             inner,
             pending: Vec::new(),
             in_rate_hz,
@@ -63,7 +68,7 @@ impl MonoResampler {
             let frames = rs
                 .process(&chunk, None)
                 .map_err(|e| Error::Resample(e.to_string()))?;
-            out.extend(frames.take_data());
+            skip_delay(&mut self.delay, &frames.take_data(), out);
             consumed += CHUNK_FRAMES;
         }
         self.pending.drain(..consumed);
@@ -76,6 +81,9 @@ impl MonoResampler {
     /// emits a full chunk of output, so the result is truncated to
     /// `round(pending * ratio)` frames to keep total output length equal to
     /// `input * ratio` (the trailing samples are filter response to padding).
+    /// With the startup delay dropped at the front, that leaves the stream's
+    /// last few milliseconds of real signal (about `sinc_len / 2` input
+    /// frames) still inside the filter, unemitted.
     pub fn finish(&mut self, out: &mut Vec<f32>) -> Result<()> {
         let Some(rs) = self.inner.as_mut() else {
             return Ok(());
@@ -89,11 +97,19 @@ impl MonoResampler {
                 .map_err(|e| Error::Resample(e.to_string()))?
                 .take_data();
             let take = expected.min(frames.len());
-            out.extend_from_slice(&frames[..take]);
+            skip_delay(&mut self.delay, &frames[..take], out);
             self.pending.clear();
         }
         Ok(())
     }
+}
+
+/// Append `frames` to `out`, minus whatever of the startup delay is still
+/// owed.
+fn skip_delay(delay: &mut usize, frames: &[f32], out: &mut Vec<f32>) {
+    let skip = (*delay).min(frames.len());
+    *delay -= skip;
+    out.extend_from_slice(&frames[skip..]);
 }
 
 /// One channel of samples as the buffer type rubato reads.
@@ -164,6 +180,25 @@ mod tests {
             (390..=410).contains(&crossings),
             "expected ~400 rising zero crossings, got {crossings}"
         );
+    }
+
+    #[test]
+    fn output_is_not_delayed() {
+        // An impulse must come out at the same moment it went in: the
+        // filter's startup delay is dropped, not passed on to the stream.
+        for (rate, at) in [(48_000, 3_000), (44_100, 4_410), (8_000, 1_000)] {
+            let mut input = vec![0.0; rate as usize];
+            input[at] = 1.0;
+            let out = resample_all(&input, rate, 16_000, 1024);
+            let peak = (0..out.len())
+                .max_by(|&a, &b| out[a].total_cmp(&out[b]))
+                .unwrap();
+            let expected = (at as f64 * 16_000.0 / rate as f64).round() as usize;
+            assert!(
+                peak.abs_diff(expected) <= 1,
+                "{rate} Hz: impulse came out at {peak}, expected {expected}"
+            );
+        }
     }
 
     #[test]
