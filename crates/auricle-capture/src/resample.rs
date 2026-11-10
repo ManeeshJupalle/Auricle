@@ -1,6 +1,8 @@
 use auricle_core::{Error, Result};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
 };
 
 /// Input frames fed to the sinc resampler per processing call.
@@ -11,7 +13,7 @@ const CHUNK_FRAMES: usize = 1024;
 /// is buffered internally so callers can feed arbitrary-sized slices.
 pub struct MonoResampler {
     /// None when input and output rates match (passthrough).
-    inner: Option<SincFixedIn<f32>>,
+    inner: Option<Async<f32>>,
     pending: Vec<f32>,
     pub in_rate_hz: u32,
     pub out_rate_hz: u32,
@@ -27,14 +29,14 @@ impl MonoResampler {
         } else {
             let params = SincInterpolationParameters {
                 sinc_len: 128,
-                f_cutoff: 0.95,
+                f_cutoff: Some(0.95),
                 interpolation: SincInterpolationType::Linear,
                 oversampling_factor: 128,
                 window: WindowFunction::BlackmanHarris2,
             };
             let ratio = out_rate_hz as f64 / in_rate_hz as f64;
             Some(
-                SincFixedIn::<f32>::new(ratio, 1.0, params, CHUNK_FRAMES, 1)
+                Async::<f32>::new_sinc(ratio, 1.0, &params, CHUNK_FRAMES, 1, FixedAsync::Input)
                     .map_err(|e| Error::Resample(e.to_string()))?,
             )
         };
@@ -57,11 +59,11 @@ impl MonoResampler {
         self.pending.extend_from_slice(input);
         let mut consumed = 0;
         while self.pending.len() - consumed >= CHUNK_FRAMES {
-            let chunk = &self.pending[consumed..consumed + CHUNK_FRAMES];
+            let chunk = mono(&self.pending[consumed..consumed + CHUNK_FRAMES])?;
             let frames = rs
-                .process(&[chunk], None)
+                .process(&chunk, None)
                 .map_err(|e| Error::Resample(e.to_string()))?;
-            out.extend_from_slice(&frames[0]);
+            out.extend(frames.take_data());
             consumed += CHUNK_FRAMES;
         }
         self.pending.drain(..consumed);
@@ -70,7 +72,7 @@ impl MonoResampler {
 
     /// Flush buffered input at end of capture, appending output to `out`.
     ///
-    /// rubato's `process_partial` zero-pads the remainder to a full chunk and
+    /// rubato zero-pads a partial final chunk (`partial_len`) to a full one and
     /// emits a full chunk of output, so the result is truncated to
     /// `round(pending * ratio)` frames to keep total output length equal to
     /// `input * ratio` (the trailing samples are filter response to padding).
@@ -81,15 +83,22 @@ impl MonoResampler {
         if !self.pending.is_empty() {
             let ratio = self.out_rate_hz as f64 / self.in_rate_hz as f64;
             let expected = (self.pending.len() as f64 * ratio).round() as usize;
+            let partial = Indexing::new().partial_len(self.pending.len());
             let frames = rs
-                .process_partial(Some(&[&self.pending[..]]), None)
-                .map_err(|e| Error::Resample(e.to_string()))?;
-            let take = expected.min(frames[0].len());
-            out.extend_from_slice(&frames[0][..take]);
+                .process(&mono(&self.pending)?, Some(&partial))
+                .map_err(|e| Error::Resample(e.to_string()))?
+                .take_data();
+            let take = expected.min(frames.len());
+            out.extend_from_slice(&frames[..take]);
             self.pending.clear();
         }
         Ok(())
     }
+}
+
+/// One channel of samples as the buffer type rubato reads.
+fn mono(samples: &[f32]) -> Result<InterleavedSlice<&[f32]>> {
+    InterleavedSlice::new(samples, 1, samples.len()).map_err(|e| Error::Resample(e.to_string()))
 }
 
 #[cfg(test)]

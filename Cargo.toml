@@ -59,10 +59,10 @@ windows = { version = "0.62", features = [
 ] }
 cpal = "0.18.1"
 rtrb = "0.3"
-rubato = "0.16"
+rubato = "5"
 hound = "3.5"
 serde = { version = "1", features = ["derive"] }
-toml = "0.9"
+toml = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time", "net", "fs"] }
 async-trait = "0.1"
