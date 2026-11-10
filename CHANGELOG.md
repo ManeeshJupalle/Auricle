@@ -32,11 +32,6 @@ Your coding agent can read your meetings.
   to the release that fixes CVE-2026-119375 (rusqlite 0.41, RUSTSEC-2026-0459),
   and `rmcp` to 3.9, which fixes RUSTSEC-2026-0457, 0461 and 0462.
 
-### Changed
-
-- **Building the web UI needs Node ^22.12, ^24, or >=26.** The dashboard and
-  overlay moved to Vite 8 and Vitest 5, and Vitest 5 dropped Node 20.
-
 ### Fixed (external audit of the above)
 
 - **An MCP read is refused if the ledger can't be written.** The ledger write
@@ -446,8 +441,9 @@ Your coding agent can read your meetings.
 
 ### Building
 
-- Rust is pinned to 1.95.0 by `rust-toolchain.toml`, and Node must be ^20.19 or
-  >=22.12. The overlay moved to Tauri 2.12.
+- Rust is pinned to 1.95.0 by `rust-toolchain.toml`, and Node must be ^22.12,
+  ^24, or >=26: the dashboard and overlay build with Vite 8 and test with
+  Vitest 5, which dropped Node 20. The overlay moved to Tauri 2.12.
 - Releases run in a `release` environment and must pass a gate before anything
   is signed: the tag must match the version in every file that carries it, tests
   must pass, and the build flags are checked.
