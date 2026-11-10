@@ -37,11 +37,10 @@
   <sub>A finished meeting. Every meeting in the dashboard images and demos below is made up.</sub>
 </p>
 
-> **What's in the download today.** The latest release is v0.4.0: meeting
-> transcripts, summaries, search, and the copilot. This README tracks `main`:
-> dictation, the MCP server, line-level search, retention and backups, and the
-> design in these screenshots arrive with the next release. The
-> [changelog](CHANGELOG.md) lists everything above 0.4.0.
+> **What's in the download today.** The latest release is v0.5.0: meeting
+> transcripts, summaries, search, and the copilot, plus dictation, the MCP
+> server, line-level search, retention and backups, and the design in these
+> screenshots. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
 
 ## Why Auricle
 
@@ -547,8 +546,6 @@ MCP for agents. Start with [docs/API.md](docs/API.md).
 
 ## Roadmap
 
-- **v0.5: system-wide dictation, speaking into any app.** Built and on `main`;
-  it ships with the next release.
 - macOS capture. Capture is the first blocker, not the only one: the OCR
   reader, the CLI, the `%LOCALAPPDATA%` data paths, and the credential store
   are Windows-bound too.
