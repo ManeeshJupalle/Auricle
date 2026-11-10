@@ -1,6 +1,8 @@
 use auricle_core::{Error, Result};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
 };
 
 /// Input frames fed to the sinc resampler per processing call.
@@ -11,8 +13,12 @@ const CHUNK_FRAMES: usize = 1024;
 /// is buffered internally so callers can feed arbitrary-sized slices.
 pub struct MonoResampler {
     /// None when input and output rates match (passthrough).
-    inner: Option<SincFixedIn<f32>>,
+    inner: Option<Async<f32>>,
     pending: Vec<f32>,
+    /// Output frames still to drop: the filter's startup delay. rubato 5
+    /// puts it at the start of the stream, so without this every resampled
+    /// stream would run late (1.3 ms at 48 kHz, 8 ms at 8 kHz).
+    delay: usize,
     pub in_rate_hz: u32,
     pub out_rate_hz: u32,
 }
@@ -27,18 +33,19 @@ impl MonoResampler {
         } else {
             let params = SincInterpolationParameters {
                 sinc_len: 128,
-                f_cutoff: 0.95,
+                f_cutoff: Some(0.95),
                 interpolation: SincInterpolationType::Linear,
                 oversampling_factor: 128,
                 window: WindowFunction::BlackmanHarris2,
             };
             let ratio = out_rate_hz as f64 / in_rate_hz as f64;
             Some(
-                SincFixedIn::<f32>::new(ratio, 1.0, params, CHUNK_FRAMES, 1)
+                Async::<f32>::new_sinc(ratio, 1.0, &params, CHUNK_FRAMES, 1, FixedAsync::Input)
                     .map_err(|e| Error::Resample(e.to_string()))?,
             )
         };
         Ok(MonoResampler {
+            delay: inner.as_ref().map_or(0, |rs| rs.output_delay()),
             inner,
             pending: Vec::new(),
             in_rate_hz,
@@ -57,11 +64,11 @@ impl MonoResampler {
         self.pending.extend_from_slice(input);
         let mut consumed = 0;
         while self.pending.len() - consumed >= CHUNK_FRAMES {
-            let chunk = &self.pending[consumed..consumed + CHUNK_FRAMES];
+            let chunk = mono(&self.pending[consumed..consumed + CHUNK_FRAMES])?;
             let frames = rs
-                .process(&[chunk], None)
+                .process(&chunk, None)
                 .map_err(|e| Error::Resample(e.to_string()))?;
-            out.extend_from_slice(&frames[0]);
+            skip_delay(&mut self.delay, &frames.take_data(), out);
             consumed += CHUNK_FRAMES;
         }
         self.pending.drain(..consumed);
@@ -70,10 +77,13 @@ impl MonoResampler {
 
     /// Flush buffered input at end of capture, appending output to `out`.
     ///
-    /// rubato's `process_partial` zero-pads the remainder to a full chunk and
+    /// rubato zero-pads a partial final chunk (`partial_len`) to a full one and
     /// emits a full chunk of output, so the result is truncated to
     /// `round(pending * ratio)` frames to keep total output length equal to
     /// `input * ratio` (the trailing samples are filter response to padding).
+    /// With the startup delay dropped at the front, that leaves the stream's
+    /// last few milliseconds of real signal (about `sinc_len / 2` input
+    /// frames) still inside the filter, unemitted.
     pub fn finish(&mut self, out: &mut Vec<f32>) -> Result<()> {
         let Some(rs) = self.inner.as_mut() else {
             return Ok(());
@@ -81,15 +91,30 @@ impl MonoResampler {
         if !self.pending.is_empty() {
             let ratio = self.out_rate_hz as f64 / self.in_rate_hz as f64;
             let expected = (self.pending.len() as f64 * ratio).round() as usize;
+            let partial = Indexing::new().partial_len(self.pending.len());
             let frames = rs
-                .process_partial(Some(&[&self.pending[..]]), None)
-                .map_err(|e| Error::Resample(e.to_string()))?;
-            let take = expected.min(frames[0].len());
-            out.extend_from_slice(&frames[0][..take]);
+                .process(&mono(&self.pending)?, Some(&partial))
+                .map_err(|e| Error::Resample(e.to_string()))?
+                .take_data();
+            let take = expected.min(frames.len());
+            skip_delay(&mut self.delay, &frames[..take], out);
             self.pending.clear();
         }
         Ok(())
     }
+}
+
+/// Append `frames` to `out`, minus whatever of the startup delay is still
+/// owed.
+fn skip_delay(delay: &mut usize, frames: &[f32], out: &mut Vec<f32>) {
+    let skip = (*delay).min(frames.len());
+    *delay -= skip;
+    out.extend_from_slice(&frames[skip..]);
+}
+
+/// One channel of samples as the buffer type rubato reads.
+fn mono(samples: &[f32]) -> Result<InterleavedSlice<&[f32]>> {
+    InterleavedSlice::new(samples, 1, samples.len()).map_err(|e| Error::Resample(e.to_string()))
 }
 
 #[cfg(test)]
@@ -155,6 +180,25 @@ mod tests {
             (390..=410).contains(&crossings),
             "expected ~400 rising zero crossings, got {crossings}"
         );
+    }
+
+    #[test]
+    fn output_is_not_delayed() {
+        // An impulse must come out at the same moment it went in: the
+        // filter's startup delay is dropped, not passed on to the stream.
+        for (rate, at) in [(48_000, 3_000), (44_100, 4_410), (8_000, 1_000)] {
+            let mut input = vec![0.0; rate as usize];
+            input[at] = 1.0;
+            let out = resample_all(&input, rate, 16_000, 1024);
+            let peak = (0..out.len())
+                .max_by(|&a, &b| out[a].total_cmp(&out[b]))
+                .unwrap();
+            let expected = (at as f64 * 16_000.0 / rate as f64).round() as usize;
+            assert!(
+                peak.abs_diff(expected) <= 1,
+                "{rate} Hz: impulse came out at {peak}, expected {expected}"
+            );
+        }
     }
 
     #[test]
