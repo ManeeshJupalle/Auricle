@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-11-10
 
-Your coding agent can read your meetings.
+Your coding agent can read your meetings, and you can dictate into any app.
+
+0.4.1 never shipped publicly: its release stayed a draft because the build crashed on CPUs without AVX-512. Upgrading from 0.4.0 also brings the 0.4.1 changes listed below.
 
 - **MCP server, off by default.** Turn on Settings → Privacy → *Let local AI
   agents read your transcripts* and the daemon serves Model Context Protocol
