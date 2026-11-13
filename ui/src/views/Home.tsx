@@ -115,6 +115,9 @@ export function Home({
   const local = count('local');
   const hosts = totals.filter((t) => t.destination === 'cloud').map((t) => t.who);
 
+  // What to install, when summaries are set to Ollama and it isn't there.
+  const ollamaMissing = prov?.llm.find((p) => p.id === 'ollama' && p.default && !p.ready)?.detail;
+
   const hasTape = tape !== null && tape.turns.length > 0;
   const verifying = download !== null && download.doneMb >= download.sizeMb;
   const filled = download ? Math.min(1, download.doneMb / download.sizeMb) : 0;
@@ -249,6 +252,7 @@ export function Home({
                 <dt>Summaries</dt>
                 <dd>
                   <ReadyList items={prov.llm} />
+                  {ollamaMissing && <p className="note">{ollamaMissing}.</p>}
                 </dd>
               </div>
             )}

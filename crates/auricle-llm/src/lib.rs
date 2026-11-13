@@ -9,6 +9,7 @@ mod stream;
 mod templates;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use auricle_core::{Config, Error, Result};
@@ -63,9 +64,82 @@ pub fn llm_provider_ids() -> &'static [&'static str] {
     &["ollama", "groq", "openai-compat"]
 }
 
-/// Readiness without construction: key presence only (the Ollama endpoint
-/// is only probed at use — a summarize call reports a clear error if the
-/// daemon is down).
+/// How long the Ollama check may take. A running Ollama answers in a few
+/// milliseconds. Windows takes about two seconds to refuse a connection to a
+/// closed local port, so an Ollama that isn't there shows up as this running
+/// out, not as a refusal.
+const OLLAMA_CHECK_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// What asking Ollama for its models came to.
+enum OllamaModels {
+    NotAnswering,
+    /// Something answered, but not with a list this can read.
+    Unreadable,
+    Listed(Vec<String>),
+}
+
+/// The models behind an OpenAI-compatible `GET {base}/models`. The shape is
+/// from Ollama's API documentation, not a captured payload, so anything that
+/// doesn't parse is `Unreadable` rather than an empty list.
+async fn ollama_models(base_url: &str) -> OllamaModels {
+    #[derive(serde::Deserialize)]
+    struct List {
+        data: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        id: String,
+    }
+    let Ok(resp) = reqwest::Client::new()
+        .get(format!("{base_url}/models"))
+        .send()
+        .await
+    else {
+        return OllamaModels::NotAnswering;
+    };
+    match resp.json::<List>().await {
+        Ok(list) => OllamaModels::Listed(list.data.into_iter().map(|m| m.id).collect()),
+        Err(_) => OllamaModels::Unreadable,
+    }
+}
+
+/// Ollama lists every model with its tag, and reads a name without one as
+/// `:latest`.
+fn ollama_has_model(listed: &[String], model: &str) -> bool {
+    listed.iter().any(|id| {
+        id == model || (!model.contains(':') && id.strip_suffix(":latest") == Some(model))
+    })
+}
+
+/// Whether Ollama is up and has the configured model. It has no key to look
+/// for, so asking it is the only way to know. Takes up to
+/// [`OLLAMA_CHECK_TIMEOUT`]. An answer that can't be read counts as ready:
+/// this must not hide a setup that works.
+pub async fn ollama_status(cfg: &Config) -> LlmProviderStatus {
+    let base_url = cfg.llm.ollama.base_url.trim_end_matches('/');
+    let model = &cfg.llm.ollama.model;
+    let models = tokio::time::timeout(OLLAMA_CHECK_TIMEOUT, ollama_models(base_url))
+        .await
+        .unwrap_or(OllamaModels::NotAnswering);
+    let (ready, detail) = match models {
+        OllamaModels::NotAnswering => (false, chat::ollama_not_answering(base_url, model)),
+        OllamaModels::Listed(listed) if !ollama_has_model(&listed, model) => {
+            (false, chat::ollama_model_missing(model))
+        }
+        OllamaModels::Listed(_) | OllamaModels::Unreadable => {
+            (true, format!("local endpoint {base_url}"))
+        }
+    };
+    LlmProviderStatus {
+        id: "ollama",
+        model: model.clone(),
+        ready,
+        detail,
+    }
+}
+
+/// Readiness without construction or network: key presence only. Ollama has
+/// no key, so it is always ready here; [`ollama_status`] asks it.
 pub fn llm_provider_statuses(cfg: &Config) -> Vec<LlmProviderStatus> {
     let key_status = |var: &str| {
         if auricle_core::secret_present(var) {
@@ -171,5 +245,15 @@ mod tests {
 
         let err = create_llm_provider("groq", &cfg).map(|_| ()).unwrap_err();
         assert!(err.to_string().contains("AURICLE_TEST_NO_KEY_LLM"), "{err}");
+    }
+
+    #[test]
+    fn a_model_without_a_tag_means_latest() {
+        let listed = ["llama3.1:latest".to_string(), "qwen3:8b".to_string()];
+        assert!(ollama_has_model(&listed, "llama3.1"));
+        assert!(ollama_has_model(&listed, "llama3.1:latest"));
+        assert!(ollama_has_model(&listed, "qwen3:8b"));
+        assert!(!ollama_has_model(&listed, "qwen3"), "qwen3 is qwen3:latest");
+        assert!(!ollama_has_model(&listed, "llama3.1:70b"));
     }
 }

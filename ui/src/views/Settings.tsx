@@ -68,6 +68,8 @@ export function Settings() {
   // "ready" when any provider that uses it reports a key present.
   const sttReady = (id: string) => providers.find((p) => p.id === id)?.ready ?? false;
   const llmReady = (id: string) => llm.find((p) => p.id === id)?.ready ?? false;
+  // What to install, when summaries are set to Ollama and it isn't there.
+  const ollamaMissing = llm.find((p) => p.id === 'ollama' && p.default && !p.ready)?.detail;
   const keySlots = [
     { id: 'deepgram', label: 'Deepgram', used: 'live transcription', ready: sttReady('deepgram') },
     {
@@ -94,6 +96,13 @@ export function Settings() {
         const key = Object.keys(patch)[0];
         setSaved(key ?? null);
         setTimeout(() => setSaved(null), 1500);
+        // Whether Ollama is ready depends on both of these.
+        if ('llm_provider' in patch || 'ollama_model' in patch) {
+          api
+            .providers()
+            .then((p) => setLlm(p.llm))
+            .catch(() => {});
+        }
       })
       .catch((e) => setError((e as Error).message));
   };
@@ -288,6 +297,7 @@ export function Settings() {
           />
           {saved === 'ollama_model' && <span className="saved">Saved</span>}
         </label>
+        {ollamaMissing && <p className="note">{ollamaMissing}.</p>}
         <label className="toggle">
           <input
             type="checkbox"

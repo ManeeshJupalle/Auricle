@@ -35,11 +35,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     api.providers().then(setProv).catch(() => {});
   };
 
+  // The last step says whether Ollama is there, and someone may have just
+  // installed it in another window.
+  useEffect(() => {
+    if (step === 'done') reloadProviders();
+  }, [step]);
+
   const mics = devices.filter((d) => d.kind === 'input');
   const loops = devices.filter((d) => d.kind === 'loopback');
 
   const sttReady = (id: string) => prov?.providers.find((p) => p.id === id)?.ready ?? false;
   const llmReady = (id: string) => prov?.llm.find((p) => p.id === id)?.ready ?? false;
+  // Set only when the engine asked Ollama and it wasn't there, or lacked the model.
+  const ollamaMissing = prov?.llm.find((p) => p.id === 'ollama' && !p.ready)?.detail;
   const keySlots = [
     { id: 'deepgram', label: 'Deepgram', used: 'live transcription, lowest delay', ready: sttReady('deepgram') },
     {
@@ -168,8 +176,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               >
                 <span className="choice-title">On this machine</span>
                 <span className="dim">
-                  Whisper and Ollama run here, and nothing leaves this computer. Slower on modest
-                  processors. The speech model downloads the first time you record.
+                  Nothing leaves this computer. Transcription works as installed, and its speech
+                  model downloads the first time you record. Summaries and answers need Ollama, a
+                  free app you install yourself. Slower on modest processors.
                 </span>
               </button>
               <button
@@ -230,9 +239,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p>
               {mode === 'cloud'
                 ? 'Deepgram and Groq will transcribe and summarize. You can add keys at any time in Settings.'
-                : 'Whisper and Ollama will transcribe and summarize here, and nothing leaves this computer.'}{' '}
+                : ollamaMissing
+                  ? 'Whisper will transcribe here, and nothing leaves this computer.'
+                  : 'Whisper and Ollama will transcribe and summarize here, and nothing leaves this computer.'}{' '}
               Press Start recording when your next meeting begins.
             </p>
+            {mode === 'local' && ollamaMissing && (
+              <p>
+                Summaries and the copilot&rsquo;s answers won&rsquo;t work yet. {ollamaMissing}.{' '}
+                <button className="link-btn" onClick={reloadProviders}>
+                  Check again
+                </button>
+              </p>
+            )}
             <div className="onboarding-nav">
               <button className="btn subtle" onClick={back}>
                 Back

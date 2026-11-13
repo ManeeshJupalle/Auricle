@@ -662,7 +662,16 @@ async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
             })
         })
         .collect();
-    let llm: Vec<_> = auricle_llm::llm_provider_statuses(cfg)
+    let mut llm_statuses = auricle_llm::llm_provider_statuses(cfg);
+    // Ollama has no key to look for, so it is asked, but only when something
+    // would use it: the check takes most of a second when Ollama isn't there.
+    if cfg.llm.provider == "ollama" || cfg.copilot.provider.as_deref() == Some("ollama") {
+        let checked = auricle_llm::ollama_status(cfg).await;
+        if let Some(row) = llm_statuses.iter_mut().find(|s| s.id == "ollama") {
+            *row = checked;
+        }
+    }
+    let llm: Vec<_> = llm_statuses
         .iter()
         .map(|s| {
             json!({

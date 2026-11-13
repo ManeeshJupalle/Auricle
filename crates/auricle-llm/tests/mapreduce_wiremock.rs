@@ -241,10 +241,11 @@ async fn http_error_surfaces_with_provider_and_status() {
         .mount(&server)
         .await;
 
-    let provider = OpenAiChatProvider::new("ollama", &server.uri(), "missing-model", None);
+    // Not Ollama: its missing-model 404 is put in words (tests/ollama_status.rs).
+    let provider = OpenAiChatProvider::new("groq", &server.uri(), "missing-model", None);
     let err = summarize(&provider, "sys", "short").await.unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("ollama"), "{msg}");
+    assert!(msg.contains("groq"), "{msg}");
     assert!(msg.contains("404"), "{msg}");
     assert!(msg.contains("model not found"), "{msg}");
 }

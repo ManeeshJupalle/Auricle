@@ -431,8 +431,12 @@ and after an hour from Ollama or any other endpoint on this machine, because a
 long prompt on a CPU can take over 10 minutes before the first byte.
 
 `GET /api/v1/providers` now also returns `llm` (LLM provider readiness:
-Ollama is always listed and probed only at use; Groq/openai-compat gate on
-key presence) and `templates` (built-ins `minutes`, `action-items`,
+Groq/openai-compat gate on key presence; Ollama has no key, so while it is the
+LLM in use, as `[llm].provider`, the `llm_provider` setting, or
+`[copilot].provider`, the daemon asks it for its models, and `ready` is false
+with a `detail` saying what to do when it doesn't answer within 0.8 s or
+doesn't list the configured model; otherwise it is listed as ready unasked) and
+`templates` (built-ins `minutes`, `action-items`,
 `standup`, `1on1`, plus any `*.md` the user drops into
 `%LOCALAPPDATA%\auricle\templates` — same-named files override built-ins).
 

@@ -96,6 +96,12 @@ impl OpenAiChatProvider {
         }
     }
 
+    fn base_url(&self) -> &str {
+        self.endpoint
+            .strip_suffix("/chat/completions")
+            .unwrap_or(&self.endpoint)
+    }
+
     /// POST the request and surface non-2xx as a clean error, retrying 429s.
     /// Both providers answer `stream: true` errors with a plain JSON body
     /// and a real HTTP status (fixtures `*_badmodel_error.txt`), so this
@@ -109,6 +115,9 @@ impl OpenAiChatProvider {
                 req = req.bearer_auth(key);
             }
             let resp = req.send().await.map_err(|e| {
+                if self.id == "ollama" && e.is_connect() {
+                    return Error::Config(ollama_not_answering(self.base_url(), &self.model));
+                }
                 Error::Config(format!(
                     "llm request to {} failed: {}",
                     self.endpoint,
@@ -125,6 +134,11 @@ impl OpenAiChatProvider {
             }
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
+                // Ollama's answer for a model that was never pulled (fixture
+                // `ollama_badmodel_error.txt`).
+                if self.id == "ollama" && status.as_u16() == 404 && body.contains("not found") {
+                    return Err(Error::Config(ollama_model_missing(&self.model)));
+                }
                 let head: String = body.chars().take(300).collect();
                 return Err(Error::Config(format!(
                     "llm {} returned HTTP {status}: {head}",
@@ -134,6 +148,24 @@ impl OpenAiChatProvider {
             return Ok(resp);
         }
     }
+}
+
+/// What to do when Ollama isn't there. Read by people who may never have
+/// heard of it, so it says where to get it. No closing full stop: callers put
+/// their own sentence after it.
+pub(crate) fn ollama_not_answering(base_url: &str, model: &str) -> String {
+    format!(
+        "Ollama isn't answering at {base_url}. Install it from ollama.com or start it, \
+         then run \"ollama pull {model}\" in a terminal"
+    )
+}
+
+/// What to do when Ollama is up without the configured model.
+pub(crate) fn ollama_model_missing(model: &str) -> String {
+    format!(
+        "Ollama is running, but it doesn't have the model {model}. \
+         Run \"ollama pull {model}\" in a terminal"
+    )
 }
 
 /// A request error in words: reqwest's own text for a timeout is only "error

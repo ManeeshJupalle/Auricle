@@ -125,8 +125,7 @@ async fn upstream_error_is_a_clean_error_not_a_stream() {
     let (deltas, result) = stream_all(&provider).await;
     assert!(deltas.is_empty());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("404"), "{err}");
-    assert!(err.contains("not found"), "{err}");
+    assert!(err.contains("ollama pull nope:doesnotexist"), "{err}");
 }
 
 /// Serve a hand-written SSE body and collect what the provider makes of it.
