@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A new look for the dashboard: slate and glass.** The green pad gives way
+  to a cool slate in the dark theme and a cool white in the light one. The
+  meeting list, the audio player, dialogs, and the controls are now glass,
+  floating over a soft wall of colour. The page you read stays solid, so
+  nothing shows through the text. The player floats over the foot of the
+  transcript, and Transcript, Summary, and Asks are one segmented control.
+  The line down the page is now blue, and blue has one job: it is yours. It
+  marks the line, the name You, the main button on a page, and where the
+  keyboard is. Red still means recording and nothing else. IBM Plex Serif and
+  IBM Plex Sans replace Alegreya and Alegreya Sans, still bundled, with page
+  titles and settings headings now in the sans. If Windows is set to reduce
+  transparency, the glass goes solid. Navigation and behaviour are unchanged,
+  and the copilot card and dictation pill keep their own look.
 - **The copilot card can be kept out of screen shares, if you ask.** Set
   `hide_from_screen_share = true` under `[overlay]` in `overlay.toml` and
   restart. Off by default. This reverses the earlier "no concealment" rule:

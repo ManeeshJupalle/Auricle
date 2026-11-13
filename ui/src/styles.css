@@ -1,58 +1,88 @@
-/* Auricle is a stenographer's pad: pale eye-ease green paper with one rule
-   down the page. That rule is the only ornament. In a meeting it divides Them
+/* Auricle is a quiet slate with one line down it. The page you read is solid.
+   What floats above it (the list of meetings, the player, a dialog, the
+   controls) is glass, with a soft wall of colour behind for the glass to hold.
+   The line is still the brightest thing there: in a meeting it divides Them
    from You and carries the tape of who spoke when; on the privacy page it is
    the edge of your machine.
 
-   Each colour has one job. Red: a session is recording. Blue: the name You.
-   Ochre: something needs you (errors too, because red is taken). Everything
-   else is ink on paper, so primary buttons are ink, links are underlined ink,
-   and your words are ink too: face and indent already say who is talking. */
+   Each colour has one job. Blue is yours: the line, the name You, the one
+   button a page is for, and where the keyboard is. Red: a session is
+   recording. Ochre: something needs you (errors too, because red is taken).
+   Everything else is ink on slate, so links are underlined ink, and your
+   words are ink too: face and indent already say who is talking. */
 
 :root {
   /* Native widgets (select popups, checkboxes, scrollbars) follow this. */
   color-scheme: dark;
 
-  --paper: #17302a;
-  --binder: #10261f;
-  --sheet: #21403a;
-  --ink: #e6efe6;
-  --ink-2: #c4d6cb;
-  --ink-3: #a6bfb2;
+  --paper: #191d28;
+  --binder: #12151d;
+  --sheet: #232937;
+  --ink: #e9edf5;
+  --ink-2: #c3cad9;
+  --ink-3: #9ba6ba;
   /* Edges a person has to find: fields, and anything else at 3:1 or better. */
-  --edge: #6f9483;
+  --edge: #6f7c96;
   /* Edges that only separate. */
-  --hair: #2f4e44;
-  --wash: rgba(230, 239, 230, 0.07);
-  --rule: #7fb59c;
+  --hair: #2c3444;
+  --wash: rgba(233, 237, 245, 0.07);
+  --rule: #8aa8ff;
+  /* The same blue as a fill, deep enough to carry white, and under the pointer. */
+  --action: #4a6ae6;
+  --action-2: #4263dc;
+  --on-action: #ffffff;
 
   /* Marks on the tape are quiet, about 3:1, so the text keeps the room. */
-  --them: #5f8876;
-  --you: #a9beff;
-  --you-mark: #6a82d2;
+  --them: #5f6c86;
+  --you: #a8bcff;
+  --you-mark: #5d79d4;
 
   --rec: #ff6a5a;
   --rec-text: #ff8a7c;
 
   --attn: #f0c878;
-  --attn-bg: #3a3216;
+  --attn-bg: #3a3320;
   --attn-ink: #f7e3b0;
 
-  --mark-bg: rgba(230, 239, 230, 0.18);
-  --scrim: rgba(8, 24, 19, 0.62);
+  --mark-bg: rgba(233, 237, 245, 0.16);
+  --scrim: rgba(7, 9, 14, 0.66);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23c4d6cb' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-  --clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6bfb2' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
+  /* Glass is for what floats above the page: the list of meetings, the
+     player, a dialog, the controls. The page itself stays solid, so nothing
+     shows through what you read. A piece of glass is a fill you can see
+     through, a lit top edge, and a shadow that lifts it. Behind it all is the
+     wall, which is only there to give the glass something to hold. */
+  --wall:
+    radial-gradient(62vw 72vh at 0% 0%, rgba(74, 106, 230, 0.52), transparent 70%),
+    radial-gradient(52vw 62vh at 0% 100%, rgba(40, 150, 214, 0.36), transparent 70%),
+    radial-gradient(62vw 72vh at 100% 100%, rgba(62, 98, 222, 0.3), transparent 70%), #0c0f16;
+  --glass: rgba(22, 27, 40, 0.56);
+  --glass-ctl: rgba(233, 237, 245, 0.07);
+  --glass-hi: rgba(233, 237, 245, 0.14);
+  /* A track that something lit slides in. */
+  --well: rgba(4, 6, 12, 0.34);
+  --glass-edge: rgba(255, 255, 255, 0.13);
+  --glass-lit: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --lift: 0 14px 40px rgba(0, 0, 0, 0.36);
+  --blur: blur(28px) saturate(170%);
+  --r-panel: 22px;
+  --r-ctl: 11px;
+  /* The wall showing between the panels, and round them. */
+  --gap: 10px;
 
-  --serif: 'Alegreya', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
-  --sans: 'Alegreya Sans', 'Segoe UI', system-ui, sans-serif;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23c3cad9' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  --clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ba6ba' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
+
+  --serif: 'IBM Plex Serif', Georgia, 'Times New Roman', serif;
+  --sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
   --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
-  --t-meta: 14.5px;
-  --t-ui: 16px;
-  --t-read: 20px;
-  --t-h2: 25px;
-  --t-h1: 34px;
-  --t-hero: 40px;
+  --t-meta: 13.5px;
+  --t-ui: 15px;
+  --t-read: 18px;
+  --t-h2: 22px;
+  --t-h1: 30px;
+  --t-hero: 36px;
 
   --side-w: 288px;
   /* The tape: scale labels, then Them, the rule, You. */
@@ -90,20 +120,23 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --paper: #e8f0e3;
-  --binder: #dae6d4;
-  --sheet: #f4f8f0;
-  --ink: #14302a;
-  --ink-2: #35504a;
-  --ink-3: #4a645b;
-  --edge: #6d8a7d;
-  --hair: #c3d5c3;
-  --wash: rgba(20, 48, 42, 0.07);
-  --rule: #4f8a70;
+  --paper: #f4f6fa;
+  --binder: #e8ecf3;
+  --sheet: #ffffff;
+  --ink: #131825;
+  --ink-2: #384258;
+  --ink-3: #525d75;
+  --edge: #76829b;
+  --hair: #d0d6e3;
+  --wash: rgba(19, 24, 37, 0.06);
+  --rule: #2f55d4;
+  --action: #2f55d4;
+  --action-2: #2445b8;
+  --on-action: #ffffff;
 
-  --them: #678b79;
-  --you: #2340a8;
-  --you-mark: #6b80d6;
+  --them: #8791a8;
+  --you: #2443b8;
+  --you-mark: #6f88e0;
 
   --rec: #c81e1a;
   --rec-text: #b01a16;
@@ -112,11 +145,23 @@
   --attn-bg: #f6e8c3;
   --attn-ink: #4f3300;
 
-  --mark-bg: rgba(20, 48, 42, 0.13);
-  --scrim: rgba(52, 84, 72, 0.4);
+  --mark-bg: rgba(19, 24, 37, 0.11);
+  --scrim: rgba(40, 48, 66, 0.42);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2335504a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-  --clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a645b' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
+  --wall:
+    radial-gradient(62vw 72vh at 0% 0%, rgba(104, 140, 255, 0.62), transparent 70%),
+    radial-gradient(52vw 62vh at 0% 100%, rgba(112, 204, 240, 0.58), transparent 70%),
+    radial-gradient(62vw 72vh at 100% 100%, rgba(142, 166, 255, 0.5), transparent 70%), #dce3f0;
+  --glass: rgba(255, 255, 255, 0.58);
+  --glass-ctl: rgba(255, 255, 255, 0.72);
+  --glass-hi: rgba(255, 255, 255, 0.94);
+  --well: rgba(19, 24, 37, 0.08);
+  --glass-edge: rgba(255, 255, 255, 0.86);
+  --glass-lit: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --lift: 0 14px 40px rgba(34, 52, 112, 0.16);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23384258' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  --clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23525d75' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
 }
 
 *,
@@ -133,12 +178,11 @@ body,
 }
 
 body {
-  background: var(--paper);
+  background: var(--wall);
   color: var(--ink);
   font-family: var(--sans);
   font-size: var(--t-ui);
-  line-height: 1.45;
-  letter-spacing: 0.006em;
+  line-height: 1.5;
   /* Times and counts are lining; only reading text keeps old-style figures. */
   font-variant-numeric: lining-nums;
   -webkit-font-smoothing: antialiased;
@@ -166,7 +210,7 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--rule);
   outline-offset: 2px;
 }
 
@@ -202,10 +246,13 @@ kbd {
   font-size: 0.86em;
 }
 
+/* A key: a small piece of glass with a thicker foot. */
 kbd {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--sheet);
+  padding: 2px 7px;
+  border: 1px solid var(--hair);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+  background: var(--glass-ctl);
   white-space: nowrap;
 }
 
@@ -242,9 +289,10 @@ kbd {
   gap: 8px;
   min-height: 38px;
   padding: 0 15px;
-  border: 1.5px solid var(--edge);
-  border-radius: 6px;
-  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: var(--glass-ctl);
+  box-shadow: var(--glass-lit);
   color: var(--ink);
   font-weight: 500;
   line-height: 1.1;
@@ -253,18 +301,19 @@ kbd {
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--wash);
+  background: var(--glass-hi);
 }
 
 .btn.accent {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: var(--paper);
+  border-color: var(--action);
+  background: var(--action);
+  color: var(--on-action);
+  box-shadow: var(--glass-lit), 0 6px 18px rgba(47, 85, 212, 0.34);
 }
 
 .btn.accent:hover:not(:disabled) {
-  background: var(--ink-2);
-  border-color: var(--ink-2);
+  background: var(--action-2);
+  border-color: var(--action-2);
 }
 
 /* Text that acts: no box, so nothing to hold it off the column it sits on. */
@@ -274,6 +323,7 @@ kbd {
   border: none;
   background: none;
   color: var(--ink-2);
+  box-shadow: none;
 }
 
 .btn.quiet:hover:not(:disabled),
@@ -295,7 +345,7 @@ kbd {
   display: grid;
   place-items: center;
   border: none;
-  border-radius: 6px;
+  border-radius: 50%;
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
@@ -321,9 +371,9 @@ input[type='search'],
 input[type='password'],
 select {
   min-height: 38px;
-  padding: 0 11px;
+  padding: 0 12px;
   border: 1px solid var(--edge);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   background-color: var(--sheet);
   color: var(--ink);
 }
@@ -368,7 +418,7 @@ input[type='checkbox'] {
   gap: 10px;
   align-items: flex-start;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: 14px;
   background: var(--attn-bg);
   color: var(--attn-ink);
   line-height: 1.35;
@@ -383,8 +433,8 @@ input[type='checkbox'] {
   border-radius: 50%;
   background: var(--attn);
   color: var(--attn-bg);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 600;
   line-height: 20px;
   text-align: center;
 }
@@ -403,13 +453,14 @@ input[type='checkbox'] {
   gap: 7px;
   padding: 3px 10px 3px 7px;
   font-size: var(--t-meta);
+  border-radius: 999px;
 }
 
 .banner.compact::before {
   width: 16px;
   height: 16px;
   margin-top: 1px;
-  font-size: 11.5px;
+  font-size: 10.5px;
   line-height: 16px;
 }
 
@@ -418,6 +469,8 @@ input[type='checkbox'] {
 .app {
   display: flex;
   height: 100%;
+  gap: var(--gap);
+  padding: var(--gap);
 }
 
 .main {
@@ -426,6 +479,10 @@ input[type='checkbox'] {
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: var(--glass-lit), var(--lift);
 }
 
 /* Healthy is silent. This corner only speaks when there is something to say. */
@@ -451,7 +508,11 @@ input[type='checkbox'] {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--binder);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-panel);
+  background: var(--glass);
+  box-shadow: var(--glass-lit), var(--lift);
+  backdrop-filter: var(--blur);
 }
 
 .sidebar-top {
@@ -467,8 +528,8 @@ input[type='checkbox'] {
   align-items: center;
   gap: 8px;
   font-family: var(--serif);
-  font-size: 25px;
-  font-weight: 800;
+  font-size: 22.5px;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -494,14 +555,18 @@ input[type='checkbox'] {
 
 .sidebar-search-wrap svg {
   position: absolute;
-  left: 31px;
+  left: 33px;
   color: var(--ink-3);
   pointer-events: none;
 }
 
 .sidebar-search-wrap .sidebar-search {
   width: 100%;
-  padding-left: 33px;
+  padding-left: 35px;
+  border-color: var(--glass-edge);
+  border-radius: 999px;
+  background-color: var(--glass-ctl);
+  box-shadow: var(--glass-lit);
 }
 
 input[type='search']::-webkit-search-cancel-button {
@@ -516,8 +581,7 @@ input[type='search']::-webkit-search-cancel-button {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* Rows run to the sidebar's edge, so the open one joins the page. */
-  padding: 0 0 44px 8px;
+  padding: 0 8px 44px;
   /* The list dissolves into the footer instead of slicing a row in half. */
   mask-image: linear-gradient(to bottom, #000 calc(100% - 60px), transparent);
 }
@@ -556,16 +620,17 @@ input[type='search']::-webkit-search-cancel-button {
 
 .side-item {
   position: relative;
-  border-radius: 7px 0 0 7px;
+  border-radius: 12px;
 }
 
 .side-item:hover {
   background: var(--wash);
 }
 
-/* The open meeting is the same sheet as the page beside it. */
+/* The open meeting is the lit piece of the glass. */
 .side-item.active {
-  background: var(--paper);
+  background: var(--glass-hi);
+  box-shadow: var(--glass-lit);
 }
 
 .side-item-main {
@@ -587,8 +652,11 @@ input[type='search']::-webkit-search-cancel-button {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+  line-height: 1.3;
+}
+
+.side-item.active .side-title {
   font-weight: 500;
-  line-height: 1.22;
 }
 
 .side-title .rec-dot {
@@ -755,7 +823,7 @@ input[type='search']::-webkit-search-cancel-button {
   background-color: transparent;
   background-position: right 2px center;
   color: var(--ink-2);
-  font-size: 15.5px;
+  font-size: 14px;
 }
 
 .record-btn {
@@ -766,18 +834,19 @@ input[type='search']::-webkit-search-cancel-button {
   width: 100%;
   min-height: 46px;
   padding: 0 14px;
-  border: 1.5px solid var(--ink);
-  border-radius: 6px;
-  background: var(--ink);
-  color: var(--paper);
-  font-size: 17.5px;
-  font-weight: 700;
+  border: 1px solid var(--action);
+  border-radius: 999px;
+  background: var(--action);
+  color: var(--on-action);
+  font-size: 16px;
+  font-weight: 600;
   cursor: pointer;
+  box-shadow: var(--glass-lit), 0 8px 22px rgba(47, 85, 212, 0.38);
 }
 
 .record-btn:hover:not(:disabled) {
-  background: var(--ink-2);
-  border-color: var(--ink-2);
+  background: var(--action-2);
+  border-color: var(--action-2);
 }
 
 .record-btn:disabled {
@@ -799,14 +868,15 @@ input[type='search']::-webkit-search-cancel-button {
 .record-btn.pending,
 .record-btn.pending:disabled {
   border-color: var(--edge);
-  background: transparent;
+  background: var(--glass-ctl);
+  box-shadow: var(--glass-lit);
   color: var(--ink);
   opacity: 1;
 }
 
 .record-btn.pending:hover:not(:disabled) {
   border-color: var(--ink);
-  background: var(--wash);
+  background: var(--glass-hi);
 }
 
 .record-btn.pending .rec-ring {
@@ -818,12 +888,14 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .record-btn.stop {
-  background: transparent;
+  border-color: var(--ink);
+  background: var(--glass-ctl);
+  box-shadow: var(--glass-lit);
   color: var(--ink);
 }
 
 .record-btn.stop:hover:not(:disabled) {
-  background: var(--wash);
+  background: var(--glass-hi);
   border-color: var(--ink);
 }
 
@@ -857,7 +929,7 @@ input[type='search']::-webkit-search-cancel-button {
 
 .side-nav-btn.active {
   color: var(--ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* The collapsed rail: the way back, and the one button that can't wait. */
@@ -880,11 +952,12 @@ input[type='search']::-webkit-search-cancel-button {
   width: 48px;
   min-height: 50px;
   padding: 0;
+  border-radius: 16px;
 }
 
 .sidebar.collapsed .record-short {
   display: block;
-  font-size: 13.5px;
+  font-size: 12.5px;
   line-height: 1.1;
 }
 
@@ -893,7 +966,7 @@ input[type='search']::-webkit-search-cancel-button {
   width: 100%;
   padding: 6px;
   overflow-wrap: anywhere;
-  font-size: 13.5px;
+  font-size: 12.5px;
 }
 
 .sidebar.collapsed .banner::before {
@@ -956,7 +1029,7 @@ input[type='search']::-webkit-search-cancel-button {
   right: 0;
   height: 22px;
   z-index: 1;
-  font-size: 17px;
+  font-size: 15.5px;
   line-height: 22px;
 }
 
@@ -968,13 +1041,13 @@ input[type='search']::-webkit-search-cancel-button {
 .tape-legend .them {
   right: calc(100% - var(--rule-x));
   font-family: var(--serif);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .tape-legend .you {
   left: var(--rule-x);
   color: var(--you);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* A side with no device is struck out at the top of its lane. */
@@ -1046,9 +1119,12 @@ input[type='search']::-webkit-search-cancel-button {
   z-index: 2;
   height: var(--span, 0);
   min-height: 10px;
-  border: 2px solid var(--ink);
-  border-radius: 3px;
+  border: 1.5px solid var(--ink);
+  border-radius: 9px;
   background: var(--mark-bg);
+  /* A lens: what it frames is brighter than the tape around it. */
+  box-shadow: var(--glass-lit), 0 4px 14px rgba(4, 6, 12, 0.22);
+  backdrop-filter: brightness(1.18) saturate(1.5);
 }
 
 /* Nothing to frame until a transcript beside it reports what's on screen. */
@@ -1067,8 +1143,8 @@ input[type='search']::-webkit-search-cancel-button {
   padding: 0 4px;
   background: var(--paper);
   text-align: right;
-  font-size: 13.5px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 600;
   line-height: 1.2;
   font-variant-numeric: lining-nums tabular-nums;
   transform: translateY(-50%);
@@ -1196,7 +1272,7 @@ input[type='search']::-webkit-search-cancel-button {
   top: var(--at);
   right: 4px;
   color: var(--ink-3);
-  font-size: 13.5px;
+  font-size: 12.5px;
   line-height: 1;
   font-variant-numeric: lining-nums tabular-nums;
   transform: translateY(-50%);
@@ -1208,7 +1284,7 @@ input[type='search']::-webkit-search-cancel-button {
 
 .session-map-scale .cut {
   color: var(--attn);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* The line is the scrubber: anywhere on it is a moment. */
@@ -1254,9 +1330,9 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .session-title {
-  font-family: var(--serif);
+  letter-spacing: -0.012em;
   font-size: var(--t-h1);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.12;
 }
 
@@ -1282,9 +1358,9 @@ input[type='search']::-webkit-search-cancel-button {
 
 .title-input {
   width: 100%;
-  font-family: var(--serif);
-  font-size: 28px;
-  font-weight: 800;
+  letter-spacing: -0.012em;
+  font-size: 25px;
+  font-weight: 600;
 }
 
 .rec {
@@ -1292,8 +1368,8 @@ input[type='search']::-webkit-search-cancel-button {
   align-items: center;
   gap: 8px;
   color: var(--rec-text);
-  font-size: 17.5px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1330,7 +1406,7 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .vu-label {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .vu-label.mic {
@@ -1354,21 +1430,25 @@ input[type='search']::-webkit-search-cancel-button {
   background: var(--ink-2);
 }
 
+/* One control with a position for each page of the meeting, so it is one
+   track and the page in force is the lit piece sitting in it. */
 .tabs {
   display: flex;
-  gap: 24px;
-  margin-top: 8px;
-  border-bottom: 1px solid var(--hair);
+  gap: 2px;
+  width: fit-content;
+  margin: 12px 0 8px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--well);
 }
 
 .tab {
-  margin-bottom: -1px;
-  padding: 8px 0 9px;
+  padding: 5px 16px;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: 999px;
   background: none;
   color: var(--ink-2);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -1378,9 +1458,9 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .tab.active {
-  border-bottom-color: var(--ink);
+  background: var(--glass-hi);
+  box-shadow: var(--glass-lit), 0 1px 3px rgba(4, 6, 12, 0.2);
   color: var(--ink);
-  font-weight: 700;
 }
 
 .tab:disabled {
@@ -1397,6 +1477,7 @@ input[type='search']::-webkit-search-cancel-button {
 /* ---------- the transcript ---------- */
 
 .doc-wrap {
+  position: relative;
   grid-row: 4;
   display: flex;
   flex-direction: column;
@@ -1441,7 +1522,7 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .doc-empty strong {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .doc-empty-body {
@@ -1504,8 +1585,8 @@ input[type='search']::-webkit-search-cancel-button {
   grid-column: 2;
   grid-row: 1;
   align-self: baseline;
-  font-size: 17px;
-  font-weight: 700;
+  font-size: 15.5px;
+  font-weight: 600;
   line-height: 1.3;
 }
 
@@ -1531,7 +1612,7 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .turn.mic .turn-text {
-  font-size: 19.5px;
+  font-size: 17.5px;
   line-height: 1.5;
 }
 
@@ -1552,7 +1633,7 @@ input[type='search']::-webkit-search-cancel-button {
    click once, so the eye lands there. */
 .turn.found .turn-time {
   color: var(--ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .turn.found .turn-text {
@@ -1563,7 +1644,7 @@ input[type='search']::-webkit-search-cancel-button {
    as the playhead on the line. */
 .turn.current .turn-time {
   color: var(--ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .turn.current::before {
@@ -1602,15 +1683,37 @@ input[type='search']::-webkit-search-cancel-button {
   vertical-align: -0.12em;
 }
 
+/* The player floats over the foot of the transcript, and the text runs on
+   beneath it. */
 .audio-bar {
-  flex: none;
+  position: absolute;
+  z-index: 2;
+  left: calc(var(--lead) + var(--hang));
+  bottom: 14px;
   display: flex;
   align-items: center;
   gap: 14px;
-  max-width: var(--measure);
-  margin: 0 var(--pad) 0 calc(var(--lead) + var(--hang));
-  padding: 10px 0 14px;
-  border-top: 1px solid var(--hair);
+  width: min(var(--measure), calc(100% - var(--lead) - var(--hang) - var(--pad)));
+  padding: 7px 18px 7px 7px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  background: var(--glass);
+  box-shadow: var(--glass-lit), var(--lift);
+  backdrop-filter: var(--blur);
+}
+
+/* Room for the last line to come out from under it. What is under the glass
+   is dimmed, so the player reads first, and is gone before the page ends. */
+.doc-wrap:has(> .audio-bar) .doc-scroll {
+  padding-bottom: 72px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 16px,
+    #000 calc(100% - 84px),
+    rgba(0, 0, 0, 0.3) calc(100% - 58px),
+    transparent calc(100% - 6px)
+  );
 }
 
 .audio-play {
@@ -1642,9 +1745,13 @@ input[type='search']::-webkit-search-cancel-button {
 }
 
 .audio-hint {
+  min-width: 0;
   margin-left: auto;
+  overflow: hidden;
   color: var(--ink-3);
   font-size: var(--t-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .follow-btn {
@@ -1811,7 +1918,7 @@ div.summary-head {
 .ask .summary-title {
   flex: 1 1 60%;
   color: var(--ink);
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 500;
   line-height: 1.3;
 }
@@ -1858,7 +1965,7 @@ div.summary-head {
 }
 
 .md strong {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .md code {
@@ -1869,25 +1976,25 @@ div.summary-head {
 }
 
 .md-h {
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.2;
 }
 
 .md-h1 {
   margin: 4px 0 10px;
-  font-size: 28px;
+  font-size: 25px;
 }
 
 .md-h2 {
   margin: 24px 0 8px;
-  font-size: 23px;
+  font-size: 20.5px;
 }
 
 .md-h3,
 .md-h4 {
   margin: 20px 0 6px;
   font-size: var(--t-read);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .md-checks {
@@ -1922,7 +2029,7 @@ div.summary-head {
   border-radius: 6px;
   background: var(--sheet);
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 12.5px;
   white-space: pre-wrap;
 }
 
@@ -1961,8 +2068,8 @@ div.summary-head {
 .voice-label {
   display: block;
   margin-bottom: 2px;
-  font-size: 17px;
-  font-weight: 700;
+  font-size: 15.5px;
+  font-weight: 600;
   line-height: 1.3;
 }
 
@@ -1974,7 +2081,7 @@ div.summary-head {
 
 .exchange-line.you {
   padding-left: var(--indent);
-  font-size: 38px;
+  font-size: 34px;
 }
 
 .exchange-line.you .voice-label {
@@ -2007,9 +2114,9 @@ div.summary-head {
 }
 
 .home-title {
-  font-family: var(--serif);
+  letter-spacing: -0.015em;
   font-size: var(--t-hero);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.12;
   text-wrap: balance;
 }
@@ -2027,21 +2134,21 @@ div.summary-head {
 
 .figures {
   font-family: var(--sans);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: lining-nums tabular-nums;
 }
 
 .home-lede {
   margin-top: 18px;
   color: var(--ink-2);
-  font-size: 19px;
+  font-size: 17px;
   line-height: 1.4;
 }
 
 .home-last {
   margin-top: 8px;
   color: var(--ink-2);
-  font-size: 19px;
+  font-size: 17px;
   line-height: 1.4;
 }
 
@@ -2108,17 +2215,20 @@ div.summary-head {
 /* ---------- first run ---------- */
 
 .onboarding {
-  height: 100%;
+  position: fixed;
+  inset: var(--gap);
   overflow-y: auto;
   display: grid;
   grid-template-columns: var(--tape-w) minmax(0, 1fr);
+  border-radius: var(--r-panel);
   background: var(--paper);
+  box-shadow: var(--glass-lit), var(--lift);
 }
 
 .onboarding-rule {
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: calc(100vh - 2 * var(--gap));
 }
 
 .onboarding-rule::before {
@@ -2177,21 +2287,21 @@ div.summary-head {
 }
 
 .ob-step h1 {
-  font-family: var(--serif);
+  letter-spacing: -0.015em;
   font-size: var(--t-hero);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.12;
 }
 
 .ob-step h2 {
-  font-family: var(--serif);
+  letter-spacing: -0.012em;
   font-size: var(--t-h1);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.15;
 }
 
 .ob-step > p {
-  font-size: 19px;
+  font-size: 17px;
   line-height: 1.4;
   color: var(--ink-2);
 }
@@ -2201,11 +2311,11 @@ div.summary-head {
 }
 
 .ob-step .exchange-line.them {
-  font-size: 28px;
+  font-size: 25px;
 }
 
 .ob-step .exchange-line.you {
-  font-size: 27px;
+  font-size: 24.5px;
 }
 
 .ob-field {
@@ -2229,15 +2339,16 @@ div.summary-head {
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 2px 12px;
   padding: 14px 16px;
-  border: 1.5px solid var(--edge);
-  border-radius: 8px;
-  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  background: var(--glass-ctl);
+  box-shadow: var(--glass-lit);
   text-align: left;
   cursor: pointer;
 }
 
 .choice-card:hover {
-  background: var(--wash);
+  background: var(--glass-hi);
 }
 
 .choice-card::before {
@@ -2252,7 +2363,8 @@ div.summary-head {
 
 .choice-card.selected {
   border-color: var(--ink);
-  background: var(--sheet);
+  background: var(--glass-hi);
+  box-shadow: var(--glass-lit), 0 0 0 1px var(--ink);
 }
 
 .choice-card.selected::before {
@@ -2260,8 +2372,8 @@ div.summary-head {
 }
 
 .choice-title {
-  font-size: 19px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .choice-card .dim {
@@ -2287,15 +2399,17 @@ div.summary-head {
   max-width: none;
   margin: auto;
   padding: 26px 28px 24px;
-  border: none;
-  border-radius: 10px;
-  background: var(--paper);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-panel);
+  background: var(--glass);
   color: var(--ink);
-  box-shadow: 0 24px 60px rgba(5, 18, 14, 0.5);
+  box-shadow: var(--glass-lit), 0 24px 60px rgba(4, 6, 12, 0.5);
+  backdrop-filter: var(--blur);
 }
 
 .token-dialog::backdrop {
   background: var(--scrim);
+  backdrop-filter: blur(5px);
 }
 
 .token-dialog form {
@@ -2304,9 +2418,9 @@ div.summary-head {
 }
 
 .token-dialog h2 {
-  font-family: var(--serif);
+  letter-spacing: -0.012em;
   font-size: var(--t-h2);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.15;
 }
 
@@ -2337,9 +2451,9 @@ div.summary-head {
 }
 
 .page-title {
-  font-family: var(--serif);
+  letter-spacing: -0.012em;
   font-size: var(--t-h1);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.15;
 }
 
@@ -2354,9 +2468,9 @@ div.summary-head {
 
 .panel h2 {
   margin-bottom: 12px;
-  font-family: var(--serif);
+  letter-spacing: -0.008em;
   font-size: var(--t-h2);
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -2430,6 +2544,15 @@ div.summary-head {
 .theme-toggle {
   display: inline-flex;
   gap: 8px;
+}
+
+/* The theme in force is a state, not something to press, so it is ink: blue
+   stays the button a page is for. */
+.theme-toggle .btn.accent {
+  border-color: var(--ink);
+  background: var(--ink);
+  box-shadow: none;
+  color: var(--paper);
 }
 
 .keys {
@@ -2580,7 +2703,7 @@ div.summary-head {
 .search-lede {
   margin-top: 8px;
   color: var(--ink-2);
-  font-size: 19px;
+  font-size: 17px;
   line-height: 1.4;
 }
 
@@ -2593,9 +2716,9 @@ div.summary-head {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 12px;
-  font-family: var(--serif);
-  font-size: 21px;
-  font-weight: 800;
+  letter-spacing: -0.008em;
+  font-size: 19px;
+  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -2611,7 +2734,6 @@ div.summary-head {
 
 .hit-when {
   color: var(--ink-3);
-  font-family: var(--sans);
   font-size: var(--t-meta);
   font-weight: 400;
 }
@@ -2681,7 +2803,7 @@ button.hit:hover {
 .egress .tape-legend span {
   color: var(--ink);
   font-family: var(--sans);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .settings.egress .banner {
@@ -2690,7 +2812,7 @@ button.hit:hover {
 
 .egress-headline {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: 22.5px;
   line-height: 1.32;
   font-variant-numeric: oldstyle-nums;
 }
@@ -2882,11 +3004,11 @@ button.hit:hover {
 }
 
 .egress-row.cloud .egress-what {
-  font-size: 19px;
+  font-size: 17px;
 }
 
 .egress-row.cloud .egress-kind {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .egress-row.cloud .egress-meeting {
@@ -2903,7 +3025,7 @@ button.hit:hover {
 
 .egress-row.local .egress-what {
   color: var(--ink-2);
-  font-size: 15.5px;
+  font-size: 14px;
 }
 
 .egress-more {
@@ -2918,7 +3040,7 @@ button.hit:hover {
 
 .about-lede {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: 22.5px;
   line-height: 1.32;
 }
 
@@ -2988,11 +3110,11 @@ button.hit:hover {
   .session-map-scale span,
   .map-window[data-at]::after,
   .map-playhead[data-at]::before {
-    font-size: 13px;
+    font-size: 12.5px;
   }
 
   .tape-legend {
-    font-size: 15.5px;
+    font-size: 14px;
   }
 
   .home-inner {
@@ -3002,11 +3124,11 @@ button.hit:hover {
   .exchange-line.them,
   .home-title,
   .ob-step h1 {
-    font-size: 33px;
+    font-size: 29.5px;
   }
 
   .exchange-line.you {
-    font-size: 31px;
+    font-size: 28px;
   }
 
   .settings .panel > label:not(.toggle) {
@@ -3058,12 +3180,14 @@ button.hit:hover {
   }
 
   :root {
+    --gap: 6px;
+    --r-panel: 18px;
     --pad: 16px;
     --hang: 0px;
     --indent: 22px;
-    --t-h1: 27px;
-    --t-hero: 30px;
-    --t-read: 19px;
+    --t-h1: 24px;
+    --t-hero: 27px;
+    --t-read: 17px;
     --tape-top: 0px;
     --tape-bottom: 0px;
     --lane: 18px;
@@ -3078,12 +3202,15 @@ button.hit:hover {
     min-height: 0;
   }
 
+  /* The list is a sheet of glass over the page it came from. */
   .sidebar:not(.collapsed) {
     position: fixed;
     inset: 0;
     z-index: 30;
     width: 100%;
     height: 100%;
+    border: none;
+    border-radius: 0;
   }
 
   .sidebar-bottom {
@@ -3131,7 +3258,7 @@ button.hit:hover {
     width: auto;
     min-height: 40px;
     padding: 0 12px;
-    font-size: 16px;
+    font-size: 14.5px;
   }
 
   .main-status {
@@ -3208,7 +3335,7 @@ button.hit:hover {
     bottom: 0;
     height: auto;
     width: 42px;
-    font-size: 15px;
+    font-size: 13.5px;
     line-height: 1;
     z-index: 2;
   }
@@ -3399,11 +3526,11 @@ button.hit:hover {
   }
 
   .turn.mic .turn-text {
-    font-size: 18.5px;
+    font-size: 16.5px;
   }
 
   .audio-bar {
-    padding: 8px 0 10px;
+    bottom: 10px;
     gap: 10px;
   }
 
@@ -3473,15 +3600,15 @@ button.hit:hover {
   .exchange-line.them,
   .home-title,
   .ob-step h1 {
-    font-size: 30px;
+    font-size: 27px;
   }
 
   .exchange-line.you {
-    font-size: 28px;
+    font-size: 25px;
   }
 
   .ob-step h2 {
-    font-size: 27px;
+    font-size: 24.5px;
   }
 
   .fact {
@@ -3528,7 +3655,7 @@ button.hit:hover {
 
   .egress-headline,
   .about-lede {
-    font-size: 22px;
+    font-size: 20px;
   }
 
   /* No tape column here, so the rule runs down the list alone, and the key
@@ -3571,6 +3698,15 @@ button.hit:hover {
 @keyframes au-draw-across {
   from {
     transform: scaleX(0);
+  }
+}
+
+/* Asked for less transparency: the glass goes solid, and keeps its shape. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme='light'] {
+    --glass: var(--binder);
+    --blur: none;
   }
 }
 

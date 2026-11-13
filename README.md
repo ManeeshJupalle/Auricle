@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ManeeshJupalle/Auricle/releases/latest"><img src="https://img.shields.io/github/v/release/ManeeshJupalle/Auricle?style=for-the-badge&label=Download%20for%20Windows&color=14302a" alt="Download for Windows"></a>
+  <a href="https://github.com/ManeeshJupalle/Auricle/releases/latest"><img src="https://img.shields.io/github/v/release/ManeeshJupalle/Auricle?style=for-the-badge&label=Download%20for%20Windows&color=2f55d4" alt="Download for Windows"></a>
   <br>
   <sub>Windows 10/11, x64. Free and MIT-licensed. No account.</sub>
 </p>
@@ -39,8 +39,9 @@
 
 > **What's in the download today.** The latest release is v0.5.0: meeting
 > transcripts, summaries, search, and the copilot, plus dictation, the MCP
-> server, line-level search, retention and backups, and the design in these
-> screenshots. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
+> server, line-level search, and retention and backups. The look in these
+> screenshots is newer than that download: it is on `main` and ships with the
+> next release. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
 
 ## Why Auricle
 
@@ -66,8 +67,9 @@
 Your microphone is **You** and the system audio is **Them**, so the two voices
 come apart without diarization. Them reads in a flush serif and You in an
 indented sans, and one line runs down every meeting, growing as each side
-speaks. Red means a session is recording, and nothing else. Sessions get
-LLM auto-titles after stop, and Markdown export.
+speaks. Red means a session is recording, and nothing else. The page you read
+is solid; what floats above it (the meeting list, the player, the controls) is
+glass. Sessions get LLM auto-titles after stop, and Markdown export.
 
 ### Search that finds the moment
 
