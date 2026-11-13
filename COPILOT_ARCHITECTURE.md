@@ -64,12 +64,12 @@ Three new components; the engine is a dependency, not a construction site.
 
 ### 2.3 Overlay shell (new top-level dir `overlay/`, Tauri v2)
 
-- **Window:** frameless, transparent background, always-on-top, ~420 px wide, docked to a configurable corner, click-through when idle. Normal window in every OS sense — visible in screen shares, alt-tab, and capture (see §1).
+- **Window:** frameless, transparent background, always-on-top, ~420 px wide, docked to a configurable corner, click-through when idle. Normal window in every OS sense: visible in alt-tab and, unless the user turns on `hide_from_screen_share` (see §1), in screen shares and capture.
 - **Global hotkeys** (Tauri global-shortcut plugin, defaults, all rebindable):
   - `Ctrl+Shift+Space` — summon with question input focused
   - `Ctrl+Shift+A` — "answer what's happening": capture screen + last transcript, no typed question (question defaults to the `quick_assist` template)
   - `Esc` — dismiss
-- **UI:** single React view (reuses the engine UI's design tokens/theme): question input, streaming answer with markdown rendering, context chips showing exactly what was included ("🖥 screen: Chrome — Jira board", "🎙 transcript: last 10 min"), copy button, follow-up input. Context chips are the honesty affordance — the user always sees what was captured.
+- **UI:** single React view (its own design tokens; it does not share the dashboard's slate-and-glass look): question input, streaming answer with markdown rendering, context chips showing exactly what was included ("🖥 screen: Chrome — Jira board", "🎙 transcript: last 10 min"), copy button, follow-up input. Context chips are the honesty affordance — the user always sees what was captured.
 - **Process model:** the overlay is a pure API client. It spawns/attaches to `auricle serve` if not running (same child-process management the v0.2 tray shell plan called for — this IS the desktop shell, shipped with a reason to exist). If the overlay crashes, the engine doesn't blink.
 - **Tray icon:** start/stop session, open dashboard (browser to :4820), summon copilot, quit.
 
@@ -116,7 +116,7 @@ New SQLite migration (only used when retain_context=true):
 | Windows OCR quality on dense UIs/code | Documented limitation; `peek` CLI makes quality inspectable; vision-LLM extension point for v0.4 |
 | WGC permission/HDR/DPI quirks | Phase 7 is capture-first: probe real windows on real hardware before pipeline code, PHASE7 report |
 | LLM streaming breaks existing LlmProvider users | Streaming added as a new trait method with a default non-streaming fallback; summarize path untouched |
-| Overlay perceived as Cluely-style cheating tool | §1 constraints in README verbatim; context chips; no concealment APIs anywhere in the codebase |
+| Overlay perceived as Cluely-style cheating tool | §1 constraints in README verbatim; context chips; the card is visible in screen shares unless the user opts out (§1) |
 | Tauri v2 global shortcut/transparency quirks on Windows | Phase 9 gate includes explicit multi-monitor + DPI checks |
 | Scope creep (voice-asking, auto-suggestions) | Out of scope for v0.3; listed in §6 |
 

@@ -190,7 +190,7 @@ Bind `127.0.0.1` only by default. Config-gated bearer token if binding beyond lo
 - **Vite + React + zustand**, prebuilt and embedded in the binary via `rust-embed`, served by axum. No Tauri, no Electron, no Node at runtime — the anti-lag statement in product form.
 - Views: Live (transcript with in-place partial swap→final), Sessions list, Session detail (transcript + summarize button + export), Settings (devices, providers, keys, retention).
 - Live transcript is **virtualized** (`@tanstack/react-virtual`); a partial updates a single row in place. Rendering cost is O(visible rows), directly attacking Meetily failure mode #2.
-- Design: dark, monospace transcript, VU meters per channel, latency readout in the corner. Screenshot-and-self-critique gate applies to Phase 5.
+- Design: slate and glass, in dark and light. The page you read is solid; the meeting list, player and controls around it are glass. Them reads in IBM Plex Serif and You in IBM Plex Sans, with one line down each meeting. Blue marks what is yours, red means recording and nothing else. Screenshot-and-self-critique gate applies to Phase 5.
 
 ### 4.11 CLI
 
