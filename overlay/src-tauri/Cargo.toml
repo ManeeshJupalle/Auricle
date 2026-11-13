@@ -32,6 +32,9 @@ tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
+# The tray's screen-share toggle writes one key into the user's overlay.toml
+# and must leave their comments and layout alone.
+toml_edit = "0.25"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["time", "macros", "sync", "io-util"] }

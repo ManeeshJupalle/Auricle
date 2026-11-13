@@ -12,7 +12,7 @@ This document extends `AURICLE_ARCHITECTURE.md`. Everything there still holds; n
 A copilot for **your own** meetings: recall what was said, understand what's on screen, draft answers, look things up — summoned deliberately, dismissed instantly.
 
 ### What this is explicitly NOT (design constraints, not just marketing)
-- **Visible unless the user says otherwise.** The overlay is a normal window: if you share your screen, the card is in the share. One opt-in exception, off by default: `[overlay] hide_from_screen_share = true` in `overlay.toml` sets `WDA_EXCLUDEFROMCAPTURE` on the card so asks and answers stay out of shares and recordings. (Until v0.5.0 this was ruled out entirely.)
+- **Visible unless the user says otherwise.** The overlay is a normal window: if you share your screen, the card is in the share. One opt-in exception, off by default: the tray's **Hide copilot from screen shares** item (stored as `[overlay] hide_from_screen_share = true` in `overlay.toml`) sets `WDA_EXCLUDEFROMCAPTURE` on the card so asks and answers stay out of shares and recordings. (Until v0.5.0 this was ruled out entirely.)
 - **No continuous surveillance.** Screen capture happens only on explicit hotkey press. There is no background screenshot loop, no keylogging, no watching.
 - **Privacy defaults preserved.** OCR text and questions are processed in memory; nothing screen-derived is persisted unless `copilot.retain_context = true`. Fully-local operation (Windows OCR + Ollama) is the default configuration.
 

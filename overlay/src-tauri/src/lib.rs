@@ -1,8 +1,9 @@
 //! Auricle Copilot overlay shell (COPILOT_ARCHITECTURE §2.3).
 //!
 //! A normal window, visible in alt-tab and, by default, in screen shares.
-//! The one exception is opt-in: `[overlay] hide_from_screen_share = true`
-//! in overlay.toml keeps the card out of captures. Global hotkeys come exclusively from the
+//! The one exception is opt-in: the tray's "Hide copilot from screen shares"
+//! (`[overlay] hide_from_screen_share = true` in overlay.toml) keeps the
+//! card out of captures. Global hotkeys come exclusively from the
 //! global-shortcut plugin (RegisterHotKey underneath — no low-level
 //! keyboard hooks).
 //!
@@ -29,7 +30,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::json;
 use tauri::ipc::Channel;
-use tauri::menu::MenuBuilder;
+use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
@@ -186,6 +187,48 @@ fn notify(app: &tauri::AppHandle, message: impl Into<String>) {
         return;
     }
     let _ = app.emit("tray-error", message);
+}
+
+/// Keep the copilot card out of screen shares and recordings, or put it
+/// back (`WDA_EXCLUDEFROMCAPTURE`). The error is written for the user.
+fn hide_from_screen_share(app: &tauri::AppHandle, hide: bool) -> Result<(), String> {
+    let result = match app.get_webview_window("main") {
+        Some(win) => win.set_content_protected(hide).map_err(|e| e.to_string()),
+        None => Err("the card's window is missing".to_string()),
+    };
+    result.map_err(|e| {
+        if hide {
+            format!(
+                "The card could not be hidden from screen shares ({e}). \
+                 It is visible to anyone you share your screen with."
+            )
+        } else {
+            format!("The card could not be put back into screen shares ({e}).")
+        }
+    })
+}
+
+/// The tray's screen-share item was clicked. Windows has already flipped its
+/// tick, so the tick is what was asked for. It takes effect now and is kept
+/// in overlay.toml for the next launch.
+fn toggle_hide_from_share(app: &tauri::AppHandle, item: &CheckMenuItem<tauri::Wry>) {
+    let Ok(hide) = item.is_checked() else { return };
+    if let Err(e) = hide_from_screen_share(app, hide) {
+        // The tick must not claim what didn't happen.
+        let _ = item.set_checked(!hide);
+        notify(app, e);
+        return;
+    }
+    if let Err(e) = config::save_hide_from_screen_share(hide) {
+        notify(
+            app,
+            format!(
+                "The card is {} screen shares until you quit, but that could not be \
+                 saved for next time: {e}.",
+                if hide { "hidden from" } else { "back in" }
+            ),
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -935,14 +978,13 @@ pub fn run() {
                 }
             }
             // Opt-in: keep the card out of screen shares and recordings.
+            let mut hidden_from_share = false;
             if cfg.overlay.hide_from_screen_share {
-                if let Some(win) = app.get_webview_window("main") {
-                    if let Err(e) = win.set_content_protected(true) {
+                match hide_from_screen_share(app.handle(), true) {
+                    Ok(()) => hidden_from_share = true,
+                    Err(e) => {
                         let state = app.state::<AppState>();
-                        state.hotkey_warnings.lock().unwrap().push(format!(
-                            "The card could not be hidden from screen shares ({e}). \
-                             It is visible to anyone you share your screen with."
-                        ));
+                        state.hotkey_warnings.lock().unwrap().push(e);
                     }
                 }
             }
@@ -968,7 +1010,12 @@ pub fn run() {
                 summon(app.handle(), false);
             }
 
-            // Tray: the persistent entry point.
+            // Tray: the persistent entry point. The tick says what the card
+            // is doing now, so it starts from what actually took.
+            let hide_item =
+                CheckMenuItemBuilder::with_id("hide-from-share", "Hide copilot from screen shares")
+                    .checked(hidden_from_share)
+                    .build(app)?;
             let menu = MenuBuilder::new(app)
                 .text("start", "Start recording")
                 .text("stop", "Stop recording")
@@ -976,6 +1023,7 @@ pub fn run() {
                 .text("dashboard", "Open dashboard")
                 .text("summon", "Summon copilot")
                 .text("dictation-setup", "Dictation setup")
+                .item(&hide_item)
                 .separator()
                 .text("check-updates", "Check for updates")
                 .text("quit", "Quit overlay")
@@ -984,7 +1032,8 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("Auricle Copilot")
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
+                .on_menu_event(move |app, event| match event.id().as_ref() {
+                    "hide-from-share" => toggle_hide_from_share(app, &hide_item),
                     "start" => tray_action(app.clone(), "start"),
                     "stop" => tray_action(app.clone(), "stop"),
                     "dashboard" => open_dashboard(app.clone()),

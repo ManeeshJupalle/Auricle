@@ -115,6 +115,40 @@ impl OverlayConfig {
     }
 }
 
+/// `text` (an overlay.toml) with `[overlay] hide_from_screen_share` set, and
+/// everything else, comments included, as the user wrote it. Refuses a file
+/// the overlay would not read the setting back from: one that isn't TOML, or
+/// one [`OverlayConfig::parse`] rejects and so ignores whole.
+pub fn with_hide_from_screen_share(text: &str, hide: bool) -> Result<String, String> {
+    let unreadable = "overlay.toml has something in it Auricle can't read";
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|_| unreadable.to_string())?;
+    doc.entry("overlay")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
+        .ok_or_else(|| unreadable.to_string())?
+        .insert("hide_from_screen_share", toml_edit::value(hide));
+    let edited = doc.to_string();
+    if OverlayConfig::parse(&edited).overlay.hide_from_screen_share != hide {
+        return Err(unreadable.to_string());
+    }
+    Ok(edited)
+}
+
+/// Remember the tray's screen-share choice in overlay.toml, creating the
+/// file if there is none.
+pub fn save_hide_from_screen_share(hide: bool) -> Result<(), String> {
+    let dir = data_dir().ok_or("LOCALAPPDATA is not set")?;
+    let path = dir.join("overlay.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let edited = with_hide_from_screen_share(&text, hide)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(&path, edited).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +171,43 @@ mod tests {
         assert!(!OverlayConfig::parse("").overlay.hide_from_screen_share);
         let cfg = OverlayConfig::parse("[overlay]\nhide_from_screen_share = true\n");
         assert!(cfg.overlay.hide_from_screen_share);
+    }
+
+    #[test]
+    fn the_tray_choice_is_written_without_disturbing_the_rest_of_the_file() {
+        let text = "# my hotkeys\n[hotkeys]\nsummon = \"Alt+Space\"\n\n[overlay]\ntheme = \"light\" # easier on my eyes\n";
+        let hidden = with_hide_from_screen_share(text, true).unwrap();
+        assert!(hidden.contains("# my hotkeys"), "{hidden}");
+        assert!(hidden.contains("# easier on my eyes"), "{hidden}");
+        let cfg = OverlayConfig::parse(&hidden);
+        assert!(cfg.overlay.hide_from_screen_share);
+        assert_eq!(cfg.overlay.theme, "light");
+        assert_eq!(cfg.hotkeys.summon, "Alt+Space");
+
+        let shown = with_hide_from_screen_share(&hidden, false).unwrap();
+        assert!(!OverlayConfig::parse(&shown).overlay.hide_from_screen_share);
+        assert_eq!(
+            shown.matches("hide_from_screen_share").count(),
+            1,
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn the_tray_choice_makes_the_section_when_there_is_none() {
+        for text in ["", "[hotkeys]\nsummon = \"Alt+Space\"\n"] {
+            let hidden = with_hide_from_screen_share(text, true).unwrap();
+            assert!(hidden.contains("[overlay]"), "{hidden}");
+            assert!(OverlayConfig::parse(&hidden).overlay.hide_from_screen_share);
+        }
+    }
+
+    #[test]
+    fn the_tray_choice_is_not_written_into_a_file_that_would_be_ignored() {
+        // Not TOML at all, and TOML the overlay rejects (and so ignores whole).
+        assert!(with_hide_from_screen_share("[hotkeys\nsummon=", true).is_err());
+        assert!(with_hide_from_screen_share("[overlay]\ncorner = 5\n", true).is_err());
+        assert!(with_hide_from_screen_share("overlay = 5\n", true).is_err());
     }
 
     #[test]
