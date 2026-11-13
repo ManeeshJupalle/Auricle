@@ -126,6 +126,14 @@ The release job stops before anything is signed if any of these fail:
   deliberately has no build cache, because whisper-rs-sys's build script doesn't
   rerun when `GGML_*` changes, so cached objects could outlive a flag change.
 - **Smoke test.** `auricle.exe --version` has to run.
+- **Visual C++ runtime.** The engine links whisper.cpp and ONNX Runtime, which
+  use the dynamic C++ runtime, so it needs `vcruntime140.dll`,
+  `vcruntime140_1.dll`, `msvcp140.dll` and `msvcp140_1.dll` to start, and
+  Windows doesn't come with them. `overlay/src-tauri/stage-vc-runtime.ps1`
+  copies them from the runner's Visual Studio into `redist/`, and
+  `tauri.release.conf.json` (passed to `tauri build` as `--config`) puts them
+  beside `auricle.exe` in the MSI. The script reads the engine's imports and
+  fails if one is a runtime DLL that file doesn't list.
 
 ## The `release` environment
 

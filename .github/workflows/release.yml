@@ -134,6 +134,13 @@ jobs:
       - name: Smoke-test the engine binary
         run: ./target/release/auricle.exe --version
 
+      # The engine needs the Visual C++ runtime DLLs, and Windows doesn't come
+      # with them. This copies the ones tauri.release.conf.json puts beside
+      # auricle.exe, and fails if the engine imports one that file doesn't list.
+      - name: Stage the Visual C++ runtime for the installer
+        shell: pwsh
+        run: ./overlay/src-tauri/stage-vc-runtime.ps1
+
       # 3. Build the overlay, sign the updater artifacts, generate latest.json,
       #    and open a draft Release with the MSI + latest.json attached.
       - name: Build overlay and publish draft release
@@ -151,6 +158,8 @@ jobs:
           # TAURI_WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
         with:
           projectPath: overlay
+          # Adds the staged Visual C++ runtime DLLs to the installer.
+          args: --config src-tauri/tauri.release.conf.json
           tagName: ${{ github.ref_name }}
           releaseName: 'Auricle Copilot ${{ github.ref_name }}'
           releaseDraft: true

@@ -107,8 +107,15 @@ cargo clean --release -p whisper-rs-sys                  # see below
 cargo build --release                                    # engine first (the MSI bundles it)
 mkdir overlay\src-tauri\binaries                         # gitignored, so absent on a fresh clone
 copy target\release\auricle.exe overlay\src-tauri\binaries\auricle-x86_64-pc-windows-msvc.exe
-cd overlay && npm ci && npx tauri build                  # MSI in overlay\src-tauri\target\release\bundle\msi\
+powershell -ExecutionPolicy Bypass -File overlay\src-tauri\stage-vc-runtime.ps1   # C++ runtime DLLs for the MSI
+cd overlay && npm ci && npx tauri build --config src-tauri/tauri.release.conf.json
+                                                         # MSI in overlay\src-tauri\target\release\bundle\msi\
 ```
+
+The engine needs four Visual C++ runtime DLLs that Windows doesn't come with.
+The script copies them out of Visual Studio and `tauri.release.conf.json` adds
+them to the MSI, beside the engine. A plain `npx tauri build` still works, but
+its MSI only runs where something else has installed that runtime.
 
 An MSI is for other machines, so its engine must not be built for this one.
 ggml has no runtime CPU dispatch and `GGML_NATIVE` defaults on, so without
