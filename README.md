@@ -37,11 +37,10 @@
   <sub>A finished meeting. Every meeting in the dashboard images and demos below is made up.</sub>
 </p>
 
-> **What's in the download today.** The latest release is v0.5.0: meeting
+> **What's in the download today.** The latest release is v0.5.1: meeting
 > transcripts, summaries, search, and the copilot, plus dictation, the MCP
-> server, line-level search, and retention and backups. The look in these
-> screenshots is newer than that download: it is on `main` and ships with the
-> next release. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
+> server, line-level search, and retention and backups, in the look these
+> screenshots show. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
 
 ## Why Auricle
 
@@ -170,6 +169,12 @@ transcription, and any cloud keys; all of it can be changed later under
 hotkeys, and whether anything has left your machine. Then press **Start
 recording** and join your call.
 
+Transcription and dictation work as installed. Summaries, auto-titles, and the
+copilot's answers need an LLM: on the fully-local path that is
+[Ollama](https://ollama.com), which you install yourself and then give a model
+(`ollama pull llama3.1`, or name another under **Settings**). Setup and the
+home screen say when Ollama isn't there or lacks the model.
+
 > **First install:** the installer isn't code-signed yet, so SmartScreen says
 > "Windows protected your PC". Click **More info → Run anyway**. After that,
 > every update the app downloads is signature-verified against the key built
@@ -205,6 +210,8 @@ first use, SHA-256 verified.
   it is back on at every launch. **New chat** (the `+`) drops the follow-up
   history, so the next ask starts clean.
 - The tray icon starts and stops recording and brings the dashboard back.
+  Its **Hide copilot from screen shares** item keeps the card out of shares
+  and recordings; see [Privacy and transparency](#privacy-and-transparency).
 - If an engine the app started dies, the app says so and restarts it, up to
   five tries in a row; a recording that was running is closed as interrupted,
   not resumed, and an `auricle serve` you started yourself is left alone.
@@ -260,9 +267,11 @@ privacy-default rules come from the architecture doc.
 
 - **Visible unless you say otherwise.** The overlay is a normal window: if you
   share your screen, the card is in the share. To keep your asks and answers out
-  of a share or recording, set `hide_from_screen_share = true` under `[overlay]`
-  in `%LOCALAPPDATA%\auricle\overlay.toml` and restart the app. It is off by
-  default, it uses Windows' `WDA_EXCLUDEFROMCAPTURE`, and it hides the card
+  of a share or recording, tick **Hide copilot from screen shares** in the tray
+  menu. It takes effect at once and is remembered as
+  `hide_from_screen_share = true` under `[overlay]` in
+  `%LOCALAPPDATA%\auricle\overlay.toml`. It is off by default, it uses
+  Windows' `WDA_EXCLUDEFROMCAPTURE`, and it hides the card
   from captures only: anyone looking at your screen still sees it, and other
   software can tell a window is excluded. The dictation pill is not hidden.
 - **No continuous surveillance.** The screen is captured only on an explicit

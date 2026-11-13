@@ -1,7 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-11-13
 
+A new look, a tray switch for screen shares, and two things that could stop a
+first install from working.
+
+0.5.0 never shipped publicly: its release stayed a draft. Upgrading from 0.4.0 also brings the 0.5.0 and 0.4.1 changes listed below.
+
+- **The installer now carries the Visual C++ runtime.** The engine needs four
+  of Microsoft's runtime DLLs to start, and Windows doesn't come with them, so
+  on a PC where no other program had installed them the engine never came up.
+  The MSI now puts them beside the engine. Releases before this one have the
+  same gap.
+- **Setup no longer says Ollama is ready when it isn't there.** Ollama was
+  always listed as ready, because it has no key to check. The engine now asks
+  it: setup, the home screen, and Settings say when Ollama isn't answering or
+  doesn't have the model, and what to install. A summary or an ask that fails
+  for either reason says the same, in place of a connection error. The check
+  runs only while Ollama is the LLM in use, and takes most of a second when
+  it isn't there.
+- **The copilot card can be kept out of screen shares, if you ask.** The tray
+  menu has a **Hide copilot from screen shares** item, off by default. It
+  takes effect at once, with no restart, and is written to `overlay.toml`
+  (`hide_from_screen_share = true` under `[overlay]`) for the next launch,
+  leaving the rest of that file as you wrote it. This reverses the earlier "no
+  concealment" rule: the card is still visible in a share unless you turn this
+  on, and it is hidden from captures only, not from anyone looking at your
+  screen.
 - **A new look for the dashboard: slate and glass.** The green pad gives way
   to a cool slate in the dark theme and a cool white in the light one. The
   meeting list, the audio player, dialogs, and the controls are now glass,
@@ -15,11 +40,8 @@
   titles and settings headings now in the sans. If Windows is set to reduce
   transparency, the glass goes solid. Navigation and behaviour are unchanged,
   and the copilot card and dictation pill keep their own look.
-- **The copilot card can be kept out of screen shares, if you ask.** Set
-  `hide_from_screen_share = true` under `[overlay]` in `overlay.toml` and
-  restart. Off by default. This reverses the earlier "no concealment" rule:
-  the card is still visible in a share unless you turn this on, and it is
-  hidden from captures only, not from anyone looking at your screen.
+- The bundled fonts' licence and the runtime DLLs are now listed in
+  `THIRD_PARTY_NOTICES.md`.
 
 ## 0.5.0 — 2026-11-10
 
