@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **The copilot card can be kept out of screen shares, if you ask.** Set
+  `hide_from_screen_share = true` under `[overlay]` in `overlay.toml` and
+  restart. Off by default. This reverses the earlier "no concealment" rule:
+  the card is still visible in a share unless you turn this on, and it is
+  hidden from captures only, not from anyone looking at your screen.
+
 ## 0.5.0 — 2026-11-10
 
 Your coding agent can read your meetings, and you can dictate into any app.

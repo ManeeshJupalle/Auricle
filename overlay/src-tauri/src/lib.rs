@@ -1,8 +1,8 @@
 //! Auricle Copilot overlay shell (COPILOT_ARCHITECTURE §2.3).
 //!
-//! A NORMAL, always-visible window: no display-affinity tricks, no
-//! capture concealment of any kind, visible in alt-tab and screen shares
-//! by design (Global Rule 3). Global hotkeys come exclusively from the
+//! A normal window, visible in alt-tab and, by default, in screen shares.
+//! The one exception is opt-in: `[overlay] hide_from_screen_share = true`
+//! in overlay.toml keeps the card out of captures. Global hotkeys come exclusively from the
 //! global-shortcut plugin (RegisterHotKey underneath — no low-level
 //! keyboard hooks).
 //!
@@ -930,6 +930,18 @@ pub fn run() {
                         }
                         state.hotkey_warnings.lock().unwrap().push(format!(
                             "{label} hotkey {text} could not be registered: {e}"
+                        ));
+                    }
+                }
+            }
+            // Opt-in: keep the card out of screen shares and recordings.
+            if cfg.overlay.hide_from_screen_share {
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Err(e) = win.set_content_protected(true) {
+                        let state = app.state::<AppState>();
+                        state.hotkey_warnings.lock().unwrap().push(format!(
+                            "The card could not be hidden from screen shares ({e}). \
+                             It is visible to anyone you share your screen with."
                         ));
                     }
                 }

@@ -253,12 +253,16 @@ provider name or section stops it wherever the file came from.
 
 ## Privacy and transparency
 
-These are design rules, not marketing. The concealment, surveillance, and
+These are design rules, not marketing. The visibility, surveillance, and
 privacy-default rules come from the architecture doc.
 
-- **No concealment.** The overlay is a normal window: no hide-from-screen-capture
-  tricks (`SetWindowDisplayAffinity` / `WDA_EXCLUDEFROMCAPTURE` is out of scope
-  and will not be added). If you share your screen, the overlay is visible.
+- **Visible unless you say otherwise.** The overlay is a normal window: if you
+  share your screen, the card is in the share. To keep your asks and answers out
+  of a share or recording, set `hide_from_screen_share = true` under `[overlay]`
+  in `%LOCALAPPDATA%\auricle\overlay.toml` and restart the app. It is off by
+  default, it uses Windows' `WDA_EXCLUDEFROMCAPTURE`, and it hides the card
+  from captures only: anyone looking at your screen still sees it, and other
+  software can tell a window is excluded. The dictation pill is not hidden.
 - **No continuous surveillance.** The screen is captured only on an explicit
   hotkey press. No background screenshot loop, no keylogging.
 - **Privacy defaults.** OCR text and questions are processed in memory; nothing

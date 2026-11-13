@@ -74,6 +74,9 @@ pub struct OverlaySection {
     /// does not expose its `copilot.transcript_window_min` over the API,
     /// so this mirrors it (default matches the engine default).
     pub transcript_window_min: u64,
+    /// Keep the copilot card out of screen shares and recordings
+    /// (`WDA_EXCLUDEFROMCAPTURE`). Off unless the user turns it on.
+    pub hide_from_screen_share: bool,
 }
 
 impl Default for OverlaySection {
@@ -83,6 +86,7 @@ impl Default for OverlaySection {
             theme: "dark".to_string(),
             engine_url: "http://127.0.0.1:4820".to_string(),
             transcript_window_min: 10,
+            hide_from_screen_share: false,
         }
     }
 }
@@ -126,6 +130,13 @@ mod tests {
         assert_eq!(cfg.overlay.theme, "dark");
         assert_eq!(cfg.hotkeys.dictate, "Ctrl+Shift+D");
         assert_eq!(cfg.dictation.mode, DictationMode::Hold);
+    }
+
+    #[test]
+    fn hiding_from_screen_share_is_off_until_asked_for() {
+        assert!(!OverlayConfig::parse("").overlay.hide_from_screen_share);
+        let cfg = OverlayConfig::parse("[overlay]\nhide_from_screen_share = true\n");
+        assert!(cfg.overlay.hide_from_screen_share);
     }
 
     #[test]
