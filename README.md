@@ -5,7 +5,7 @@
 <h1 align="center">Auricle</h1>
 
 <p align="center">
-  <b>The open-source, local-first alternative to Granola and Wispr Flow, for Windows.</b>
+  <b>The open-source, local-first alternative to Granola, Wispr Flow, and Cluely, for Windows.</b>
 </p>
 
 <p align="center">
@@ -92,17 +92,26 @@ without recompiling. Long meetings are summarized a portion at a time.
 
 ### A copilot for the meeting you're in
 
-<img src="docs/screenshots/overlay/r2_answered_light.png" width="420" alt="The Auricle copilot card: context chips naming the captured window and the last 10 minutes of transcript, above a streamed answer">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/copilot-dark.webp">
+  <img src=".github/assets/copilot-light.webp" width="420" alt="The Auricle copilot card: chips naming the captured window and the last 10 minutes of transcript, above an answer listing what was just decided and what is on you">
+</picture>
 
-<sub>From an earlier build; the card's header now also has New chat, a screen toggle, and it can be dragged.</sub>
+<sub>A made-up meeting, asked through the current card with a mock engine standing in for the model.</sub>
 
 Mid-meeting, `Ctrl+Shift+A` captures the active window (OCR'd by Windows,
 locally) and the last 10 minutes of transcript, and streams an answer to
 "what's happening right now?" into a small always-on-top card. Context chips
 name exactly what was captured. `Ctrl+Shift+Space` opens the card to ask
-anything, and `Esc` dismisses it.
+anything, and `Esc` dismisses it. The card is in your screen shares unless you
+tick **Hide copilot from screen shares** in the tray, which is free and off by
+default ([how it works](#privacy-and-transparency)).
 
 ### Dictation into any app
+
+<img src=".github/assets/demo-dictation.gif" width="900" alt="Holding Ctrl+Shift+D over a notes window: the dictation pill says Listening while the words are spoken, then Transcribing and Pasted, and the sentence appears at the cursor">
+
+<sub>Simulated: the real dictation pill, driven by a mock engine, over a stand-in notes window.</sub>
 
 Hold `Ctrl+Shift+D` in any app, talk, and let go: the text is pasted where your
 cursor was, transcribed by local `whisper-local` unless you choose otherwise. A
@@ -141,21 +150,21 @@ and arrow keys step through the session map. There is no mobile app.
 
 ## How it compares
 
-|  | **Auricle** | Granola | Otter | Wispr Flow | Superwhisper |
-|---|---|---|---|---|---|
-| Made for | Meetings and dictation | Meeting notes (plus voice typing) | Meeting notes | Dictation (plus a notetaker) | Dictation |
-| Platforms | **Windows 10/11 only** | macOS, Windows, iOS, Android | Mac, Windows, iOS, Android, web | Mac, Windows, iOS, Android | Mac, Windows, iOS, Android |
-| A bot joins your call | No | No | Yes, its notetaker joins Zoom, Teams, and Meet as a participant | No | Not applicable |
-| Where speech becomes text | On your PC by default; a cloud provider only if you pick one | Cloud | Cloud | Cloud, always | Local models that work offline, or optional cloud models |
-| Open source | **Yes (MIT)** | No | No | No | No |
-| Price | Free | Free tier, paid plans | Free tier, paid plans | Free tier, paid plans | Free tier, paid Pro |
+|  | **Auricle** | Granola | Otter | Wispr Flow | Superwhisper | Cluely |
+|---|---|---|---|---|---|---|
+| Made for | Meetings, dictation, and answers during calls | Meeting notes (plus voice typing) | Meeting notes | Dictation (plus a notetaker) | Dictation | Answers and notes during calls |
+| Platforms | **Windows 10/11 only** | macOS, Windows, iOS, Android | Mac, Windows, iOS, Android, web | Mac, Windows, iOS, Android | Mac, Windows, iOS, Android | macOS, Windows |
+| A bot joins your call | No | No | Yes, its notetaker joins Zoom, Teams, and Meet as a participant | No | Not applicable | No |
+| Where speech becomes text | On your PC by default; a cloud provider only if you pick one | Cloud | Cloud | Cloud, always | Local models that work offline, or optional cloud models | Not stated; its privacy policy lists third-party transcription providers |
+| Open source | **Yes (MIT)** | No | No | No | No | No |
+| Price | Free | Free tier, paid plans | Free tier, paid plans | Free tier, paid plans | Free tier, paid Pro | Free tier, paid plans; hidden from screen shares on the $149.99/month plan |
 
 <sub>Other products as described on their own websites in November 2026. They
 change; corrections are welcome.</sub>
 
 They run on more platforms, have mobile apps, and offer team plans; Auricle
-does none of that. What it offers instead is meetings and dictation in one
-app, transcribed locally by default, with the source open.
+does none of that. What it offers instead is meetings, dictation, and a
+copilot in one app, transcribed locally by default, with the source open.
 
 ## Get started
 
