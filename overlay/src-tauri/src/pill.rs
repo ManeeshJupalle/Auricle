@@ -17,7 +17,7 @@ use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder
 use crate::config::DictationMode;
 use crate::dictation::{Pill, PASTING};
 
-const LABEL: &str = "pill";
+pub(crate) const LABEL: &str = "pill";
 /// Room for three lines of the longest message; the window is transparent
 /// and click-through around the pill itself.
 const WIDTH: f64 = 460.0;

@@ -30,7 +30,11 @@ pub struct Chunker {
 
 struct Span {
     t_start_ms: u64,
+    /// The span's audio from `dropped` on: what is before the window still
+    /// to be finalized goes once a final is out.
     samples: Vec<f32>,
+    /// Samples let go from the front, so indices here are offset by this.
+    dropped: usize,
     /// Start (sample index) of the not-yet-finalized region.
     next_final_start: usize,
     /// Sample count at the last interim/final emission (gates interim cadence).
@@ -64,6 +68,7 @@ impl Chunker {
                 self.span = Some(Span {
                     t_start_ms,
                     samples: Vec::new(),
+                    dropped: 0,
                     next_final_start: 0,
                     last_emit_len: 0,
                     frame_probs: Vec::new(),
@@ -83,6 +88,7 @@ impl Chunker {
                     span.next_final_start = end - self.overlap_samples;
                     span.last_emit_len = end;
                 }
+                span.drop_finalized();
 
                 // Emit an interim over the unfinalized window on cadence.
                 if span.samples.len() - span.last_emit_len >= self.interim_samples {
@@ -139,8 +145,8 @@ impl Chunker {
             seq: self.seq,
             kind,
             sample_rate_hz: self.rate_hz,
-            t_start_ms: span.t_start_ms + start as u64 / per_ms,
-            t_end_ms: span.t_start_ms + end as u64 / per_ms,
+            t_start_ms: span.t_start_ms + (span.dropped + start) as u64 / per_ms,
+            t_end_ms: span.t_start_ms + (span.dropped + end) as u64 / per_ms,
             samples: span.samples[start..end].to_vec(),
         };
         self.seq += 1;
@@ -148,9 +154,66 @@ impl Chunker {
     }
 }
 
+impl Span {
+    /// Let go of the audio before the window still to be finalized: nothing
+    /// reads it again. A span with no pause in it (music, a talk with no
+    /// half-second gap) would otherwise keep every sample until it closes,
+    /// about 3.8 MB a minute a channel.
+    fn drop_finalized(&mut self) {
+        let n = self.next_final_start;
+        if n == 0 {
+            return;
+        }
+        self.samples.drain(..n);
+        self.dropped += n;
+        self.next_final_start = 0;
+        self.last_emit_len -= n;
+        // Cut points are searched from past the overlap on, never before.
+        let gone = self.frame_probs.partition_point(|(i, _)| *i < n);
+        self.frame_probs.drain(..gone);
+        for (i, _) in &mut self.frame_probs {
+            *i -= n;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_span_that_never_pauses_holds_only_its_open_window() {
+        let mut c = chunker();
+        let mut chunks = c.on_event(VadEvent::SpanOpened { t_start_ms: 1000 });
+        // A minute with no pause, in VAD-frame pieces, each frame scored.
+        for frame in 0..(60_000 * 16 / 512) {
+            chunks.extend(c.on_event(VadEvent::FrameProb {
+                p: if frame % 40 == 39 { 0.4 } else { 0.9 },
+            }));
+            chunks.extend(c.on_event(VadEvent::SpanAudio {
+                samples: vec![0.1; 512],
+            }));
+        }
+        let span = c.span.as_ref().unwrap();
+        assert!(
+            span.samples.len() < c.max_chunk_samples,
+            "{}",
+            span.samples.len()
+        );
+        assert!(span.frame_probs.len() < 200, "{}", span.frame_probs.len());
+
+        // The windows still tile the minute, and their times still match
+        // their audio.
+        let finals = finals(&chunks);
+        assert!(finals.len() >= 12, "{}", finals.len());
+        assert_eq!(finals[0].t_start_ms, 1000);
+        for pair in finals.windows(2) {
+            assert_eq!(pair[1].t_start_ms, pair[0].t_end_ms - 500, "{pair:#?}");
+        }
+        for f in &finals {
+            assert_eq!(f.samples.len() as u64 / 16, f.t_end_ms - f.t_start_ms);
+        }
+    }
 
     fn chunker() -> Chunker {
         Chunker::new("test", ChannelId::Mic, &PipelineConfig::default())

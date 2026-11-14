@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AudioBar, leadTrack, playPlan } from './components/AudioBar';
+import { AudioBar, leadTrack, playPlan, seekPlays } from './components/AudioBar';
 import { fmtTs } from './components/TurnDoc';
 
 const track = (duration: number, currentTime = 0) => ({ duration, currentTime });
@@ -63,5 +63,19 @@ describe('audio bar markup', () => {
     expect(html).toContain('aria-label="Play"');
     expect(html).toContain('aria-label="Playback position"');
     expect(html).toContain('role="status"');
+  });
+});
+
+describe('seekPlays', () => {
+  it('plays from a seek inside the audio', () => {
+    expect(seekPlays([track(60, 30), track(90, 30)])).toBe(true);
+    // Past the shorter track only: the longer one still has the meeting.
+    expect(seekPlays([track(60, 60), track(90, 75)])).toBe(true);
+  });
+
+  it('does not start over from a seek past the end of all of it', () => {
+    // The line runs past the WAVs while the last words are transcribed; a
+    // pick there clamps both tracks to their ends.
+    expect(seekPlays([track(60, 60), track(90, 90)])).toBe(false);
   });
 });

@@ -3,7 +3,9 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use auricle_llm::{estimate_tokens, summarize, OpenAiChatProvider, MAP_REDUCE_TOKEN_THRESHOLD};
+use auricle_llm::{
+    estimate_tokens, summarize, LlmProvider, OpenAiChatProvider, MAP_REDUCE_TOKEN_THRESHOLD,
+};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -121,6 +123,57 @@ async fn rate_limited_portion_waits_and_the_summary_survives() {
         "honored retry-after, waited only {:?}",
         started.elapsed()
     );
+}
+
+/// 503 on the second request only: one passing hiccup, mid-summary.
+struct UnavailableOnce(AtomicU32);
+
+impl Respond for UnavailableOnce {
+    fn respond(&self, _req: &Request) -> ResponseTemplate {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 1 {
+            ResponseTemplate::new(503)
+                .insert_header("retry-after", "0")
+                .set_body_string("over capacity")
+        } else {
+            ResponseTemplate::new(200).set_body_json(chat_body("ok"))
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_passing_server_error_does_not_cost_the_rest_of_the_meeting() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(UnavailableOnce(AtomicU32::new(0)))
+        .expect(5) // 3 map + 1 reduce + the one retry
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiChatProvider::new("groq", &server.uri(), "test-model", None);
+    let out = summarize(&provider, "make minutes", &long_transcript())
+        .await
+        .unwrap();
+    assert_eq!(out, "ok", "a portion was lost");
+}
+
+#[tokio::test]
+async fn a_server_error_is_reported_at_once_when_someone_is_waiting() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("over capacity"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiChatProvider::new("groq", &server.uri(), "test-model", None);
+    let err = provider
+        .complete("sys", "user")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("503"), "{err}");
 }
 
 #[tokio::test]

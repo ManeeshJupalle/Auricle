@@ -4,14 +4,28 @@ export type Theme = 'dark' | 'light';
 
 const KEY = 'auricle-theme';
 
+/**
+ * A browser set to block site data throws on any touch of localStorage, and
+ * this runs before the app mounts: unguarded, the page stays blank. The
+ * server setting still carries the choice.
+ */
 export function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem(KEY, theme);
+  try {
+    localStorage.setItem(KEY, theme);
+  } catch {
+    // Blocked: the next load paints dark first, then takes the setting.
+  }
 }
 
 /** Boot: localStorage wins for instant paint, then the server setting. */
 export function initTheme(): void {
-  const stored = localStorage.getItem(KEY);
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(KEY);
+  } catch {
+    // Blocked, as above.
+  }
   applyTheme(stored === 'light' ? 'light' : 'dark');
   api
     .settings()

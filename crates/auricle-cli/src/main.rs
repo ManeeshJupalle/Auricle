@@ -75,6 +75,11 @@ enum Command {
         /// Export as markdown (the only supported format)
         #[arg(long)]
         md: bool,
+        /// Write to this file, as UTF-8, instead of printing. Windows
+        /// PowerShell 5.1 re-encodes printed output, garbling every
+        /// non-ASCII character in `> file`.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
     },
     /// Capture the active window and print its text (screen OCR)
     Peek {
@@ -103,7 +108,7 @@ fn main() -> ExitCode {
         }),
         Command::Providers => cmd_providers(cli.config.as_deref()),
         Command::Serve { bind } => cmd_serve(cli.config.as_deref(), bind),
-        Command::Export { id, md } => cmd_export(&id, md),
+        Command::Export { id, md, out } => cmd_export(&id, md, out.as_deref()),
         Command::Peek { json } => cmd_peek(json),
     };
     match result {
@@ -259,7 +264,7 @@ fn cmd_peek(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_export(id: &str, md: bool) -> Result<()> {
+fn cmd_export(id: &str, md: bool, out: Option<&std::path::Path>) -> Result<()> {
     if !md {
         return Err(Error::Config(
             "specify --md (markdown is the only supported export format)".to_string(),
@@ -272,10 +277,11 @@ fn cmd_export(id: &str, md: bool) -> Result<()> {
         .ok_or_else(|| Error::Config(format!("no session \"{id}\"")))?;
     let segments = store.get_segments(id)?;
     let summaries = store.get_summaries(id)?;
-    print!(
-        "{}",
-        auricle_server::render_markdown_full(&session, &segments, &summaries)
-    );
+    let markdown = auricle_server::render_markdown_full(&session, &segments, &summaries);
+    match out {
+        Some(path) => std::fs::write(path, markdown)?,
+        None => print!("{markdown}"),
+    }
     Ok(())
 }
 

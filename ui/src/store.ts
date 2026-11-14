@@ -65,6 +65,11 @@ interface AuricleState {
    */
   download: ModelDownload | null;
   /**
+   * Whose start that download holds up: a meeting's, or a dictation's. A
+   * dictation gets no session event to clear it, only its own stop.
+   */
+  downloadFor: string | null;
+  /**
    * A start held up by that download was called off. The download itself runs
    * on, so the notice stays until the engine lets go of the session.
    */
@@ -231,6 +236,7 @@ export const useAuricle = create<AuricleState>((set, get) => ({
   lastError: null,
   notice: null,
   download: null,
+  downloadFor: null,
   startCancelled: false,
   droppedPartials: 0,
   sessionsVersion: 0,
@@ -327,11 +333,13 @@ export const useAuricle = create<AuricleState>((set, get) => ({
         set({
           notice: `Downloading the ${ev.model} speech model, ${ev.size_mb} MB.`,
           download: { doneMb: 0, sizeMb: ev.size_mb },
+          downloadFor: ev.session,
         });
         break;
       case 'model_download_progress':
         set({
           download: { doneMb: ev.done_mb, sizeMb: ev.size_mb },
+          downloadFor: ev.session,
           // Heard once, when the step changes. A client that joined mid-way
           // never saw the start, so this may be its first word of it.
           notice:
@@ -361,6 +369,14 @@ export const useAuricle = create<AuricleState>((set, get) => ({
           download: null,
           sessionsVersion: get().sessionsVersion + 1,
         });
+        break;
+      case 'dictation_started':
+      case 'dictation_stopped':
+        // A first dictation downloads the model as a first meeting would,
+        // but the session events that clear the notice never come for it.
+        if (get().downloadFor === ev.id) {
+          set({ notice: null, download: null, downloadFor: null });
+        }
         break;
       case 'session_updated':
         // Currently: the post-stop auto-title landed.

@@ -98,7 +98,7 @@ impl OpenAiBatchProvider {
             api_key,
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
-            client: http_client(read_timeout(base_url)),
+            client: http_client(read_timeout(base_url), base_url),
         }
     }
 }
@@ -111,8 +111,16 @@ fn read_timeout(base_url: &str) -> Duration {
     }
 }
 
-fn http_client(read_timeout: Duration) -> reqwest::Client {
-    reqwest::Client::builder()
+/// A local server is reached directly: reqwest would otherwise send it to the
+/// Windows proxy or `HTTP_PROXY`, which exempt only the hosts they list.
+fn http_client(read_timeout: Duration, base_url: &str) -> reqwest::Client {
+    let builder = reqwest::Client::builder();
+    let builder = if auricle_core::is_loopback_url(base_url) {
+        builder.no_proxy()
+    } else {
+        builder
+    };
+    builder
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(read_timeout)
         .build()
@@ -549,7 +557,7 @@ mod tests {
 
         let mut provider =
             OpenAiBatchProvider::with_key("groq-whisper", "k".to_string(), &server.uri(), "m");
-        provider.client = http_client(Duration::from_secs(1));
+        provider.client = http_client(Duration::from_secs(1), &server.uri());
         let mut session = provider
             .start_session(&SessionCfg {
                 session_id: "t".to_string(),
@@ -714,7 +722,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
             .mount(&server)
             .await;
-        let client = http_client(Duration::from_millis(100));
+        let client = http_client(Duration::from_millis(100), &server.uri());
         let error = client.post(server.uri()).send().await.unwrap_err();
 
         let message = http_error(&error);

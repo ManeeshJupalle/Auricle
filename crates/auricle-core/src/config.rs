@@ -458,7 +458,15 @@ fn is_required(problem: &str, required: &[&str]) -> bool {
 /// Whether a base URL points at this machine.
 pub fn is_loopback_url(url: &str) -> bool {
     let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = after_scheme.split(['/', '?']).next().unwrap_or_default();
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    // What follows the last `@` is the host: `http://localhost:1@api.groq.com`
+    // goes to Groq.
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = match authority.strip_prefix('[') {
         Some(rest) => rest.split(']').next().unwrap_or_default(),
         None => authority.split(':').next().unwrap_or_default(),
@@ -940,10 +948,12 @@ token_env = "1"
             "http://192.168.1.20:8080/v1",
             "http://127.0.0.1.evil.test/v1",
             "http://localhost.evil.test/v1",
+            "http://localhost:1@api.groq.com/openai/v1",
             "",
         ] {
             assert!(!is_loopback_url(url), "{url}");
         }
+        assert!(is_loopback_url("http://user:pw@localhost:11434/v1"));
     }
 
     #[test]

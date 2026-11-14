@@ -37,7 +37,7 @@
   <sub>A finished meeting. Every meeting in the dashboard images and demos below is made up.</sub>
 </p>
 
-> **What's in the download today.** The latest release is v0.5.1: meeting
+> **What's in the download today.** The latest release is v0.5.2: meeting
 > transcripts, summaries, search, and the copilot, plus dictation, the MCP
 > server, line-level search, and retention and backups, in the look these
 > screenshots show. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
@@ -88,7 +88,9 @@ default), playback follows the transcript and the map seeks the audio too.
 
 One click writes minutes, action items, a standup, or 1:1 notes, with a local
 (Ollama) or cloud LLM. Templates are Markdown files, and you can add your own
-without recompiling. Long meetings are summarized a portion at a time.
+without recompiling. Long meetings are summarized a portion at a time, in
+portions small enough for Ollama's default 4,096-token context; set
+`OLLAMA_CONTEXT_LENGTH` on the Ollama server to give a larger model more room.
 
 ### A copilot for the meeting you're in
 
@@ -100,8 +102,10 @@ without recompiling. Long meetings are summarized a portion at a time.
 <sub>A made-up meeting, asked through the current card with a mock engine standing in for the model.</sub>
 
 Mid-meeting, `Ctrl+Shift+A` captures the active window (OCR'd by Windows,
-locally) and the last 10 minutes of transcript, and streams an answer to
-"what's happening right now?" into a small always-on-top card. Context chips
+locally) and the last 10 minutes of the meeting's transcript, and streams an
+answer to "what's happening right now?" into a small always-on-top card.
+Between meetings it reads the last 10 minutes of whatever was said, so it
+still works just after you hang up. Context chips
 name exactly what was captured. `Ctrl+Shift+Space` opens the card to ask
 anything, and `Esc` dismisses it. The card is in your screen shares unless you
 tick **Hide copilot from screen shares** in the tray, which is free and off by
@@ -199,6 +203,7 @@ auricle serve                # daemon + web dashboard on http://127.0.0.1:4820
 # or skip the server entirely:
 auricle record --stt whisper-local --model base.en   # live transcript in your terminal
 auricle peek                 # OCR the window you're looking at (local, on demand)
+auricle export <id> --md --out notes.md   # a meeting as Markdown, UTF-8
 ```
 
 Cloud providers are opt-in through environment variables: `DEEPGRAM_API_KEY`
@@ -280,9 +285,9 @@ privacy-default rules come from the architecture doc.
   menu. It takes effect at once and is remembered as
   `hide_from_screen_share = true` under `[overlay]` in
   `%LOCALAPPDATA%\auricle\overlay.toml`. It is off by default, it uses
-  Windows' `WDA_EXCLUDEFROMCAPTURE`, and it hides the card
-  from captures only: anyone looking at your screen still sees it, and other
-  software can tell a window is excluded. The dictation pill is not hidden.
+  Windows' `WDA_EXCLUDEFROMCAPTURE`, and it hides the card and the dictation
+  pill from captures only: anyone looking at your screen still sees them, and
+  other software can tell a window is excluded. The dashboard is not hidden.
 - **No continuous surveillance.** The screen is captured only on an explicit
   hotkey press. No background screenshot loop, no keylogging.
 - **Privacy defaults.** OCR text and questions are processed in memory; nothing
@@ -291,8 +296,10 @@ privacy-default rules come from the architecture doc.
 - **Verifiable, not just promised.** The egress ledger records every time the
   daemon sent user data to a cloud provider (session audio, dictation audio,
   dictation polish, prompt, summary, or auto-title) with the destination and,
-  for text, the rough size, and records local-only actions too. Metadata only;
-  contents are never logged. See the **Privacy** page or `GET /api/v1/egress`.
+  for text, the rough size, and records local-only actions too. Nothing goes to
+  a cloud provider without its row: if the ledger can't be written, the send is
+  refused. Metadata only; contents are never logged. See the **Privacy** page
+  or `GET /api/v1/egress`.
   It covers the daemon only: `auricle record` with a cloud provider writes no
   ledger rows.
 - **MCP agents only get what you open.** The MCP server is off until you turn it
@@ -314,7 +321,8 @@ privacy-default rules come from the architecture doc.
   history (Win+V) and cloud clipboard sync. Polish is off by default; turned on
   with a cloud LLM, the text is sent there, with a ledger row first.
 - **You decide how long it stays.** Settings → Your data can delete meetings
-  after N days, with their transcripts, summaries, and audio. Off by default,
+  after N days, with their transcripts, summaries, and audio, and kept asks
+  made between meetings after the same N days. Off by default,
   permanent (there is no trash), run at every start and once a day, and never
   touching a meeting in progress. Because a wrong date could make every meeting
   look expired, a clock more than 3 days past the last sweep (before the first
@@ -327,7 +335,9 @@ privacy-default rules come from the architecture doc.
   audio, and retention leaves backups alone.
 - **Optional PII redaction.** `redact_pii` (Settings → Privacy) replaces emails,
   card and SSN numbers, phone numbers, IPs, and API-key-shaped secrets with
-  labels like `[email]` before the text is stored, shown, or sent to an LLM. It
+  labels like `[email]` before the text is stored, shown, or sent to an LLM.
+  Phone numbers outside the US are caught when said with their `+` country
+  code. It
   works on text, so a cloud STT provider still receives the raw audio, and
   retained WAVs are not redacted. A value split across two chunks can't match,
   it applies to sessions started after you turn it on, and screen OCR and typed
@@ -418,7 +428,8 @@ returns reading-order text. Warm capture→text is 175–300 ms on 1080p windows
 
 `POST /api/v1/ask` combines your question, an on-demand screen capture, and the
 last 10 minutes of live transcript (an in-memory rolling window, no database
-reads), and streams an LLM answer as SSE, mirrored on the same WebSocket the
+reads; only the meeting's own lines while one is recording), and streams an
+LLM answer as SSE, mirrored on the same WebSocket the
 dashboard holds. Follow-ups see your earlier asks from in-memory history.
 Ollama, Groq, or any OpenAI-compatible endpoint:
 
@@ -512,10 +523,11 @@ A Deepgram final after a pause can take longer than this median: see
   bleed. It is on by default. With a monitor mix, where your own voice reaches
   the output, a match can delete your words, so set `drop_mic_bleed = false`
   under `[stt]`.
-- **Languages written without spaces get less cleanup.** Trimming the overlap
-  between chunks and the bleed filter both count words by spaces. In Chinese or
-  Japanese, overlap words can repeat where two chunks meet (local and batch
-  Whisper), and the bleed filter won't fire on them.
+- **Languages written without spaces get less cleanup.** The bleed filter
+  counts words by spaces, so it won't fire on Chinese, Japanese, or Thai. The
+  overlap between chunks is trimmed by character there, and only when at least
+  two characters match, so a one-character repeat can remain where two chunks
+  meet.
 - **On a device with more than two channels, the front pair is what gets
   recorded.** The other channels are used only while that pair is silent, so a
   mic on input 3 of an audio interface is lost whenever inputs 1 and 2 carry any

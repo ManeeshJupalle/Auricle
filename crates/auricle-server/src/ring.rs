@@ -16,7 +16,7 @@ use crate::events::WsEvent;
 /// window is "the last N minutes of real time", not transcript time).
 #[derive(Debug, Clone)]
 pub struct RingSegment {
-    session: String,
+    pub(crate) session: String,
     pub speaker: String,
     pub t_start_ms: u64,
     pub text: String,

@@ -15,7 +15,12 @@ use crate::store::{EgressEntry, Store};
 /// `[::1]` must not be split on a colon that is part of the address.
 pub(crate) fn host_of(url: &str) -> Option<String> {
     let after = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let host_port = after.split(['/', '?']).next().unwrap_or("").trim();
+    let authority = after.split(['/', '?', '#']).next().unwrap_or("").trim();
+    // `user:password@` comes before the host, and the request goes to what
+    // follows the last `@`: `http://localhost:1@api.groq.com` is Groq.
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = if let Some(rest) = host_port.strip_prefix('[') {
         rest.split(']').next().unwrap_or("") // [IPv6] or [IPv6]:port
     } else if host_port.matches(':').count() > 1 {
@@ -59,9 +64,9 @@ pub(crate) fn llm_egress(id: &str, cfg: &Config) -> (&'static str, Option<String
 /// Every caller records just before the data leaves, so a send that then fails
 /// leaves a row for something that never went. The ledger can over-report, and
 /// that is the safe direction for it: a row too many misleads nobody about what
-/// might have left. For most callers a failed write is worth reporting but not
-/// worth failing the request over; those use [`record`]. The MCP tools are the
-/// exception: an unwritable ledger stops the disclosure instead of hiding it.
+/// might have left. A row too few would, so an unwritable ledger stops the
+/// send; [`record`] does that for a cloud destination only, and the MCP tools,
+/// which disclose even a local read, use this directly.
 pub(crate) fn record_checked(
     store: &Store,
     session_id: Option<&str>,
@@ -84,8 +89,9 @@ pub(crate) fn record_checked(
     })
 }
 
-/// Best-effort ledger write: a failure here must never break the request
-/// that triggered the egress, so the error is logged and dropped.
+/// Ledger write for data about to leave. A row that can't be written stops a
+/// send to the cloud, as nothing goes there without one; for data that stays
+/// on this machine the failure is only logged, and the request goes ahead.
 pub(crate) fn record(
     store: &Store,
     session_id: Option<&str>,
@@ -94,9 +100,17 @@ pub(crate) fn record(
     provider: &str,
     items: Option<i64>,
     detail: Option<&str>,
-) {
-    if let Err(e) = record_checked(store, session_id, kind, dest, provider, items, detail) {
-        eprintln!("recording egress: {e}");
+) -> auricle_core::Result<()> {
+    let cloud = dest.0 == "cloud";
+    match record_checked(store, session_id, kind, dest, provider, items, detail) {
+        Err(e) if cloud => Err(auricle_core::Error::Config(format!(
+            "the egress ledger couldn't be written, so nothing was sent: {e}"
+        ))),
+        Err(e) => {
+            eprintln!("recording egress: {e}");
+            Ok(())
+        }
+        Ok(()) => Ok(()),
     }
 }
 
@@ -119,6 +133,18 @@ mod tests {
         assert_eq!(host_of("http://[::1]:11434/v1").as_deref(), Some("::1"));
         assert_eq!(host_of("http://[::1]/v1").as_deref(), Some("::1"));
         assert_eq!(host_of("").as_deref(), None);
+    }
+
+    #[test]
+    fn credentials_in_a_url_are_not_its_host() {
+        assert_eq!(
+            host_of("https://user:pw@llm-proxy.example/v1").as_deref(),
+            Some("llm-proxy.example")
+        );
+        // Looks local, goes to Groq.
+        let groq = host_of("http://localhost:1@api.groq.com/openai/v1");
+        assert_eq!(groq.as_deref(), Some("api.groq.com"));
+        assert_eq!(classify(groq).0, "cloud");
     }
 
     #[test]

@@ -15,10 +15,58 @@ pub const MAP_REDUCE_TOKEN_THRESHOLD: usize = 6_000;
 /// Map-phase chunk target, in estimated tokens.
 const CHUNK_TOKENS: usize = 4_000;
 
-/// Rough token estimate: ~4 chars per token for English text. Used only to
-/// pick the code path, so being approximate is fine.
+/// Ollama runs a model in a 4,096-token context unless its server is set up
+/// for more (`OLLAMA_CONTEXT_LENGTH`), and the OpenAI-compatible endpoint
+/// used here can't ask for more per request. Past that it drops the oldest
+/// tokens, the instructions first, so for it the transcript leaves the
+/// template and the answer room inside 4k.
+const OLLAMA_TOKEN_THRESHOLD: usize = 2_500;
+const OLLAMA_CHUNK_TOKENS: usize = 2_000;
+
+/// How much one call may carry, in estimated tokens: whole, per map portion.
+struct Budget {
+    threshold: usize,
+    chunk: usize,
+}
+
+fn budget_for(provider: &dyn LlmProvider) -> Budget {
+    if provider.id() == "ollama" {
+        Budget {
+            threshold: OLLAMA_TOKEN_THRESHOLD,
+            chunk: OLLAMA_CHUNK_TOKENS,
+        }
+    } else {
+        Budget {
+            threshold: MAP_REDUCE_TOKEN_THRESHOLD,
+            chunk: CHUNK_TOKENS,
+        }
+    }
+}
+
+/// Rough token estimate: ~4 chars per token for English text, and about one
+/// per character for Chinese, Japanese, Korean and Thai, where a character
+/// is close to a word. Used only to size calls, so approximate is fine.
 pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(4)
+    let (dense, other) = text.chars().fold((0usize, 0usize), |(dense, other), c| {
+        if is_dense(c) {
+            (dense + 1, other)
+        } else {
+            (dense, other + 1)
+        }
+    });
+    dense + other.div_ceil(4)
+}
+
+/// Han, kana, Hangul and Thai: scripts with about one token a character.
+fn is_dense(c: char) -> bool {
+    matches!(c,
+        '\u{0E00}'..='\u{0E7F}'
+        | '\u{1100}'..='\u{11FF}'
+        | '\u{3040}'..='\u{30FF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{AC00}'..='\u{D7AF}'
+        | '\u{F900}'..='\u{FAFF}')
 }
 
 /// Split `text` into chunks of at most `max_chars`, only ever cutting at
@@ -26,18 +74,32 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// longer than `max_chars` becomes its own oversized chunk rather than
 /// being split mid-line.
 pub fn chunk_by_lines(text: &str, max_chars: usize) -> Vec<String> {
+    chunk_lines(text, max_chars, |s| s.chars().count())
+}
+
+/// [`chunk_by_lines`], measured in estimated tokens.
+fn chunk_by_tokens(text: &str, max_tokens: usize) -> Vec<String> {
+    chunk_lines(text, max_tokens, estimate_tokens)
+}
+
+fn chunk_lines(text: &str, max: usize, measure: impl Fn(&str) -> usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
     for line in text.lines() {
-        // +1 for the newline that joins lines within a chunk.
-        let added = line.chars().count() + if current.is_empty() { 0 } else { 1 };
-        if !current.is_empty() && current.chars().count() + added > max_chars {
-            chunks.push(std::mem::take(&mut current));
+        if current.is_empty() {
+            current.push_str(line);
+            continue;
         }
-        if !current.is_empty() {
-            current.push('\n');
+        // Measured joined, newline and all: an estimate rounds, so the
+        // parts' estimates don't add up to the whole's.
+        let mut joined = current.clone();
+        joined.push('\n');
+        joined.push_str(line);
+        if measure(&joined) > max {
+            chunks.push(std::mem::replace(&mut current, line.to_string()));
+        } else {
+            current = joined;
         }
-        current.push_str(line);
     }
     if !current.is_empty() {
         chunks.push(current);
@@ -52,11 +114,12 @@ pub async fn summarize(
     template: &str,
     transcript: &str,
 ) -> Result<String> {
-    if estimate_tokens(transcript) <= MAP_REDUCE_TOKEN_THRESHOLD {
-        return provider.complete(template, transcript).await;
+    let budget = budget_for(provider);
+    if estimate_tokens(transcript) <= budget.threshold {
+        return provider.complete_patiently(template, transcript).await;
     }
 
-    let chunks = chunk_by_lines(transcript, CHUNK_TOKENS * 4);
+    let chunks = chunk_by_tokens(transcript, budget.chunk);
     let total = chunks.len();
     let map_system = "You summarize one portion of a longer meeting transcript. \
          Produce a faithful, detailed summary of THIS PORTION ONLY, keeping \
@@ -66,7 +129,7 @@ pub async fn summarize(
     let mut failure = None;
     for (i, chunk) in chunks.iter().enumerate() {
         let user = format!("Portion {} of {total}:\n\n{chunk}", i + 1);
-        match provider.complete(map_system, &user).await {
+        match provider.complete_patiently(map_system, &user).await {
             Ok(partial) => partials.push(partial),
             Err(e) if partials.is_empty() => return Err(e),
             // On a slow local model what finished can be hours of work, and
@@ -122,7 +185,9 @@ async fn reduce(
          meeting transcript. Merge them and apply this instruction to the \
          whole meeting:\n\n{template}"
     );
-    provider.complete(&reduce_system, &reduce_input).await
+    provider
+        .complete_patiently(&reduce_system, &reduce_input)
+        .await
 }
 
 fn is_truncated(text: &str) -> bool {
@@ -141,14 +206,16 @@ async fn collapse_to_budget(
     let merge_system = "The following are faithful summaries of consecutive parts of one \
          meeting. Merge them into one faithful, detailed summary, keeping speaker \
          attributions (You/Them), numbers, names, decisions, and action items, in order.";
-    while partials.len() > 1 && estimate_tokens(&partials.join("\n\n")) > MAP_REDUCE_TOKEN_THRESHOLD
-    {
+    let threshold = budget_for(provider).threshold;
+    while partials.len() > 1 && estimate_tokens(&partials.join("\n\n")) > threshold {
         let mut merged = Vec::new();
-        for group in merge_groups(&partials) {
+        for group in merge_groups(&partials, threshold) {
             merged.push(match group {
                 [only] => only.clone(),
                 _ => {
-                    let merge = provider.complete(merge_system, &group.join("\n\n")).await?;
+                    let merge = provider
+                        .complete_patiently(merge_system, &group.join("\n\n"))
+                        .await?;
                     *truncated |= is_truncated(&merge);
                     merge
                 }
@@ -162,13 +229,13 @@ async fn collapse_to_budget(
 /// Consecutive runs of partials that fit the budget together. A run is always
 /// at least two wide when it can be, even over budget, or a list of large
 /// partials would never shrink.
-fn merge_groups(partials: &[String]) -> Vec<&[String]> {
+fn merge_groups(partials: &[String], threshold: usize) -> Vec<&[String]> {
     let mut groups = Vec::new();
     let mut start = 0;
     let mut tokens = 0;
     for (i, partial) in partials.iter().enumerate() {
         let partial_tokens = estimate_tokens(partial);
-        if i - start >= 2 && tokens + partial_tokens > MAP_REDUCE_TOKEN_THRESHOLD {
+        if i - start >= 2 && tokens + partial_tokens > threshold {
             groups.push(&partials[start..i]);
             start = i;
             tokens = 0;
@@ -190,6 +257,52 @@ mod tests {
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcde"), 2);
         assert_eq!(estimate_tokens(&"x".repeat(24_000)), 6_000);
+    }
+
+    #[test]
+    fn a_character_is_about_a_token_where_words_have_no_spaces() {
+        assert_eq!(estimate_tokens("我们明天开会"), 6);
+        assert_eq!(estimate_tokens("会議を始めます"), 7);
+        assert_eq!(estimate_tokens("회의를 시작합니다"), 9);
+        assert_eq!(estimate_tokens("ok 好的"), 3);
+    }
+
+    /// [`Fake`], as Ollama.
+    struct Ollama<F>(F);
+
+    #[async_trait::async_trait]
+    impl<F> LlmProvider for Ollama<F>
+    where
+        F: Fn(&str, &str) -> Result<String> + Send + Sync,
+    {
+        fn id(&self) -> &str {
+            "ollama"
+        }
+        fn model(&self) -> &str {
+            "m"
+        }
+        async fn complete(&self, system: &str, user: &str) -> Result<String> {
+            (self.0)(system, user)
+        }
+    }
+
+    #[tokio::test]
+    async fn every_call_to_ollama_fits_its_default_context() {
+        // About 4,000 tokens: one call to anyone else, past 4k for Ollama
+        // once the template and the answer are in.
+        let text = vec!["x".repeat(399); 40].join("\n");
+        let largest = std::sync::atomic::AtomicUsize::new(0);
+        let provider = Ollama(|system: &str, user: &str| {
+            let sent = estimate_tokens(system) + estimate_tokens(user);
+            largest.fetch_max(sent, Ordering::SeqCst);
+            Ok("short summary".to_string())
+        });
+        summarize(&provider, "make minutes", &text).await.unwrap();
+        let largest = largest.load(Ordering::SeqCst);
+        assert!(
+            largest <= 3_000,
+            "a call of {largest} tokens leaves no room"
+        );
     }
 
     #[test]
@@ -240,7 +353,10 @@ mod tests {
     #[test]
     fn merge_groups_fill_the_budget_and_keep_order() {
         let list = partials(&[2_000, 2_000, 2_000, 2_000, 2_000]);
-        let widths: Vec<_> = merge_groups(&list).iter().map(|g| g.len()).collect();
+        let widths: Vec<_> = merge_groups(&list, MAP_REDUCE_TOKEN_THRESHOLD)
+            .iter()
+            .map(|g| g.len())
+            .collect();
         assert_eq!(widths, vec![3, 2]);
     }
 
@@ -374,7 +490,10 @@ mod tests {
     fn oversized_partials_still_pair_up_so_every_pass_shrinks() {
         for n in 2..12 {
             let list = partials(&vec![MAP_REDUCE_TOKEN_THRESHOLD * 2; n]);
-            assert!(merge_groups(&list).len() < n, "{n} partials did not shrink");
+            assert!(
+                merge_groups(&list, MAP_REDUCE_TOKEN_THRESHOLD).len() < n,
+                "{n} partials did not shrink"
+            );
         }
     }
 }

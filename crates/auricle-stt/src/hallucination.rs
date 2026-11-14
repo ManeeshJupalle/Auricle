@@ -30,6 +30,32 @@ const KNOWN_PHRASES: &[&str] = &[
     "thanks for listening",
     "thanks for watching",
     "you",
+    // The same habit in the other languages the multilingual models speak,
+    // mostly subtitle credits from the video Whisper was trained on.
+    "untertitel im auftrag des zdf für funk 2017",
+    "untertitel der amaraorgcommunity",
+    "vielen dank",
+    "vielen dank fürs zuschauen",
+    "subtítulos realizados por la comunidad de amaraorg",
+    "gracias",
+    "gracias por ver el video",
+    "soustitres réalisés par la communauté damaraorg",
+    "merci",
+    "merci davoir regardé",
+    "legendas pela comunidade amaraorg",
+    "obrigado",
+    "sottotitoli creati dalla comunità amaraorg",
+    "grazie",
+    "ondertiteling door de amaraorg gemeenschap",
+    "продолжение следует",
+    "спасибо за просмотр",
+    "ご視聴ありがとうございました",
+    "ありがとうございました",
+    "字幕由amaraorg社区提供",
+    "谢谢观看",
+    "谢谢",
+    "시청해주셔서 감사합니다",
+    "감사합니다",
 ];
 
 /// Whisper emits bracketed pseudo-events for non-speech audio, e.g.
@@ -101,6 +127,23 @@ mod tests {
         assert!(is_noise_annotation("*sigh*"));
         assert!(!is_noise_annotation("hello world"));
         assert!(!is_noise_annotation("it works (mostly) fine"));
+    }
+
+    #[test]
+    fn stock_phrases_are_known_in_other_languages_too() {
+        for said in [
+            "Untertitel im Auftrag des ZDF für funk, 2017",
+            "Sous-titres réalisés par la communauté d'Amara.org",
+            "Subtítulos realizados por la comunidad de Amara.org",
+            "ご視聴ありがとうございました",
+            "字幕由Amara.org社区提供",
+            "시청해주셔서 감사합니다.",
+            "Продолжение следует...",
+        ] {
+            assert!(is_hallucination(said, false, Some(0.9)), "{said}");
+            // Still only with the evidence: someone may really say it.
+            assert!(!is_hallucination(said, false, Some(0.1)), "{said}");
+        }
     }
 
     #[test]

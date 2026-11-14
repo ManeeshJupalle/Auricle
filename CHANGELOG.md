@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.5.2 — 2026-11-14
+
+Fixes from a review before launch. The first matters most on work laptops.
+
+- **Auricle works behind a proxy.** With a proxy set in Windows (Settings →
+  Network → Proxy) or in `HTTP_PROXY`, the overlay sent its calls to its own
+  engine through the proxy. It then said the port was held by something that
+  was not Auricle, or that the engine never started, and the copilot and
+  dictation did nothing. The overlay now always reaches the engine directly,
+  as the engine does a local Ollama or a local speech server. Cloud providers
+  still go through the proxy.
+- **The copilot keeps to the meeting you're in.** Its transcript window is the
+  last 10 minutes, so in back-to-back calls it also held the end of the call
+  before, and answers could mix the two. An ask during a meeting now reads
+  only that meeting's lines. Between meetings it still reads the last 10
+  minutes, so "what did they just say?" works after you hang up.
+- **A first dictation no longer leaves the dashboard waiting.** Dictating
+  before ever recording downloads the speech model, and the dashboard showed
+  that download until a reload, with its Start button replaced by Cancel. It
+  now clears when the dictation starts or ends.
+- **No stale line in the live transcript.** On a busy machine, a line's last
+  in-progress update could reach the dashboard after the line was final, and
+  stayed on the page as a grey duplicate.
+- **Text deleted under 0.4 is now gone from the database file.** 0.5.0 began
+  zeroing deleted text, but what 0.4.x had deleted stayed in the file's free
+  space, so the 0.5.0 note that the upgrade clears it was not true. The engine
+  now rewrites the file when it starts, once for a database from 0.4.x and
+  again whenever deletes have left free pages.
+- **Memory stays flat through audio that never pauses.** Music, or a talk with
+  no half-second gap, kept every sample of the stretch in memory until it
+  paused: about 230 MB an hour for each side.
+- **Chinese, Japanese, and Thai no longer repeat words every five seconds.**
+  Long speech is transcribed in overlapping five-second pieces, and the
+  repeated words were matched between spaces, which these languages don't
+  use. They are now matched by character.
+- **Long summaries ride out a passing server error.** A 500 or 503 from the
+  LLM ended a long summary at the portion it hit, leaving the rest of the
+  meeting out. Summaries now wait and retry, as they already did for rate
+  limits. Dictation polish and the copilot still report it at once.
+- **Updates work for a copy installed for all users.** Tray → Check for
+  updates ran the installer per user, so a machine-wide install (see
+  BUILDING.md) closed and did not update. It now updates machine-wide, after
+  Windows asks for permission.
+- **The dashboard loads in a browser that blocks site data.** It stayed blank,
+  because reading the saved theme threw before anything was drawn.
+- **Redaction catches more of how numbers get written down.** With
+  `redact_pii` on, card numbers grouped with commas or dots, digits said
+  before a card, social security numbers with spaces, and phone numbers given
+  with a `+` country code now become labels too.
+- **Nothing goes to the cloud without its ledger row.** A meeting's or a
+  dictation's audio, a summary, an ask, and an auto-title went ahead when the
+  egress ledger couldn't be written, leaving no row. Each is now refused, as
+  dictation polish and the MCP tools already were. Local work still goes ahead.
+  An ask between meetings that sends one meeting's last minutes is now filed
+  under that meeting. A provider URL with a `user:password@` part is filed
+  under its real host, and is treated as on this machine only if that host is.
+- **Unreadable settings stop a start.** A meeting or dictation started when its
+  settings couldn't be read went ahead without them, so with redaction off and
+  perhaps a cloud provider you had switched away from.
+- **Stopping a meeting no longer waits out its first model download.** The
+  meeting stops at once, and every new meeting or dictation is no longer
+  refused until the download ends. A download or model load given up on, by a
+  stop or a cancelled dictation, now finishes by itself and is kept for the
+  next start, where it was thrown away and paid again, sometimes alongside the
+  first.
+- **Summaries with Ollama fit its default context.** Ollama runs a model in
+  4,096 tokens unless its server is set up for more, and dropped the start of a
+  longer request, the instructions first. Summaries through Ollama now go in
+  portions that fit. Chinese, Japanese, and Korean text is also counted closer
+  to its real size, about a token a character, where it was undercounted
+  three or four times over.
+- **Retention covers asks made between meetings.** With
+  `copilot.retain_context` on, an ask made outside a meeting was kept forever,
+  screen text and all. It now goes after the same number of days as meetings.
+- **Uninstalling after Quit no longer needs a reboot.** Quit leaves the engine
+  running, and the uninstaller couldn't remove it, so the folder stayed until a
+  reboot and port 4820 stayed taken. The installer now stops the engine in its
+  own folder first, on uninstall and upgrade alike.
+- **The screen-share switch covers the dictation pill.** It hid only the card,
+  so a share showed the pill saying what was being dictated. A switch that
+  failed to take also showed as on; it now says so.
+- **The audio player keeps playing across tabs.** Switching to Summary or Asks
+  stopped playback, and coming back started it from 0:00. Picking the line past
+  the end of the audio also rewound to the start of the meeting.
+- **Smaller fixes.** Starting the app twice while the engine boots no longer
+  pops up the card with an error. Whisper's stock phrases on silence are now
+  known in German, Spanish, French, Portuguese, Italian, Dutch, Russian,
+  Japanese, Chinese, and Korean, not only English. A device whose clock runs
+  fast no longer drifts ahead of the other side over a long meeting. Local
+  Whisper no longer leaks a little memory on every decode. A copilot prompt
+  with no room left for the transcript says so, rather than that nobody spoke.
+  `auricle export --out <file>` writes UTF-8, which Windows PowerShell 5.1
+  garbles when the output is redirected.
+
 ## 0.5.1 — 2026-11-13
 
 A new look, a tray switch for screen shares, and two things that could stop a

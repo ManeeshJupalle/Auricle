@@ -92,7 +92,7 @@ impl OpenAiChatProvider {
             endpoint: format!("{}/chat/completions", base_url.trim_end_matches('/')),
             model: model.to_string(),
             api_key,
-            client: http_client(read_timeout(id, base_url)),
+            client: http_client(read_timeout(id, base_url), base_url),
         }
     }
 
@@ -102,11 +102,18 @@ impl OpenAiChatProvider {
             .unwrap_or(&self.endpoint)
     }
 
-    /// POST the request and surface non-2xx as a clean error, retrying 429s.
-    /// Both providers answer `stream: true` errors with a plain JSON body
-    /// and a real HTTP status (fixtures `*_badmodel_error.txt`), so this
-    /// check covers streaming and non-streaming alike.
-    async fn send_checked(&self, request: &ChatRequest<'_>) -> Result<reqwest::Response> {
+    /// POST the request and surface non-2xx as a clean error, retrying 429s,
+    /// and 5xx too when `patient`: a summary portion lost to one passing 503
+    /// costs the rest of the meeting, while a dictation waiting on its polish
+    /// is better off pasted as heard. Both providers answer `stream: true`
+    /// errors with a plain JSON body and a real HTTP status (fixtures
+    /// `*_badmodel_error.txt`), so this check covers streaming and
+    /// non-streaming alike.
+    async fn send_checked(
+        &self,
+        request: &ChatRequest<'_>,
+        patient: bool,
+    ) -> Result<reqwest::Response> {
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -125,7 +132,8 @@ impl OpenAiChatProvider {
                 ))
             })?;
             let status = resp.status();
-            if status.as_u16() == 429 && attempt < MAX_ATTEMPTS {
+            let passing = status.as_u16() == 429 || (patient && status.is_server_error());
+            if passing && attempt < MAX_ATTEMPTS {
                 let wait = retry_after(resp.headers())
                     .unwrap_or(BASE_BACKOFF * 2u32.pow(attempt - 1))
                     .min(MAX_RATE_LIMIT_WAIT);
@@ -188,12 +196,25 @@ fn read_timeout(id: &str, base_url: &str) -> Duration {
     }
 }
 
-fn http_client(read_timeout: Duration) -> reqwest::Client {
-    reqwest::Client::builder()
+fn http_client(read_timeout: Duration, base_url: &str) -> reqwest::Client {
+    client_builder(base_url)
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(read_timeout)
         .build()
         .expect("building http client")
+}
+
+/// A client builder that keeps a request to this machine on it. reqwest uses
+/// the Windows proxy setting or `HTTP_PROXY`, and exempts only the hosts those
+/// list by name, so behind a proxy a request to a local Ollama would go to the
+/// proxy and fail. A remote URL keeps the proxy: a cloud provider may need it.
+pub(crate) fn client_builder(base_url: &str) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    if auricle_core::is_loopback_url(base_url) {
+        builder.no_proxy()
+    } else {
+        builder
+    }
 }
 
 /// The `Retry-After` wait, in its seconds form (the only one these providers
@@ -204,17 +225,8 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     Duration::try_from_secs_f64(seconds).ok()
 }
 
-#[async_trait]
-impl LlmProvider for OpenAiChatProvider {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn model(&self) -> &str {
-        &self.model
-    }
-
-    async fn complete(&self, system: &str, user: &str) -> Result<String> {
+impl OpenAiChatProvider {
+    async fn completion(&self, system: &str, user: &str, patient: bool) -> Result<String> {
         let request = ChatRequest {
             model: &self.model,
             messages: [
@@ -231,7 +243,7 @@ impl LlmProvider for OpenAiChatProvider {
             stream: false,
             stream_options: None,
         };
-        let resp = self.send_checked(&request).await?;
+        let resp = self.send_checked(&request, patient).await?;
         let body: ChatResponse = resp
             .json()
             .await
@@ -250,6 +262,25 @@ impl LlmProvider for OpenAiChatProvider {
             return Ok(format!("{content}\n\n{TRUNCATION_NOTICE}"));
         }
         Ok(content)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OpenAiChatProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    async fn complete(&self, system: &str, user: &str) -> Result<String> {
+        self.completion(system, user, false).await
+    }
+
+    async fn complete_patiently(&self, system: &str, user: &str) -> Result<String> {
+        self.completion(system, user, true).await
     }
 
     async fn chat_stream(
@@ -276,7 +307,7 @@ impl LlmProvider for OpenAiChatProvider {
                 include_usage: true,
             }),
         };
-        let resp = self.send_checked(&request).await?;
+        let resp = self.send_checked(&request, false).await?;
         let mut body = resp.bytes_stream();
         let mut parser = SseParser::new();
         let mut usage = None;
@@ -353,7 +384,7 @@ mod tests {
             .mount(&server)
             .await;
         let mut provider = OpenAiChatProvider::new("ollama", &server.uri(), "m", None);
-        provider.client = http_client(Duration::from_millis(200));
+        provider.client = http_client(Duration::from_millis(200), &server.uri());
 
         let result =
             tokio::time::timeout(Duration::from_secs(10), provider.complete("sys", "user"))
@@ -389,7 +420,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200)); // let the client read it
         });
         let mut provider = OpenAiChatProvider::new("ollama", &url, "m", None);
-        provider.client = http_client(Duration::from_secs(1));
+        provider.client = http_client(Duration::from_secs(1), &url);
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         provider.chat_stream("sys", "user", tx).await.unwrap();

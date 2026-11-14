@@ -37,6 +37,15 @@ export function playPlan<T extends Track>(tracks: T[]): { rewind: boolean; start
 }
 
 /**
+ * Whether a seek starts playback. Not past the end of every track: the line
+ * runs on after the audio while the last words are transcribed, and Play
+ * from there would start the meeting over from the top.
+ */
+export function seekPlays<T extends Track>(tracks: T[]): boolean {
+  return !playPlan(tracks).rewind;
+}
+
+/**
  * Floating playback bar for sessions recorded with retain_raw_audio: the
  * mic and loopback WAVs share one 16 kHz session timeline, so both play in
  * sync (that IS the meeting audio — both sides at once).
@@ -120,7 +129,7 @@ export const AudioBar = forwardRef<
   useImperativeHandle(ref, () => ({
     seek: (ms: number) => {
       seekTo(ms / 1000);
-      if (!playing) void toggle();
+      if (!playing && seekPlays(both())) void toggle();
     },
   }));
 

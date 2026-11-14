@@ -133,6 +133,7 @@ async fn llm_title(
     truncate_chars(&mut transcript, MAX_PROMPT_CHARS);
     // Egress ledger: the opening of the transcript goes to the titling LLM
     // (or stays local). Metadata only, as for summaries.
+    // No row, no title: the meeting keeps the one it has.
     crate::egress::record(
         store,
         Some(session_id),
@@ -141,7 +142,8 @@ async fn llm_title(
         &provider_id,
         Some(transcript.chars().count() as i64),
         Some("auto-title"),
-    );
+    )
+    .ok()?;
     let raw = tokio::time::timeout(LLM_TIMEOUT, provider.complete(TITLE_SYSTEM, &transcript))
         .await
         .ok()?

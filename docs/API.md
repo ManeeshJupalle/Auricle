@@ -390,7 +390,10 @@ $ curl "http://127.0.0.1:4820/api/v1/sessions/s19f31016d52/export?format=md"
 ```
 
 Content type `text/markdown`. Unsupported formats return `400`.
-`auricle export <id> --md` prints the same markdown from the same code.
+`auricle export <id> --md` prints the same markdown from the same code;
+`--out <file>` writes it to a file as UTF-8 instead, which Windows PowerShell
+5.1 needs: it re-encodes a program's redirected output and garbles anything
+outside ASCII.
 
 ## POST /api/v1/sessions/{id}/summarize
 
@@ -631,7 +634,9 @@ unsupported/blocked, no OCR language pack, capture/OCR error).
 The assistant service (the copilot's engine-side half): builds a prompt
 from the question, optional on-demand screen OCR, an in-memory rolling
 window of the live transcript (last `copilot.transcript_window_min`
-minutes, default 10), and optional follow-up history — then streams the
+minutes, default 10; when the ask resolves to a session, by `session_id` or
+because one is recording, only that session's lines), and optional
+follow-up history — then streams the
 LLM answer as Server-Sent Events. Every fragment is simultaneously
 mirrored on `/ws/live` as `answer_delta` / `answer_done` / `ask_error`
 events, so a UI holding the socket needs no second connection.

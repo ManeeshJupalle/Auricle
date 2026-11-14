@@ -51,6 +51,17 @@ const QUIT_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// after the handoff, so this is the last thing it can tell anyone.
 const INSTALL_NOTICE: Duration = Duration::from_secs(10);
 
+/// The client for every call to the engine. Never proxied: the engine is on
+/// this machine, and reqwest would otherwise follow the Windows proxy setting
+/// or `HTTP_PROXY`, which exempt only the hosts they list by name. Behind a
+/// proxy, the engine then looked like a stranger on its port, or not there.
+pub fn engine_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("building http client")
+}
+
 struct AppState {
     cfg: OverlayConfig,
     http: reqwest::Client,
@@ -189,13 +200,19 @@ fn notify(app: &tauri::AppHandle, message: impl Into<String>) {
     let _ = app.emit("tray-error", message);
 }
 
-/// Keep the copilot card out of screen shares and recordings, or put it
-/// back (`WDA_EXCLUDEFROMCAPTURE`). The error is written for the user.
+/// Keep the copilot out of screen shares and recordings, or put it back
+/// (`WDA_EXCLUDEFROMCAPTURE`): the card, and the dictation pill, which shows
+/// what is being dictated. The error is written for the user.
 fn hide_from_screen_share(app: &tauri::AppHandle, hide: bool) -> Result<(), String> {
     let result = match app.get_webview_window("main") {
-        Some(win) => win.set_content_protected(hide).map_err(|e| e.to_string()),
+        Some(win) => set_capture_excluded(&win, hide),
         None => Err("the card's window is missing".to_string()),
     };
+    // The pill may not exist (it could not be built); the card is what counts.
+    let result = result.and(match app.get_webview_window(pill::LABEL) {
+        Some(win) => set_capture_excluded(&win, hide),
+        None => Ok(()),
+    });
     result.map_err(|e| {
         if hide {
             format!(
@@ -206,6 +223,30 @@ fn hide_from_screen_share(app: &tauri::AppHandle, hide: bool) -> Result<(), Stri
             format!("The card could not be put back into screen shares ({e}).")
         }
     })
+}
+
+/// Set straight through Windows, which says whether it took: Tauri's
+/// `set_content_protected` drops that answer, so a failure read as success
+/// and the tick claimed a hidden card that wasn't.
+#[cfg(windows)]
+fn set_capture_excluded(win: &tauri::WebviewWindow, hide: bool) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+    };
+    let raw = win.hwnd().map_err(|e| e.to_string())?.0;
+    let affinity = if hide {
+        WDA_EXCLUDEFROMCAPTURE
+    } else {
+        WDA_NONE
+    };
+    // SAFETY: a live window of this process, and a documented affinity value.
+    unsafe { SetWindowDisplayAffinity(HWND(raw), affinity) }.map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn set_capture_excluded(win: &tauri::WebviewWindow, hide: bool) -> Result<(), String> {
+    win.set_content_protected(hide).map_err(|e| e.to_string())
 }
 
 /// The tray's screen-share item was clicked. Windows has already flipped its
@@ -559,7 +600,11 @@ async fn install_update(
 /// (tauri.conf.json → plugins.updater.pubkey); a tampered artifact is
 /// rejected before it can run.
 async fn check_for_updates(app: tauri::AppHandle, interactive: bool) {
-    let updater = match app.updater() {
+    let updater = match app
+        .updater_builder()
+        .installer_args(install_scope_args())
+        .build()
+    {
         Ok(u) => u,
         Err(e) => {
             if interactive {
@@ -594,6 +639,37 @@ async fn check_for_updates(app: tauri::AppHandle, interactive: bool) {
             }
         }
     }
+}
+
+/// What msiexec needs to update this copy in place. The updater passes it no
+/// scope, so the MSI takes its default, a per-user install: for a copy
+/// installed for all users (BUILDING.md) that missed the installed product
+/// and failed in Program Files, after the overlay had already quit.
+fn install_scope_args() -> Vec<&'static str> {
+    let program_files: Vec<PathBuf> = ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+    let for_all_users =
+        std::env::current_exe().is_ok_and(|exe| installed_for_all_users(&exe, &program_files));
+    if for_all_users {
+        // msiexec raises its own elevation prompt for this.
+        vec!["ALLUSERS=1"]
+    } else {
+        Vec::new()
+    }
+}
+
+/// A per-machine install lives under Program Files; a per-user one under
+/// `%LOCALAPPDATA%\Programs`. Windows paths ignore case.
+fn installed_for_all_users(exe: &std::path::Path, program_files: &[PathBuf]) -> bool {
+    let exe = exe.to_string_lossy().to_lowercase();
+    program_files.iter().any(|dir| {
+        let dir = dir.to_string_lossy().to_lowercase();
+        let dir = dir.trim_end_matches('\\');
+        !dir.is_empty() && exe.starts_with(&format!("{dir}\\"))
+    })
 }
 
 /// Runs once per healthy engine after an outage (and at launch): settle who
@@ -764,14 +840,36 @@ async fn watch_engine(app: tauri::AppHandle) {
 /// app. The page keeps its engine origin (http://127.0.0.1:4820), so the
 /// daemon's same-origin defense applies to it exactly as to a browser
 /// tab; the webview gets no Tauri IPC (capabilities target "main" only).
+/// A dashboard is on its way: a second launch during the engine wait below
+/// would otherwise build a second window, fail, and pop the card up instead.
+static DASHBOARD_OPENING: AtomicBool = AtomicBool::new(false);
+
+/// Clears [`DASHBOARD_OPENING`] however the opening ends.
+struct DashboardOpening;
+
+impl Drop for DashboardOpening {
+    fn drop(&mut self) {
+        DASHBOARD_OPENING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Bring an open dashboard forward. False when there is none.
+fn focus_dashboard(app: &tauri::AppHandle) -> bool {
+    let Some(win) = app.get_webview_window("dashboard") else {
+        return false;
+    };
+    let _ = win.unminimize();
+    let _ = win.show();
+    let _ = win.set_focus();
+    true
+}
+
 fn open_dashboard(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
-        if let Some(win) = app.get_webview_window("dashboard") {
-            let _ = win.unminimize();
-            let _ = win.show();
-            let _ = win.set_focus();
+        if focus_dashboard(&app) || DASHBOARD_OPENING.swap(true, Ordering::SeqCst) {
             return;
         }
+        let _opening = DashboardOpening;
         let (http, base) = {
             let state = app.state::<AppState>();
             (state.http.clone(), state.base_url().to_string())
@@ -801,6 +899,9 @@ fn open_dashboard(app: tauri::AppHandle) {
                 return;
             }
         };
+        if focus_dashboard(&app) {
+            return;
+        }
         let built = WebviewWindowBuilder::new(&app, "dashboard", WebviewUrl::External(url))
             .title("Auricle Dashboard")
             .inner_size(1200.0, 800.0)
@@ -944,7 +1045,7 @@ pub fn run() {
         )
         .manage(AppState {
             cfg: cfg.clone(),
-            http: reqwest::Client::new(),
+            http: engine_client(),
             hotkey_warnings: Mutex::new(warnings),
             asks: ask::AskSlot::default(),
             early_notices: Mutex::new(Some(Vec::new())),
@@ -977,17 +1078,6 @@ pub fn run() {
                     }
                 }
             }
-            // Opt-in: keep the card out of screen shares and recordings.
-            let mut hidden_from_share = false;
-            if cfg.overlay.hide_from_screen_share {
-                match hide_from_screen_share(app.handle(), true) {
-                    Ok(()) => hidden_from_share = true,
-                    Err(e) => {
-                        let state = app.state::<AppState>();
-                        state.hotkey_warnings.lock().unwrap().push(e);
-                    }
-                }
-            }
             // Built now, hidden, so a dictation never waits on a webview.
             // Without it dictation still pastes, so it is no reason to stop.
             if let Err(e) = pill::build(app.handle(), &cfg.overlay.theme) {
@@ -997,6 +1087,18 @@ pub fn run() {
                 );
                 let state = app.state::<AppState>();
                 state.hotkey_warnings.lock().unwrap().push(warning);
+            }
+            // Opt-in: keep the card out of screen shares and recordings. After
+            // the pill, which it covers too.
+            let mut hidden_from_share = false;
+            if cfg.overlay.hide_from_screen_share {
+                match hide_from_screen_share(app.handle(), true) {
+                    Ok(()) => hidden_from_share = true,
+                    Err(e) => {
+                        let state = app.state::<AppState>();
+                        state.hotkey_warnings.lock().unwrap().push(e);
+                    }
+                }
             }
 
             // The overlay starts hidden, and the warnings render inside it.
@@ -1131,6 +1233,38 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod install_scope_tests {
+    use super::*;
+
+    #[test]
+    fn a_copy_under_program_files_updates_for_all_users() {
+        let program_files = [
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+        ];
+        let all_users =
+            |exe: &str| installed_for_all_users(std::path::Path::new(exe), &program_files);
+        assert!(all_users(
+            r"C:\Program Files\Auricle Copilot\auricle-overlay.exe"
+        ));
+        assert!(all_users(
+            r"c:\PROGRAM FILES\Auricle Copilot\auricle-overlay.exe"
+        ));
+        assert!(!all_users(
+            r"C:\Users\a b\AppData\Local\Programs\Auricle Copilot\auricle-overlay.exe"
+        ));
+        // A sibling whose name only starts the same is not inside it.
+        assert!(!all_users(
+            r"C:\Program Files Extra\Auricle\auricle-overlay.exe"
+        ));
+        assert!(!installed_for_all_users(
+            std::path::Path::new(r"C:\Program Files\x.exe"),
+            &[PathBuf::new()]
+        ));
+    }
 }
 
 #[cfg(test)]

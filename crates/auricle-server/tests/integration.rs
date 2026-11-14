@@ -1215,6 +1215,46 @@ async fn retention_is_off_unless_set_to_a_positive_whole_number() {
 }
 
 #[tokio::test]
+async fn retention_takes_asks_made_between_meetings_too() {
+    let engine = fake_engine(Config::default(), "retention-loose-asks");
+    let store = engine.store();
+    let now = unix_now();
+    store
+        .insert_ask(
+            None,
+            "old q",
+            Some("old screen"),
+            "a",
+            "ollama",
+            now - 40 * DAY,
+        )
+        .unwrap();
+    store
+        .insert_ask(
+            None,
+            "new q",
+            Some("new screen"),
+            "a",
+            "ollama",
+            now - 2 * DAY,
+        )
+        .unwrap();
+    store
+        .set_setting("retention_days", &serde_json::json!(30))
+        .unwrap();
+
+    let sweep = engine.sweep_retention_at(now).unwrap();
+    assert_eq!(sweep.notice, None);
+    let left: Vec<String> = store
+        .list_asks(None, 10, 0)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.question)
+        .collect();
+    assert_eq!(left, vec!["new q".to_string()]);
+}
+
+#[tokio::test]
 async fn the_daemon_sweeps_retention_when_it_starts() {
     let engine = fake_engine(Config::default(), "retention-startup");
     let store = engine.store();

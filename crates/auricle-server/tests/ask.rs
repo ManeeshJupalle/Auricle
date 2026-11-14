@@ -496,6 +496,68 @@ async fn a_deleted_meeting_stops_reaching_asks() {
     assert!(!prompt.contains(SECRET), "{prompt}");
 }
 
+/// Two seconds of digital silence, 16 kHz mono: a call that is live but has
+/// heard nothing yet.
+fn silent_wav() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("auricle-ask-silence-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("silence.wav");
+    let data_len: u32 = 16_000 * 2 * 2;
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&16_000u32.to_le_bytes());
+    wav.extend_from_slice(&32_000u32.to_le_bytes()); // bytes per second
+    wav.extend_from_slice(&2u16.to_le_bytes()); // bytes per frame
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.resize(44 + data_len as usize, 0);
+    std::fs::write(&path, wav).unwrap();
+    path
+}
+
+#[tokio::test]
+async fn a_live_call_asks_about_itself_not_the_call_before() {
+    let llm = mock_llm(MOCK_SSE).await;
+    let reader = MockReader::with_script(vec![]);
+    let cfg = cfg_with_llm(&llm.uri());
+    let (base, engine) = spawn_server_hearing(cfg, "ring-next-call", reader, SECRET).await;
+    recorded_meeting(&llm, &base, &engine).await;
+
+    // Back to back: the next call starts while the last one's words are
+    // still inside the window.
+    let next = engine
+        .start_session(StartParams {
+            title: Some("next call".into()),
+            stt_provider: None,
+            mic_device: None,
+            loopback_device: None,
+            audio: Some(AudioSource::WavFile {
+                path: silent_wav(),
+                channel: ChannelId::Loopback,
+            }),
+        })
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/v1/ask"))
+        .json(&serde_json::json!({"question": "what's happening?", "include_transcript": true}))
+        .send()
+        .await
+        .unwrap();
+    let events = read_sse(resp).await;
+    assert_eq!(events[0]["transcript_segments"], 0, "{events:?}");
+    let prompt = prompt_sent(&llm, 1).await;
+    assert!(prompt.contains("next call"), "{prompt}");
+    assert!(!prompt.contains(SECRET), "{prompt}");
+    stop_and_wait(&engine, &next).await;
+}
+
 #[tokio::test]
 async fn a_dictation_never_reaches_an_ask() {
     let llm = mock_llm(MOCK_SSE).await;

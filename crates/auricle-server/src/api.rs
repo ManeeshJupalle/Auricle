@@ -862,7 +862,7 @@ async fn summarize_session(
     let transcript = crate::export::render_transcript_text(&segments);
     // Egress ledger: the transcript text goes to the summarizing LLM (or
     // stays local). Metadata only — the transcript itself is not recorded.
-    crate::egress::record(
+    if let Err(e) = crate::egress::record(
         &store,
         Some(id.as_str()),
         "summary",
@@ -870,7 +870,9 @@ async fn summarize_session(
         &provider_id,
         Some(transcript.chars().count() as i64),
         Some(&format!("summary: {template_name}")),
-    );
+    ) {
+        return internal(e.to_string());
+    }
     let content = match auricle_llm::summarize(provider.as_ref(), &template, &transcript).await {
         Ok(c) => c,
         Err(e) => {

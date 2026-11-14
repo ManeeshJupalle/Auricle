@@ -197,7 +197,15 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
         Err(e) => return internal(format!("loading copilot template: {e}")),
     };
 
-    let transcript_segments = body.include_transcript.then(|| state.ring.snapshot());
+    // The window is a span of time, so just after one call it still holds that
+    // call's last minutes. An ask about a meeting reads that meeting alone.
+    let transcript_segments = body.include_transcript.then(|| {
+        let mut segments = state.ring.snapshot();
+        if let Some(session) = &resolved_session {
+            segments.retain(|seg| seg.session == session.id);
+        }
+        segments
+    });
     let user_prompt = assemble_user_prompt(
         &AskPromptParts {
             question: &question,
@@ -213,6 +221,44 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
         },
         cfg.copilot.max_screen_chars,
     );
+
+    // Egress ledger: record the prompt leaving for the LLM (or staying
+    // local), before anything streams, so a refusal is a plain error.
+    // Metadata only — the question, screen text, and transcript are never
+    // recorded here, just how much left and where it went.
+    let mut parts: Vec<&str> = Vec::new();
+    if body.include_screen {
+        parts.push("screen");
+    }
+    if transcript_segments.is_some() {
+        parts.push("transcript");
+    }
+    let detail = if parts.is_empty() {
+        "ask".to_string()
+    } else {
+        format!("ask + {}", parts.join(" + "))
+    };
+    // With no meeting named or live, the lines sent can still all be one
+    // meeting's, one that stopped a few minutes ago: the row goes under it.
+    let ledger_session = resolved_session.as_ref().map(|s| s.id.clone()).or_else(|| {
+        let segments = transcript_segments.as_ref()?;
+        let first = &segments.first()?.session;
+        segments
+            .iter()
+            .all(|seg| &seg.session == first)
+            .then(|| first.clone())
+    });
+    if let Err(e) = crate::egress::record(
+        &store,
+        ledger_session.as_deref(),
+        "prompt",
+        crate::egress::llm_egress(&provider_id, &cfg),
+        &provider_id,
+        Some(user_prompt.chars().count() as i64),
+        Some(&detail),
+    ) {
+        return internal(e.to_string());
+    }
 
     // The SSE response streams from `event_rx`; the orchestrator below is
     // the single consumer of the provider's delta channel and fans out to
@@ -233,31 +279,6 @@ pub async fn ask(State(state): State<AppState>, Json(body): Json<AskBody>) -> Re
         "transcript_segments": transcript_segments.as_ref().map(|s| s.len()),
     });
     let _ = event_tx.try_send(Event::default().data(started.to_string()));
-
-    // Egress ledger: record the prompt leaving for the LLM (or staying
-    // local). Metadata only — the question, screen text, and transcript are
-    // never recorded here, just how much left and where it went.
-    let mut parts: Vec<&str> = Vec::new();
-    if body.include_screen {
-        parts.push("screen");
-    }
-    if transcript_segments.is_some() {
-        parts.push("transcript");
-    }
-    let detail = if parts.is_empty() {
-        "ask".to_string()
-    } else {
-        format!("ask + {}", parts.join(" + "))
-    };
-    crate::egress::record(
-        &store,
-        resolved_session.as_ref().map(|s| s.id.as_str()),
-        "prompt",
-        crate::egress::llm_egress(&provider_id, &cfg),
-        &provider_id,
-        Some(user_prompt.chars().count() as i64),
-        Some(&detail),
-    );
 
     let llm_task = {
         let provider = provider.clone();

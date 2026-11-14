@@ -1484,6 +1484,11 @@ input[type='search']::-webkit-search-cancel-button {
   min-height: 0;
 }
 
+/* Behind another tab: still mounted, so its audio plays on. */
+.doc-wrap[hidden] {
+  display: none;
+}
+
 .doc-scroll {
   flex: 1;
   min-height: 0;

@@ -591,63 +591,64 @@ export function SessionView({
         </div>
       )}
 
-      {tab === 'transcript' ? (
-        <div className="doc-wrap">
-          {isLive ? (
-            <TurnDoc
-              ref={docRef}
-              turnOrder={liveTurnOrder}
-              live
-              follow
-              emptyHint="Listening. Speak, or play some audio. Words appear here as they are heard, and settle once they are sure."
-            />
-          ) : staticDoc ? (
-            <TurnDoc
-              ref={docRef}
-              turnOrder={staticDoc.turnOrder}
-              turns={staticDoc.turns}
-              rows={staticDoc.rows}
-              live={false}
-              onSeek={
-                hasAudio
-                  ? (ms) => {
-                      setFollowing(true);
-                      audioRef.current?.seek(ms);
-                    }
-                  : undefined
-              }
-              onRange={showReading}
-              query={query}
-              foundTurn={foundTurn}
-              currentTurn={currentTurn}
-              onUserScroll={() => setFollowing(false)}
-              emptyHint={
-                <>
-                  <p>
-                    <strong>No speech was heard in this meeting.</strong>
-                  </p>
-                  <p>
-                    Neither side made a sound for the whole recording. If people were talking, the
-                    wrong device may have been listening.
-                  </p>
-                  <button className="btn" onClick={onOpenSettings}>
-                    Check your audio devices
-                  </button>
-                </>
-              }
-            />
-          ) : null}
-          {hasAudio && (
-            <AudioBar
-              ref={audioRef}
-              sessionId={sessionId}
-              onTime={followAudio}
-              following={following || currentTurn === null}
-              onFollow={() => setFollowing(true)}
-            />
-          )}
-        </div>
-      ) : tab === 'asks' ? (
+      {/* Kept mounted behind the other tabs: the player lives here, and
+          leaving the transcript must not stop the audio or lose its place. */}
+      <div className="doc-wrap" hidden={tab !== 'transcript'}>
+        {isLive ? (
+          <TurnDoc
+            ref={docRef}
+            turnOrder={liveTurnOrder}
+            live
+            follow
+            emptyHint="Listening. Speak, or play some audio. Words appear here as they are heard, and settle once they are sure."
+          />
+        ) : staticDoc ? (
+          <TurnDoc
+            ref={docRef}
+            turnOrder={staticDoc.turnOrder}
+            turns={staticDoc.turns}
+            rows={staticDoc.rows}
+            live={false}
+            onSeek={
+              hasAudio
+                ? (ms) => {
+                    setFollowing(true);
+                    audioRef.current?.seek(ms);
+                  }
+                : undefined
+            }
+            onRange={showReading}
+            query={query}
+            foundTurn={foundTurn}
+            currentTurn={currentTurn}
+            onUserScroll={() => setFollowing(false)}
+            emptyHint={
+              <>
+                <p>
+                  <strong>No speech was heard in this meeting.</strong>
+                </p>
+                <p>
+                  Neither side made a sound for the whole recording. If people were talking, the
+                  wrong device may have been listening.
+                </p>
+                <button className="btn" onClick={onOpenSettings}>
+                  Check your audio devices
+                </button>
+              </>
+            }
+          />
+        ) : null}
+        {hasAudio && (
+          <AudioBar
+            ref={audioRef}
+            sessionId={sessionId}
+            onTime={followAudio}
+            following={following || currentTurn === null}
+            onFollow={() => setFollowing(true)}
+          />
+        )}
+      </div>
+      {tab === 'asks' ? (
         <AskList
           asks={asks}
           hasMore={moreAsks}
@@ -659,7 +660,7 @@ export function SessionView({
             if (turn) openAt(turn, false);
           }}
         />
-      ) : (
+      ) : tab === 'summary' ? (
         <div className="summary-pane">
           <div className="summary-scroll">
             {detail?.summaries.length === 0 && (
@@ -726,7 +727,7 @@ export function SessionView({
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

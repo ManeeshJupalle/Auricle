@@ -51,8 +51,18 @@
             <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" AllowSameVersionUpgrades="yes" />
         {{/if}}
 
+        <!-- AURICLE PATCH: stop the engine before its files are checked for
+             use. "Quit overlay" leaves it running by design, and a running
+             auricle.exe made an uninstall need a reboot while it kept port
+             4820 from a half-removed folder. Only the copy in this install
+             folder: an `auricle serve` started from elsewhere is left alone.
+             Braces are escaped for MSI's formatted text. -->
+        <CustomAction Id="StopInstalledEngine" Directory="INSTALLDIR" Execute="immediate" Impersonate="yes" Return="ignore"
+            ExeCommand="powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Get-Process -Name auricle -ErrorAction SilentlyContinue | Where-Object [\{] $_.Path -and $_.Path.StartsWith('[INSTALLDIR]', 'OrdinalIgnoreCase') [\}] | Stop-Process -Force&quot;" />
+
         <InstallExecuteSequence>
             <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>
+            <Custom Action="StopInstalledEngine" Before="InstallValidate">REMOVE~="ALL" OR WIX_UPGRADE_DETECTED</Custom>
         </InstallExecuteSequence>
 
         <Media Id="1" Cabinet="app.cab" EmbedCab="yes" />

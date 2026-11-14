@@ -233,6 +233,9 @@ impl Outcome {
 
 type StartReply = oneshot::Sender<std::result::Result<DictationStarted, StartError>>;
 
+/// A loaded local provider, keyed by "provider-id|model".
+type CachedProvider = (String, Arc<dyn SttProvider>);
+
 /// What a stop or cancel needs of the latest dictation.
 struct DictationHandle {
     id: String,
@@ -296,7 +299,10 @@ pub struct Engine {
     /// Last constructed local provider, keyed by "provider-id|model".
     /// Loading a whisper model reads 148–500 MB from disk; without this
     /// every session start paid that again.
-    local_provider: Mutex<Option<(String, Arc<dyn SttProvider>)>>,
+    local_provider: Arc<Mutex<Option<CachedProvider>>>,
+    /// Held while a provider is built, so two starts never load or download
+    /// the same model side by side.
+    provider_load: Arc<tokio::sync::Mutex<()>>,
     /// Post-stop auto-titles still running. Shutdown gives them a moment: a
     /// title is generated once, and exiting mid-call loses it for good.
     titles_pending: AtomicUsize,
@@ -341,6 +347,7 @@ impl Engine {
         // declare a still-open session dead (read-only openers like
         // `auricle export` must not).
         store.recover_interrupted()?;
+        store.drop_free_pages();
         let (important_tx, _) = broadcast::channel(IMPORTANT_CAPACITY);
         let (partial_tx, _) = broadcast::channel(PARTIAL_CAPACITY);
         let ring = TranscriptRing::new(opts.cfg.copilot.transcript_window_min);
@@ -352,7 +359,8 @@ impl Engine {
             important_tx,
             partial_tx,
             provider_override: opts.provider_override,
-            local_provider: Mutex::new(None),
+            local_provider: Arc::default(),
+            provider_load: Arc::default(),
             titles_pending: AtomicUsize::new(0),
             ring,
             ask_history: Arc::default(),
@@ -394,6 +402,11 @@ impl Engine {
 
     pub fn subscribe_partials(&self) -> broadcast::Receiver<WsEvent> {
         self.partial_tx.subscribe()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_partial(&self, ev: WsEvent) {
+        let _ = self.partial_tx.send(ev);
     }
 
     pub fn active_session(&self) -> Option<String> {
@@ -537,6 +550,13 @@ impl Engine {
                 }
             }
         }
+        // Asks made between meetings: the same age limit, with nothing to
+        // take them along.
+        if let Err(e) = self.store.delete_loose_asks_before(cutoff) {
+            sweep.notice = Some(format!(
+                "retention: asks outside meetings could not be deleted, next sweep retries: {e}"
+            ));
+        }
         Ok(sweep)
     }
 
@@ -599,8 +619,10 @@ impl Engine {
     ) -> std::result::Result<(), StartError> {
         // Settings stored via PUT /settings overlay the TOML config so the
         // web UI's Settings view actually controls behavior. Precedence:
-        // request params > settings store > config file.
-        let settings = self.store.all_settings().unwrap_or_default();
+        // request params > settings store > config file. Unreadable settings
+        // stop the start: going on without them would drop redaction and
+        // could pick a cloud provider the user had switched away from.
+        let settings = self.store.all_settings().map_err(StartError::Internal)?;
         let setting_str = |key: &str| {
             settings
                 .get(key)
@@ -632,9 +654,13 @@ impl Engine {
         auricle_stt::check_language(&provider_id, &language)
             .map_err(|e| StartError::Invalid(e.to_string()))?;
 
-        let provider = self
-            .provider_for(&provider_id, &provider_cfg, session_id)
-            .await?;
+        // A first model download takes minutes, and a stop must not have to
+        // wait it out: until it ended, the slot stayed taken and every new
+        // meeting or dictation was refused. The download goes on by itself.
+        let provider = tokio::select! {
+            provider = self.provider_for(&provider_id, &provider_cfg, session_id) => provider?,
+            () = raised(&control.stop) => return Err(StartError::Stopped),
+        };
 
         let session_cfg = SessionCfg {
             session_id: session_id.to_string(),
@@ -651,6 +677,30 @@ impl Engine {
                 return Err(StartError::Internal(e));
             }
         };
+
+        // Egress ledger: record where this session's audio goes, before the
+        // capture that feeds it opens. Local providers (on-device Whisper) are
+        // logged as "local" so the ledger shows the full picture, not just
+        // cloud traffic; audio bound for the cloud doesn't go without its row.
+        let dest = if provider.kind() == SttKind::Local {
+            ("local", None)
+        } else {
+            crate::egress::stt_egress(provider.id(), &provider_cfg)
+        };
+        let recorded = crate::egress::record(
+            &self.store,
+            Some(session_id),
+            "audio",
+            dest,
+            provider.id(),
+            None,
+            Some("live capture"),
+        );
+        if let Err(e) = recorded {
+            close_unused_session(mic_session).await;
+            close_unused_session(loop_session).await;
+            return Err(StartError::Internal(e));
+        }
 
         let mic_sel = params
             .mic_device
@@ -732,23 +782,6 @@ impl Engine {
             }
         }
 
-        // Egress ledger: record where this session's audio goes. Local
-        // providers (on-device Whisper) are logged as "local" so the ledger
-        // shows the full picture, not just cloud traffic.
-        let dest = if provider.kind() == SttKind::Local {
-            ("local", None)
-        } else {
-            crate::egress::stt_egress(provider.id(), &provider_cfg)
-        };
-        crate::egress::record(
-            &self.store,
-            Some(session_id),
-            "audio",
-            dest,
-            provider.id(),
-            None,
-            Some("live capture"),
-        );
         let _ = self.important_tx.send(WsEvent::SessionStarted {
             session: session_id.to_string(),
             title,
@@ -916,10 +949,37 @@ impl Engine {
                         }
                     }
                 }
-                let created =
-                    auricle_stt::create_provider(provider_id, provider_cfg, &models_dir).await;
+                // In a task of its own: a start given up on (a stop, a cancel)
+                // leaves the download or load to finish and be kept, where
+                // dropping it threw the work away and the next start paid it
+                // again, often beside a load still running.
+                let load = tokio::spawn({
+                    let (id, cfg) = (provider_id.to_string(), provider_cfg.clone());
+                    let (cache, gate) = (self.local_provider.clone(), self.provider_load.clone());
+                    async move {
+                        let _gate = gate.lock().await;
+                        if let Some((key, p)) = &*cache.lock().unwrap() {
+                            if *key == cache_key {
+                                return Ok(p.clone());
+                            }
+                        }
+                        let p = auricle_stt::create_provider(&id, &cfg, &models_dir).await?;
+                        // Only local providers are worth caching (model load);
+                        // cloud ones are cheap and re-read their key env on
+                        // construction.
+                        if p.kind() == SttKind::Local {
+                            *cache.lock().unwrap() = Some((cache_key, p.clone()));
+                        }
+                        Ok(p)
+                    }
+                });
+                let created = load.await.unwrap_or_else(|e| {
+                    Err(Error::Io(std::io::Error::other(format!(
+                        "loading the speech provider failed: {e}"
+                    ))))
+                });
                 drop(download_watch);
-                let p = created.map_err(|e| match e {
+                created.map_err(|e| match e {
                     Error::Stt(ref m) | Error::Model(ref m) if m.contains("unknown") => {
                         StartError::Invalid(e.to_string())
                     }
@@ -927,13 +987,7 @@ impl Engine {
                         StartError::Invalid(e.to_string())
                     }
                     _ => StartError::Internal(e),
-                })?;
-                // Only local providers are worth caching (model load); cloud
-                // ones are cheap and re-read their key env on construction.
-                if p.kind() == SttKind::Local {
-                    *self.local_provider.lock().unwrap() = Some((cache_key, p.clone()));
-                }
-                p
+                })?
             }
         };
         Ok(provider)
@@ -1135,8 +1189,7 @@ impl Engine {
         let limit = max_duration.unwrap_or(DICTATION_MAX);
         // A first-run model download takes minutes and a load seconds, so a
         // stop, a cancel or the caller leaving ends the start there and then.
-        // A download picks up from its `.part` file next time; a load already
-        // under way finishes on its own and is dropped.
+        // The download or load goes on by itself, and is kept for the next.
         let opening = tokio::select! {
             prepared = self.prepare_dictation(id, language) => Opening::Prepared(prepared),
             ended = &mut end => Opening::Ended(ended.unwrap_or(End::Cancel)),
@@ -1294,9 +1347,10 @@ impl Engine {
         language: Option<String>,
     ) -> std::result::Result<PreparedDictation, StartError> {
         let store = self.store.clone();
+        // Unreadable settings stop the start, as for a meeting.
         let settings = crate::api::off_runtime(move || store.all_settings())
             .await
-            .unwrap_or_default();
+            .map_err(StartError::Internal)?;
         let setting_str = |key: &str| {
             settings
                 .get(key)
@@ -1338,8 +1392,9 @@ impl Engine {
             local: dest.0 == "local",
         };
         if !on_device {
-            // Ahead of the mic, so no audio can leave before its row exists.
-            crate::egress::record(
+            // Ahead of the mic, so no audio can leave before its row exists,
+            // and none leaves for the cloud without one.
+            let recorded = crate::egress::record(
                 &self.store,
                 None,
                 "dictation",
@@ -1348,6 +1403,10 @@ impl Engine {
                 None,
                 None,
             );
+            if let Err(e) = recorded {
+                close_unused_session(session).await;
+                return Err(StartError::Internal(e));
+            }
         }
         Ok(PreparedDictation {
             started,
@@ -1595,6 +1654,13 @@ const CLOSE_UNUSED_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Close a session a failed start opened but never fed; its worker or socket
 /// would otherwise outlive the start.
+/// Resolves once `flag` is set: a stop, for a start still waiting on work.
+async fn raised(flag: &AtomicBool) {
+    while !flag.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn close_unused_session(mut session: Box<dyn SttSession>) {
     let _ = tokio::time::timeout(CLOSE_UNUSED_TIMEOUT, session.finish()).await;
 }

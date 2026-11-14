@@ -42,12 +42,26 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
         p("[secret]", r"\bAKIA[0-9A-Z]{16}\b", None),
         p("[secret]", r"\bsk-[A-Za-z0-9_-]{20,}\b", None),
         p("[secret]", r"\bgsk_[A-Za-z0-9]{20,}\b", None),
-        p("[ssn]", r"\b\d{3}-\d{2}-\d{4}\b", None),
-        // 13–19 digits ending on a digit (so a trailing separator isn't
-        // swallowed), Luhn-gated to reject ordinary long numbers.
+        p(
+            "[ssn]",
+            r"\b(?:\d{3}-\d{2}-\d{4}|\d{3} \d{2} \d{4})\b",
+            None,
+        ),
+        // 13 digits or more, ending on a digit (so a trailing separator isn't
+        // swallowed), Luhn-gated to reject ordinary long numbers. No upper
+        // bound: digits said before a card would otherwise fill the match,
+        // which then fails the check, and the card after them goes free.
         p(
             "[card]",
-            r"\b\d(?:[ -]?\d){12,18}\b",
+            r"\b\d(?:[ -]?\d){12,}\b",
+            Some(card_ok as fn(&str) -> bool),
+        ),
+        // Speech to text also writes a card read out in groups with commas
+        // or dots, which lists of numbers use too, so only card groupings:
+        // four fours, and the 4-6-5 Amex uses.
+        p(
+            "[card]",
+            r"\b(?:\d{4}(?:, ?|\.)\d{4}(?:, ?|\.)\d{4}(?:, ?|\.)\d{4}|\d{4}(?:, ?|\.)\d{6}(?:, ?|\.)\d{5})\b",
             Some(card_ok as fn(&str) -> bool),
         ),
         p(
@@ -61,6 +75,13 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
             "[phone]",
             r"\b(?:\+?\d{1,3}[ .-])?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b",
             None,
+        ),
+        // Any other country's grouping, when said with its `+` country code:
+        // 8 to 15 digits in all, the international length.
+        p(
+            "[phone]",
+            r"\+\d{1,3}(?:[ .-]\(?\d{1,5}\)?){1,5}\b",
+            Some(phone_ok as fn(&str) -> bool),
         ),
     ]
 });
@@ -89,7 +110,10 @@ pub fn redact(text: &str) -> String {
 /// whole digit groups instead; a span with no separators is one group, so an
 /// ordinary long number still gets exactly one check.
 fn card_ok(s: &str) -> bool {
-    let groups: Vec<&str> = s.split([' ', '-']).collect();
+    let groups: Vec<&str> = s
+        .split([' ', '-', ',', '.'])
+        .filter(|g| !g.is_empty())
+        .collect();
     (0..groups.len())
         .any(|start| (start + 1..=groups.len()).any(|end| luhn_ok(&groups[start..end].concat())))
 }
@@ -113,6 +137,11 @@ fn luhn_ok(s: &str) -> bool {
         sum += d;
     }
     sum.is_multiple_of(10)
+}
+
+/// An international number has 8 to 15 digits, country code included.
+fn phone_ok(s: &str) -> bool {
+    (8..=15).contains(&s.chars().filter(char::is_ascii_digit).count())
 }
 
 /// Every dotted octet is 0–255 — rejects version strings like `1.2.3.4444`.
@@ -178,6 +207,35 @@ mod tests {
         assert_eq!(
             redact("ref 1234 5678 9012 3457 123"),
             "ref 1234 5678 9012 3457 123"
+        );
+    }
+
+    #[test]
+    fn redacts_pii_as_speech_to_text_writes_it() {
+        assert_eq!(redact("card 4111, 1111, 1111, 1111 ok"), "card [card] ok");
+        assert_eq!(redact("card 4111.1111.1111.1111"), "card [card]");
+        assert_eq!(redact("amex 3782, 822463, 10005"), "amex [card]");
+        // Four digits said first used to fill the match and hide the card.
+        assert_eq!(redact("pin 1234 4111 1111 1111 1111"), "pin [card]");
+        assert_eq!(redact("ssn 123 45 6789 ok"), "ssn [ssn] ok");
+        assert_eq!(redact("call +44 20 7946 0958 now"), "call [phone] now");
+        assert_eq!(redact("call +91 98765 43210"), "call [phone]");
+    }
+
+    #[test]
+    fn number_lists_and_scores_are_not_pii() {
+        assert_eq!(
+            redact("we sold 1,200, 3,400 and 5,600 units"),
+            "we sold 1,200, 3,400 and 5,600 units"
+        );
+        assert_eq!(
+            redact("rows 1234, 5678, 9012, 3456"),
+            "rows 1234, 5678, 9012, 3456"
+        );
+        assert_eq!(redact("version 1.2.3 shipped"), "version 1.2.3 shipped");
+        assert_eq!(
+            redact("up +3 points, +12 percent"),
+            "up +3 points, +12 percent"
         );
     }
 

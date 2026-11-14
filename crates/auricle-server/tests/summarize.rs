@@ -291,3 +291,29 @@ async fn summarize_error_paths() {
     // Nothing was persisted by the failures.
     assert!(engine.store().get_summaries("sess1").unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_summary_bound_for_the_cloud_waits_for_its_ledger_row() {
+    let mut cfg = Config::default();
+    // Off this machine, so the ledger files it as cloud. Nothing answers
+    // there, and nothing may be sent there.
+    cfg.llm.ollama.base_url = "http://ollama.invalid:11434/v1".to_string();
+    let (base, engine) = spawn_server(cfg, "ledger-refusal").await;
+    seed_session(&engine, "sess1");
+
+    // Take the single writer slot, so the ledger can't be written.
+    let blocker = rusqlite::Connection::open(engine.data_root().join("auricle.db")).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let r = reqwest::Client::new()
+        .post(format!("{base}/api/v1/sessions/sess1/summarize"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    let status = r.status();
+    let body = r.text().await.unwrap();
+    blocker.execute_batch("ROLLBACK").unwrap();
+
+    assert_eq!(status, 500, "{body}");
+    assert!(body.contains("egress ledger"), "{body}");
+}

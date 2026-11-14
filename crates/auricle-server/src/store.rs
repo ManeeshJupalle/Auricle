@@ -230,6 +230,9 @@ pub struct Store {
     read: Mutex<Connection>,
     conn: Mutex<Connection>,
     path: PathBuf,
+    /// Opened at a schema from before `secure_delete`, so what earlier
+    /// deletes left may sit anywhere in the file, not only in free pages.
+    unscrubbed: bool,
 }
 
 fn db_err(e: rusqlite::Error) -> Error {
@@ -294,14 +297,18 @@ fn schema_version(conn: &Connection, latest: usize) -> Result<usize> {
     Ok(version as usize)
 }
 
+/// The schema 0.5.0 brought with `secure_delete`: a database found below it
+/// was written by builds whose deletes left the text in the file.
+const SECURE_DELETE_SINCE: usize = 4;
+
 /// Bring the schema up to date, all or nothing: every pending migration and
 /// its `user_version` stamp commit together, so a kill at any point leaves
-/// the database at the version it started from.
-fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
+/// the database at the version it started from. Returns that version.
+fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<usize> {
     // Up to date is the common case and must not need the write lock:
     // `auricle export` opens alongside a daemon that is busy recording.
     if schema_version(conn, migrations.len())? == migrations.len() {
-        return Ok(());
+        return Ok(migrations.len());
     }
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -313,7 +320,8 @@ fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
         tx.pragma_update(None, "user_version", (i + 1) as i64)
             .map_err(db_err)?;
     }
-    tx.commit().map_err(db_err)
+    tx.commit().map_err(db_err)?;
+    Ok(version)
 }
 
 fn row_to_egress(r: &rusqlite::Row) -> rusqlite::Result<EgressRow> {
@@ -349,14 +357,38 @@ impl Store {
         // holding the text. Set before migrating, which deletes rows too.
         conn.pragma_update(None, "secure_delete", "ON")
             .map_err(db_err)?;
-        migrate(&mut conn, MIGRATIONS)?;
+        let found = migrate(&mut conn, MIGRATIONS)?;
         // Only now: a read-only connection cannot create the file itself.
         let read = open_reader(path)?;
         Ok(Store {
             read: Mutex::new(read),
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
+            unscrubbed: (1..SECURE_DELETE_SINCE).contains(&found),
         })
+    }
+
+    /// Rewrite the file without what deletes left in it. `secure_delete`
+    /// zeroes deleted text, but only since 0.5.0: what 0.4.x deleted still
+    /// sits in free pages and in the gaps of pages still in use, readable
+    /// with any hex viewer. VACUUM writes the file afresh from the live rows.
+    /// Called by the engine at startup, as it needs the file to itself and
+    /// `auricle export` may run beside a daemon. Best effort: if it fails,
+    /// the file is as it was and the next start tries again while free pages
+    /// remain.
+    pub(crate) fn drop_free_pages(&self) {
+        let conn = self.conn.lock().unwrap();
+        let free: i64 = conn
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+            .unwrap_or(0);
+        if free == 0 && !self.unscrubbed {
+            return;
+        }
+        if let Err(e) = conn.execute_batch("VACUUM") {
+            eprintln!("auricle: could not compact the database: {e}");
+            return;
+        }
+        flush_wal(&conn);
     }
 
     /// Crash recovery: a session with no `ended_at` was interrupted (the
@@ -824,6 +856,23 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(db_err)?;
         Ok(rows)
+    }
+
+    /// Delete the retained asks made before `cutoff` outside any meeting.
+    /// A meeting's asks go with it; these have no meeting to go with, and
+    /// they can hold screen text. Returns how many went.
+    pub fn delete_loose_asks_before(&self, cutoff: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "DELETE FROM asks WHERE session_id IS NULL AND created_at < ?1",
+                [cutoff],
+            )
+            .map_err(db_err)?;
+        if n > 0 {
+            flush_wal(&conn);
+        }
+        Ok(n)
     }
 
     /// Delete one retained ask. Returns false when the id does not exist.
@@ -1688,6 +1737,76 @@ mod tests {
         store.delete_session("s1").unwrap();
         assert!(
             !on_disk(&path, b"sentinel"),
+            "deleted text left in the file"
+        );
+    }
+
+    /// As 0.4.x left it: no secure_delete, so the deleted line's text stays
+    /// in the gaps of a page still in use, and no page went free.
+    #[test]
+    fn what_an_older_build_deleted_is_gone_after_the_upgrade() {
+        let path = temp_db("old-deletes");
+        {
+            let conn = v3_db(&path);
+            conn.execute_batch(
+                "INSERT INTO sessions(id, title, started_at, stt_provider)
+                    VALUES ('s1', 't', 1, 'd');
+                 INSERT INTO segments(session_id, channel, speaker, t_start_ms, t_end_ms, text, provider)
+                    VALUES ('s1', 0, 'You', 0, 1, 'kept line', 'd'),
+                           ('s1', 0, 'You', 1, 2, 'page sentinel', 'd');
+                 DELETE FROM segments WHERE text = 'page sentinel';",
+            )
+            .unwrap();
+            let free: i64 = conn
+                .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(free, 0, "precondition: only in-page leftovers");
+        }
+        assert!(
+            on_disk(&path, b"page sentinel"),
+            "precondition: text on disk"
+        );
+
+        let store = Store::open(&path).unwrap();
+        store.drop_free_pages();
+        assert!(
+            !on_disk(&path, b"page sentinel"),
+            "deleted text left in the file"
+        );
+        assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM segments WHERE text = 'kept line'"
+            ),
+            1
+        );
+    }
+
+    /// Upgraded by 0.5.1, which migrated without rewriting: the free pages
+    /// 0.4.x left still hold text, and the schema no longer says so.
+    #[test]
+    fn free_pages_an_older_build_left_are_dropped_after_a_later_upgrade() {
+        let path = temp_db("old-free-pages");
+        {
+            let conn = v3_db(&path);
+            let long = "freed sentinel ".repeat(1000);
+            conn.execute_batch(&format!(
+                "INSERT INTO summaries(session_id, template, model, content, created_at)
+                    VALUES ('s1', 't', 'm', '{long}', 1);
+                 DELETE FROM summaries;"
+            ))
+            .unwrap();
+        }
+        drop(Store::open(&path).unwrap());
+        assert!(
+            on_disk(&path, b"freed sentinel"),
+            "precondition: text on disk"
+        );
+
+        let store = Store::open(&path).unwrap();
+        store.drop_free_pages();
+        assert!(
+            !on_disk(&path, b"freed sentinel"),
             "deleted text left in the file"
         );
     }

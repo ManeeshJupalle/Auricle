@@ -32,6 +32,13 @@ pub trait LlmProvider: Send + Sync {
     /// One chat completion: system prompt + user content -> assistant text.
     async fn complete(&self, system: &str, user: &str) -> Result<String>;
 
+    /// [`complete`](Self::complete) for work nobody sits waiting on, such as
+    /// a portion of a long summary, where a provider may also wait out a
+    /// passing server error that `complete` reports at once.
+    async fn complete_patiently(&self, system: &str, user: &str) -> Result<String> {
+        self.complete(system, user).await
+    }
+
     /// Streaming chat completion: answer fragments are delivered through
     /// `tx` as they arrive; returns the provider-reported token usage (if
     /// any) once the stream ends. A closed receiver aborts the stream
@@ -90,11 +97,10 @@ async fn ollama_models(base_url: &str) -> OllamaModels {
     struct Entry {
         id: String,
     }
-    let Ok(resp) = reqwest::Client::new()
-        .get(format!("{base_url}/models"))
-        .send()
-        .await
-    else {
+    let Ok(client) = chat::client_builder(base_url).build() else {
+        return OllamaModels::NotAnswering;
+    };
+    let Ok(resp) = client.get(format!("{base_url}/models")).send().await else {
         return OllamaModels::NotAnswering;
     };
     match resp.json::<List>().await {

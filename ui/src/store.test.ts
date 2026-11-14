@@ -585,6 +585,24 @@ describe('model download progress', () => {
     apply({ type: 'session_stopped', session: 's4' });
     expect(download()).toBeNull();
   });
+
+  it('clears once the dictation it held up has the mic, or is over', () => {
+    apply({ type: 'model_download_started', session: 'd1', model: 'base.en', size_mb: 142 });
+    apply({ type: 'dictation_started', id: 'd1', provider: 'whisper-local' });
+    expect(download()).toBeNull();
+    expect(useAuricle.getState().notice).toBeNull();
+
+    apply({ type: 'model_download_started', session: 'd2', model: 'base.en', size_mb: 142 });
+    apply({ type: 'dictation_stopped', id: 'd2' });
+    expect(download()).toBeNull();
+    expect(useAuricle.getState().notice).toBeNull();
+  });
+
+  it("another dictation's end leaves a meeting's download alone", () => {
+    apply({ type: 'model_download_started', session: 's5', model: 'base.en', size_mb: 142 });
+    apply({ type: 'dictation_stopped', id: 'd3' });
+    expect(download()).toEqual({ doneMb: 0, sizeMb: 142 });
+  });
 });
 
 describe('meters and diagnostics', () => {

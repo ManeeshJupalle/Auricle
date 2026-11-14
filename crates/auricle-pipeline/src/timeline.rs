@@ -7,8 +7,10 @@
 /// reasons, told apart by how long the batch took to arrive: the loopback
 /// stream delivered nothing while the system was silent (a stall), or the
 /// device's clock runs slow and the difference built up on a flowing stream
-/// (drift). Timestamps never come from "samples received so far" alone, and
-/// they never move backwards.
+/// (drift). A device whose clock runs fast leads the wall clock instead, and
+/// that lead is taken back a little at a time. Timestamps never come from
+/// "samples received so far" alone, and a batch never starts before the one
+/// before it did.
 #[derive(Debug)]
 pub struct Timeline {
     rate_hz: u32,
@@ -18,6 +20,11 @@ pub struct Timeline {
     started: bool,
     last_batch_wall_ms: u64,
 }
+
+/// Most of a fast device's lead taken back per batch, as a share of the
+/// batch's length: a hundred times any crystal's error, and small enough that
+/// the next batch still starts after this one.
+const DRIFT_SLEW: f64 = 0.01;
 
 /// Timing for one drained batch of samples.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,6 +88,13 @@ impl Timeline {
 
         let t_start_ms = (self.anchor_ms + self.samples_to_ms(self.pos_samples)) as u64;
         self.pos_samples += n;
+        // A device whose clock runs fast gets ahead of the wall clock and
+        // stays ahead, further each hour. Take the lead back a little after
+        // each batch, so the next one still starts after this one did.
+        let lead_ms = expected_end_ms - wall_ms as f64 - self.gap_threshold_ms as f64;
+        if !gap_before && lead_ms > 0.0 {
+            self.anchor_ms -= lead_ms.min(batch_ms * DRIFT_SLEW);
+        }
         BatchTiming {
             t_start_ms,
             gap_before,
@@ -127,6 +141,24 @@ mod tests {
             jumps += timing.gap_before as u32;
         }
         assert!(jumps >= 2, "the clock must still follow the wall: {jumps}");
+    }
+
+    #[test]
+    fn a_fast_device_clock_is_held_near_the_wall_and_never_runs_back() {
+        // 0.6% fast: 161 samples per 10 ms of wall time. Uncorrected, the
+        // clock would lead the wall by 720 ms after these two minutes.
+        let mut tl = Timeline::new(16_000, 250);
+        let mut last_start = 0;
+        let mut lead_ms = 0.0;
+        for i in 1..=12_000u64 {
+            let wall_ms = i * 10;
+            let timing = tl.on_batch(161, wall_ms);
+            assert!(!timing.gap_before, "at {wall_ms}");
+            assert!(timing.t_start_ms >= last_start, "ran back at {wall_ms}");
+            last_start = timing.t_start_ms;
+            lead_ms = timing.t_start_ms as f64 + 161.0 / 16.0 - wall_ms as f64;
+        }
+        assert!(lead_ms <= 252.0, "drifted ahead: {lead_ms} ms");
     }
 
     #[test]

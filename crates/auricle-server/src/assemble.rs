@@ -118,8 +118,12 @@ fn assemble_with_budget(
         }
         kept.reverse();
         remaining = remaining.saturating_sub(used);
-        if kept.is_empty() {
+        if w.segments.is_empty() {
             format!("{header}\n(nothing was captured in this window)")
+        } else if kept.is_empty() {
+            // Not the same as silence: the model must not tell the user that
+            // nobody has spoken.
+            format!("{header}\n(speech was captured, but none of it fit alongside the rest)")
         } else {
             format!("{header}\n{}", kept.join("\n"))
         }
@@ -352,5 +356,24 @@ mod tests {
             6_000,
         );
         assert!(prompt.contains("(nothing was captured in this window)"));
+    }
+
+    #[test]
+    fn a_window_with_no_room_left_does_not_claim_silence() {
+        let segments = [seg(0, "Them", "the budget is approved")];
+        let parts = AskPromptParts {
+            question: "summarize this",
+            history: &[],
+            screen: None,
+            transcript: Some(TranscriptWindow {
+                segments: &segments,
+                window_min: 10,
+            }),
+            session_title: None,
+        };
+        // Room for the question and the header, not for the line.
+        let prompt = assemble_with_budget(&parts, 0, 60);
+        assert!(!prompt.contains("nothing was captured"), "{prompt}");
+        assert!(prompt.contains("none of it fit"), "{prompt}");
     }
 }

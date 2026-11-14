@@ -244,6 +244,8 @@ impl Assembler {
 
 /// Remove from `next` the longest word-level prefix that matches a suffix of
 /// `prev` (case- and punctuation-insensitive), returning the trimmed text.
+/// Chinese, Japanese and Thai put no spaces between words, so a whole
+/// sentence is one "word" there and the overlap is matched by character.
 fn trim_overlap(prev: &str, next: &str) -> String {
     let prev_words: Vec<&str> = prev.split_whitespace().collect();
     let next_words: Vec<&str> = next.split_whitespace().collect();
@@ -258,7 +260,63 @@ fn trim_overlap(prev: &str, next: &str) -> String {
             return next_words[k..].join(" ");
         }
     }
+    if let (Some(tail), Some(head)) = (prev_words.last(), next_words.first()) {
+        if let Some(cut) = unspaced_overlap(tail, head) {
+            let rest = head[cut..].trim_start_matches(OVERLAP_END_PUNCTUATION);
+            return std::iter::once(rest)
+                .chain(next_words[1..].iter().copied())
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
     next_words.join(" ")
+}
+
+/// Fewest characters taken for an overlap: one alike could be chance.
+const MIN_UNSPACED_OVERLAP: usize = 2;
+
+/// Punctuation the overlap ended on, which goes with it.
+const OVERLAP_END_PUNCTUATION: &[char] = &[
+    '。', '、', '，', '！', '？', '；', '：', '.', ',', '!', '?', ';', ':',
+];
+
+/// Where in `head` the longest run of letters that also ends `tail` stops,
+/// when both are written without spaces between words.
+fn unspaced_overlap(tail: &str, head: &str) -> Option<usize> {
+    if !(tail.chars().any(is_unspaced) && head.chars().any(is_unspaced)) {
+        return None;
+    }
+    let tail: Vec<char> = tail.chars().filter(|c| c.is_alphanumeric()).collect();
+    // Each letter of the head with the byte it ends at.
+    let head: Vec<(char, usize)> = head
+        .char_indices()
+        .filter(|(_, c)| c.is_alphanumeric())
+        .map(|(i, c)| (c, i + c.len_utf8()))
+        .collect();
+    let same = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
+    (MIN_UNSPACED_OVERLAP..=tail.len().min(head.len()))
+        .rev()
+        .find(|&k| {
+            tail[tail.len() - k..]
+                .iter()
+                .zip(&head[..k])
+                .all(|(&a, &(b, _))| same(a, b))
+        })
+        .map(|k| head[k - 1].1)
+}
+
+/// Scripts written without spaces between words: Han, kana, Thai, Lao,
+/// Myanmar, Khmer.
+fn is_unspaced(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{30FF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{0E00}'..='\u{0EFF}'
+        | '\u{1000}'..='\u{109F}'
+        | '\u{1780}'..='\u{17FF}')
 }
 
 fn normalize(word: &str) -> String {
@@ -310,6 +368,29 @@ mod tests {
             t_end_ms: t1,
             text: text.to_string(),
         })
+    }
+
+    #[test]
+    fn overlap_is_trimmed_by_character_where_words_have_no_spaces() {
+        assert_eq!(
+            trim_overlap("我们明天开会。", "开会。然后讨论预算"),
+            "然后讨论预算"
+        );
+        assert_eq!(
+            trim_overlap("明日の会議で話します", "話します。それから予算"),
+            "それから予算"
+        );
+        assert_eq!(
+            trim_overlap("ครับวันนี้เราจะประชุม", "ประชุมเรื่องงบประมาณ"),
+            "เรื่องงบประมาณ"
+        );
+        // Words after a space come through as they were.
+        assert_eq!(trim_overlap("我们明天开会", "开会 OK 好的"), "OK 好的");
+        // One character alike may be chance, so nothing goes.
+        assert_eq!(trim_overlap("我们的", "的确如此"), "的确如此");
+        assert_eq!(trim_overlap("我们明天开会", "然后讨论"), "然后讨论");
+        // Spaced text keeps its word-level rule: "the" is not "then".
+        assert_eq!(trim_overlap("in the", "then we"), "then we");
     }
 
     #[test]

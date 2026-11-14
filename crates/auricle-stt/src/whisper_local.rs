@@ -172,6 +172,7 @@ async fn worker_loop(
             return;
         }
     };
+    let base = Arc::new(decode_params(language, n_threads));
 
     // Decoder context per channel, so one speaker's words never prime the
     // other's. Tokens, not `set_initial_prompt`: that call leaks its CString
@@ -202,7 +203,7 @@ async fn worker_loop(
             continue;
         }
 
-        let lang = language.clone();
+        let base = base.clone();
         let prompt = prompts
             .get(&chunk.channel)
             .filter(|(_, end_ms)| prompt_is_fresh(*end_ms, chunk.t_start_ms))
@@ -211,7 +212,7 @@ async fn worker_loop(
         // Inference on the blocking pool; the state travels in and out so it
         // can be reused. One in-flight inference per session by construction.
         let result = tokio::task::spawn_blocking(move || {
-            let r = transcribe(&mut state, &chunk, &lang, &prompt, n_threads);
+            let r = transcribe(&mut state, &chunk, &base, &prompt);
             (state, chunk, r)
         })
         .await;
@@ -261,16 +262,14 @@ async fn worker_loop(
     }
 }
 
-fn transcribe(
-    state: &mut whisper_rs::WhisperState,
-    chunk: &AudioChunk,
-    language: &str,
-    prompt: &[WhisperTokenId],
-    n_threads: i32,
-) -> Result<Option<Segment>> {
+/// What every decode of a session shares. Built once and cloned per decode:
+/// `set_language` leaks the string it is given on every call, so this keeps
+/// that to one per session, where it was one per decode. The language itself
+/// is leaked with it, for parameters the blocking pool can take: a few bytes.
+fn decode_params(language: String, n_threads: i32) -> FullParams<'static, 'static> {
+    let language: &'static str = Box::leak(language.into_boxed_str());
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some(language));
-    params.set_tokens(prompt);
     params.set_translate(false);
     params.set_print_special(false);
     params.set_print_progress(false);
@@ -279,6 +278,17 @@ fn transcribe(
     params.set_no_context(true);
     params.set_suppress_blank(true);
     params.set_n_threads(n_threads);
+    params
+}
+
+fn transcribe(
+    state: &mut whisper_rs::WhisperState,
+    chunk: &AudioChunk,
+    base: &FullParams<'static, 'static>,
+    prompt: &[WhisperTokenId],
+) -> Result<Option<Segment>> {
+    let mut params: FullParams<'_, '_> = base.clone();
+    params.set_tokens(prompt);
 
     // whisper.cpp skips audio shorter than ~1 s; pad with trailing silence.
     let min_samples = (chunk.sample_rate_hz as u64 * MIN_AUDIO_MS / 1000) as usize;

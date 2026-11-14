@@ -145,3 +145,7 @@ only local change). For a machine-wide install (requires elevation):
 ```
 msiexec /i "Auricle Copilot_x.y.z_x64_en-US.msi" ALLUSERS=1 MSIINSTALLPERUSER=""
 ```
+
+Upgrade a machine-wide copy the same way. Tray → **Check for updates** does it
+for you: a copy running from under Program Files is updated with `ALLUSERS=1`,
+and Windows asks for permission.
