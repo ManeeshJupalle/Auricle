@@ -9,8 +9,10 @@ Fixes from a review before launch. The first matters most on work laptops.
   engine through the proxy. It then said the port was held by something that
   was not Auricle, or that the engine never started, and the copilot and
   dictation did nothing. The overlay now always reaches the engine directly,
-  as the engine does a local Ollama or a local speech server. Cloud providers
-  still go through the proxy.
+  as the engine does a local Ollama or a local speech server. Cloud LLMs and
+  Groq's or an OpenAI-compatible speech API still go through the proxy.
+  Deepgram's streaming connection doesn't use one and never has, so it still
+  needs a direct route out.
 - **The copilot keeps to the meeting you're in.** Its transcript window is the
   last 10 minutes, so in back-to-back calls it also held the end of the call
   before, and answers could mix the two. An ask during a meeting now reads
@@ -26,8 +28,8 @@ Fixes from a review before launch. The first matters most on work laptops.
 - **Text deleted under 0.4 is now gone from the database file.** 0.5.0 began
   zeroing deleted text, but what 0.4.x had deleted stayed in the file's free
   space, so the 0.5.0 note that the upgrade clears it was not true. The engine
-  now rewrites the file when it starts, once for a database from 0.4.x and
-  again whenever deletes have left free pages.
+  now rewrites the file once, the first time 0.5.2 starts, and records that it
+  has (`db_scrubbed` in the settings).
 - **Memory stays flat through audio that never pauses.** Music, or a talk with
   no half-second gap, kept every sample of the stretch in memory until it
   paused: about 230 MB an hour for each side.
@@ -68,7 +70,9 @@ Fixes from a review before launch. The first matters most on work laptops.
 - **Summaries with Ollama fit its default context.** Ollama runs a model in
   4,096 tokens unless its server is set up for more, and dropped the start of a
   longer request, the instructions first. Summaries through Ollama now go in
-  portions that fit. Chinese, Japanese, and Korean text is also counted closer
+  portions sized to fit, with the template and each line's timestamp counted.
+  The sizes are estimates, not a tokenizer's count. Chinese, Japanese, and
+  Korean text is also counted closer
   to its real size, about a token a character, where it was undercounted
   three or four times over.
 - **Retention covers asks made between meetings.** With
@@ -82,8 +86,9 @@ Fixes from a review before launch. The first matters most on work laptops.
   so a share showed the pill saying what was being dictated. A switch that
   failed to take also showed as on; it now says so.
 - **The audio player keeps playing across tabs.** Switching to Summary or Asks
-  stopped playback, and coming back started it from 0:00. Picking the line past
-  the end of the audio also rewound to the start of the meeting.
+  stopped playback, and coming back started it from 0:00. The transcript now
+  also comes back at the line you left it on, not at the top. Picking the line
+  past the end of the audio also rewound to the start of the meeting.
 - **Smaller fixes.** Starting the app twice while the engine boots no longer
   pops up the card with an error. Whisper's stock phrases on silence are now
   known in German, Spanish, French, Portuguese, Italian, Dutch, Russian,

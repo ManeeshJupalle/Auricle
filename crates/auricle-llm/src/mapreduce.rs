@@ -18,27 +18,46 @@ const CHUNK_TOKENS: usize = 4_000;
 /// Ollama runs a model in a 4,096-token context unless its server is set up
 /// for more (`OLLAMA_CONTEXT_LENGTH`), and the OpenAI-compatible endpoint
 /// used here can't ask for more per request. Past that it drops the oldest
-/// tokens, the instructions first, so for it the transcript leaves the
-/// template and the answer room inside 4k.
-const OLLAMA_TOKEN_THRESHOLD: usize = 2_500;
+/// tokens, the instructions first. So one call to it carries this much in
+/// all, the template included, which leaves the answer about a thousand.
+const OLLAMA_CALL_TOKENS: usize = 3_000;
 const OLLAMA_CHUNK_TOKENS: usize = 2_000;
+/// The least a call's transcript gets, however long the template runs.
+const OLLAMA_MIN_TOKENS: usize = 500;
+/// What a transcript line's `[MM:SS] Them:` costs beyond the count of its
+/// letters: about eight tokens in fourteen characters, and a meeting of short
+/// lines is mostly these.
+const OLLAMA_LINE_TOKENS: usize = 4;
 
 /// How much one call may carry, in estimated tokens: whole, per map portion.
 struct Budget {
     threshold: usize,
     chunk: usize,
+    /// Added for each line of what is measured.
+    per_line: usize,
 }
 
-fn budget_for(provider: &dyn LlmProvider) -> Budget {
+impl Budget {
+    fn measure(&self, text: &str) -> usize {
+        estimate_tokens(text) + self.per_line * text.lines().count()
+    }
+}
+
+fn budget_for(provider: &dyn LlmProvider, template: &str) -> Budget {
     if provider.id() == "ollama" {
+        let threshold = OLLAMA_CALL_TOKENS
+            .saturating_sub(estimate_tokens(template))
+            .max(OLLAMA_MIN_TOKENS);
         Budget {
-            threshold: OLLAMA_TOKEN_THRESHOLD,
-            chunk: OLLAMA_CHUNK_TOKENS,
+            threshold,
+            chunk: threshold.min(OLLAMA_CHUNK_TOKENS),
+            per_line: OLLAMA_LINE_TOKENS,
         }
     } else {
         Budget {
             threshold: MAP_REDUCE_TOKEN_THRESHOLD,
             chunk: CHUNK_TOKENS,
+            per_line: 0,
         }
     }
 }
@@ -77,11 +96,6 @@ pub fn chunk_by_lines(text: &str, max_chars: usize) -> Vec<String> {
     chunk_lines(text, max_chars, |s| s.chars().count())
 }
 
-/// [`chunk_by_lines`], measured in estimated tokens.
-fn chunk_by_tokens(text: &str, max_tokens: usize) -> Vec<String> {
-    chunk_lines(text, max_tokens, estimate_tokens)
-}
-
 fn chunk_lines(text: &str, max: usize, measure: impl Fn(&str) -> usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -114,12 +128,12 @@ pub async fn summarize(
     template: &str,
     transcript: &str,
 ) -> Result<String> {
-    let budget = budget_for(provider);
-    if estimate_tokens(transcript) <= budget.threshold {
+    let budget = budget_for(provider, template);
+    if budget.measure(transcript) <= budget.threshold {
         return provider.complete_patiently(template, transcript).await;
     }
 
-    let chunks = chunk_by_tokens(transcript, budget.chunk);
+    let chunks = chunk_lines(transcript, budget.chunk, |text| budget.measure(text));
     let total = chunks.len();
     let map_system = "You summarize one portion of a longer meeting transcript. \
          Produce a faithful, detailed summary of THIS PORTION ONLY, keeping \
@@ -144,7 +158,15 @@ pub async fn summarize(
     // The reduce call rewrites everything it sees, so a notice on a portion
     // may not survive it. Carry the fact across explicitly.
     let mut truncated = partials.iter().any(|p| is_truncated(p));
-    let mut summary = match reduce(provider, template, partials.clone(), &mut truncated).await {
+    let mut summary = match reduce(
+        provider,
+        template,
+        partials.clone(),
+        budget.threshold,
+        &mut truncated,
+    )
+    .await
+    {
         Ok(summary) => summary,
         Err(e) => {
             failure.get_or_insert(e);
@@ -169,9 +191,10 @@ async fn reduce(
     provider: &dyn LlmProvider,
     template: &str,
     partials: Vec<String>,
+    threshold: usize,
     truncated: &mut bool,
 ) -> Result<String> {
-    let partials = collapse_to_budget(provider, partials, truncated).await?;
+    let partials = collapse_to_budget(provider, partials, threshold, truncated).await?;
 
     let total = partials.len();
     let reduce_input = partials
@@ -201,12 +224,12 @@ fn is_truncated(text: &str) -> bool {
 async fn collapse_to_budget(
     provider: &dyn LlmProvider,
     mut partials: Vec<String>,
+    threshold: usize,
     truncated: &mut bool,
 ) -> Result<Vec<String>> {
     let merge_system = "The following are faithful summaries of consecutive parts of one \
          meeting. Merge them into one faithful, detailed summary, keeping speaker \
          attributions (You/Them), numbers, names, decisions, and action items, in order.";
-    let threshold = budget_for(provider).threshold;
     while partials.len() > 1 && estimate_tokens(&partials.join("\n\n")) > threshold {
         let mut merged = Vec::new();
         for group in merge_groups(&partials, threshold) {
@@ -301,6 +324,44 @@ mod tests {
         let largest = largest.load(Ordering::SeqCst);
         assert!(
             largest <= 3_000,
+            "a call of {largest} tokens leaves no room"
+        );
+    }
+
+    /// The largest call `summarize` makes to Ollama, system prompt and all,
+    /// with each line's `[MM:SS] Them:` counted at what it costs.
+    async fn largest_ollama_call(template: &str, transcript: &str) -> usize {
+        let largest = std::sync::atomic::AtomicUsize::new(0);
+        let provider = Ollama(|system: &str, user: &str| {
+            let sent = estimate_tokens(system) + estimate_tokens(user) + 4 * user.lines().count();
+            largest.fetch_max(sent, Ordering::SeqCst);
+            Ok("short summary".to_string())
+        });
+        summarize(&provider, template, transcript).await.unwrap();
+        largest.load(Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_long_template_comes_out_of_what_ollama_is_sent() {
+        // 2,400 tokens of transcript fits one call, but not beside a
+        // template of 2,000: a custom one can run that long.
+        let transcript = vec!["x".repeat(399); 24].join("\n");
+        let template = "t".repeat(8_000);
+        let largest = largest_ollama_call(&template, &transcript).await;
+        assert!(
+            largest <= 3_100,
+            "a call of {largest} tokens leaves no room"
+        );
+    }
+
+    #[tokio::test]
+    async fn short_lines_are_counted_with_their_timestamps() {
+        // 500 two-word lines: 2,125 tokens by their letters, about twice
+        // that once every `[00:01] Them:` is paid for.
+        let transcript = vec!["[00:01] Them: ok"; 500].join("\n");
+        let largest = largest_ollama_call("make minutes", &transcript).await;
+        assert!(
+            largest <= 3_100,
             "a call of {largest} tokens leaves no room"
         );
     }

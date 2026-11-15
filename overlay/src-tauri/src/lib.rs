@@ -835,11 +835,6 @@ async fn watch_engine(app: tauri::AppHandle) {
     }
 }
 
-/// Open (or refocus) the dashboard window: the engine's web dashboard in
-/// its own webview instead of a browser tab, so the whole product is one
-/// app. The page keeps its engine origin (http://127.0.0.1:4820), so the
-/// daemon's same-origin defense applies to it exactly as to a browser
-/// tab; the webview gets no Tauri IPC (capabilities target "main" only).
 /// A dashboard is on its way: a second launch during the engine wait below
 /// would otherwise build a second window, fail, and pop the card up instead.
 static DASHBOARD_OPENING: AtomicBool = AtomicBool::new(false);
@@ -864,6 +859,11 @@ fn focus_dashboard(app: &tauri::AppHandle) -> bool {
     true
 }
 
+/// Open (or refocus) the dashboard window: the engine's web dashboard in
+/// its own webview instead of a browser tab, so the whole product is one
+/// app. The page keeps its engine origin (http://127.0.0.1:4820), so the
+/// daemon's same-origin defense applies to it exactly as to a browser
+/// tab; the webview gets no Tauri IPC (capabilities target "main" only).
 fn open_dashboard(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if focus_dashboard(&app) || DASHBOARD_OPENING.swap(true, Ordering::SeqCst) {

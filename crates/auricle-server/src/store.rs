@@ -230,9 +230,6 @@ pub struct Store {
     read: Mutex<Connection>,
     conn: Mutex<Connection>,
     path: PathBuf,
-    /// Opened at a schema from before `secure_delete`, so what earlier
-    /// deletes left may sit anywhere in the file, not only in free pages.
-    unscrubbed: bool,
 }
 
 fn db_err(e: rusqlite::Error) -> Error {
@@ -297,18 +294,20 @@ fn schema_version(conn: &Connection, latest: usize) -> Result<usize> {
     Ok(version as usize)
 }
 
-/// The schema 0.5.0 brought with `secure_delete`: a database found below it
-/// was written by builds whose deletes left the text in the file.
-const SECURE_DELETE_SINCE: usize = 4;
+/// The setting that records [`Store::scrub_once`] having run. In the
+/// database, because nothing else outlasts the open that did the migrating:
+/// `auricle export` or an earlier build may bring the schema up to date and
+/// leave the file as it was.
+const SCRUBBED_SETTING: &str = "db_scrubbed";
 
 /// Bring the schema up to date, all or nothing: every pending migration and
 /// its `user_version` stamp commit together, so a kill at any point leaves
-/// the database at the version it started from. Returns that version.
-fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<usize> {
+/// the database at the version it started from.
+fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
     // Up to date is the common case and must not need the write lock:
     // `auricle export` opens alongside a daemon that is busy recording.
     if schema_version(conn, migrations.len())? == migrations.len() {
-        return Ok(migrations.len());
+        return Ok(());
     }
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -320,8 +319,7 @@ fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<usize> {
         tx.pragma_update(None, "user_version", (i + 1) as i64)
             .map_err(db_err)?;
     }
-    tx.commit().map_err(db_err)?;
-    Ok(version)
+    tx.commit().map_err(db_err)
 }
 
 fn row_to_egress(r: &rusqlite::Row) -> rusqlite::Result<EgressRow> {
@@ -357,38 +355,45 @@ impl Store {
         // holding the text. Set before migrating, which deletes rows too.
         conn.pragma_update(None, "secure_delete", "ON")
             .map_err(db_err)?;
-        let found = migrate(&mut conn, MIGRATIONS)?;
+        migrate(&mut conn, MIGRATIONS)?;
         // Only now: a read-only connection cannot create the file itself.
         let read = open_reader(path)?;
         Ok(Store {
             read: Mutex::new(read),
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
-            unscrubbed: (1..SECURE_DELETE_SINCE).contains(&found),
         })
     }
 
-    /// Rewrite the file without what deletes left in it. `secure_delete`
-    /// zeroes deleted text, but only since 0.5.0: what 0.4.x deleted still
-    /// sits in free pages and in the gaps of pages still in use, readable
-    /// with any hex viewer. VACUUM writes the file afresh from the live rows.
-    /// Called by the engine at startup, as it needs the file to itself and
-    /// `auricle export` may run beside a daemon. Best effort: if it fails,
-    /// the file is as it was and the next start tries again while free pages
-    /// remain.
-    pub(crate) fn drop_free_pages(&self) {
+    /// Rewrite the file once, without what earlier deletes left in it.
+    /// `secure_delete` zeroes deleted text, but only since 0.5.0: what 0.4.x
+    /// deleted still sits in free pages and in the gaps of pages still in
+    /// use, readable with any hex viewer. VACUUM writes the file afresh from
+    /// the live rows, and from then on `secure_delete` keeps it clean, so
+    /// once is enough. Called by the engine at startup, as it needs the file
+    /// to itself and `auricle export` may run beside a daemon. Best effort:
+    /// if it fails, the file is as it was and the next start tries again.
+    pub(crate) fn scrub_once(&self) {
         let conn = self.conn.lock().unwrap();
-        let free: i64 = conn
-            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
-            .unwrap_or(0);
-        if free == 0 && !self.unscrubbed {
+        let done = conn.query_row(
+            "SELECT COUNT(*) FROM settings WHERE key = ?1",
+            [SCRUBBED_SETTING],
+            |r| r.get::<_, i64>(0),
+        );
+        if !matches!(done, Ok(0)) {
             return;
         }
         if let Err(e) = conn.execute_batch("VACUUM") {
-            eprintln!("auricle: could not compact the database: {e}");
+            eprintln!("auricle: could not rewrite the database: {e}");
             return;
         }
         flush_wal(&conn);
+        if let Err(e) = conn.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, 'true')",
+            [SCRUBBED_SETTING],
+        ) {
+            eprintln!("auricle: could not record the database rewrite: {e}");
+        }
     }
 
     /// Crash recovery: a session with no `ended_at` was interrupted (the
@@ -1768,7 +1773,7 @@ mod tests {
         );
 
         let store = Store::open(&path).unwrap();
-        store.drop_free_pages();
+        store.scrub_once();
         assert!(
             !on_disk(&path, b"page sentinel"),
             "deleted text left in the file"
@@ -1804,9 +1809,43 @@ mod tests {
         );
 
         let store = Store::open(&path).unwrap();
-        store.drop_free_pages();
+        store.scrub_once();
         assert!(
             !on_disk(&path, b"freed sentinel"),
+            "deleted text left in the file"
+        );
+    }
+
+    /// The usual upgrade path: 0.5.1, or an `auricle export`, opened the
+    /// database first and brought its schema up to date without rewriting it.
+    /// What 0.4.x deleted sits in a page still in use, so no page is free and
+    /// nothing about the schema says the file was never scrubbed.
+    #[test]
+    fn in_page_leftovers_go_even_when_an_earlier_open_did_the_migrating() {
+        let path = temp_db("old-deletes-migrated-earlier");
+        {
+            let conn = v3_db(&path);
+            conn.execute_batch(
+                "INSERT INTO sessions(id, title, started_at, stt_provider)
+                    VALUES ('s1', 't', 1, 'd');
+                 INSERT INTO segments(session_id, channel, speaker, t_start_ms, t_end_ms, text, provider)
+                    VALUES ('s1', 0, 'You', 0, 1, 'kept line', 'd'),
+                           ('s1', 0, 'You', 1, 2, 'page sentinel', 'd');
+                 DELETE FROM segments WHERE text = 'page sentinel';",
+            )
+            .unwrap();
+        }
+        drop(Store::open(&path).unwrap());
+        assert!(
+            on_disk(&path, b"page sentinel"),
+            "precondition: text on disk"
+        );
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(count(&store, "PRAGMA freelist_count"), 0, "precondition");
+        store.scrub_once();
+        assert!(
+            !on_disk(&path, b"page sentinel"),
             "deleted text left in the file"
         );
     }

@@ -62,7 +62,7 @@ static PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
         p(
             "[card]",
             r"\b(?:\d{4}(?:, ?|\.)\d{4}(?:, ?|\.)\d{4}(?:, ?|\.)\d{4}|\d{4}(?:, ?|\.)\d{6}(?:, ?|\.)\d{5})\b",
-            Some(card_ok as fn(&str) -> bool),
+            Some(listed_card_ok as fn(&str) -> bool),
         ),
         p(
             "[ip]",
@@ -110,12 +110,24 @@ pub fn redact(text: &str) -> String {
 /// whole digit groups instead; a span with no separators is one group, so an
 /// ordinary long number still gets exactly one check.
 fn card_ok(s: &str) -> bool {
-    let groups: Vec<&str> = s
-        .split([' ', '-', ',', '.'])
-        .filter(|g| !g.is_empty())
-        .collect();
+    let groups: Vec<&str> = s.split([' ', '-']).collect();
     (0..groups.len())
         .any(|start| (start + 1..=groups.len()).any(|end| luhn_ok(&groups[start..end].concat())))
+}
+
+/// True when a number written as a list, with commas or dots, is a card. One
+/// list of four numbers in ten passes the checksum by chance, and lists are
+/// everywhere in speech, so this also wants the digits a card network starts
+/// with: 3 to 6, or Mastercard's 2221 to 2720. Years and most counts start
+/// otherwise.
+fn listed_card_ok(s: &str) -> bool {
+    let digits: String = s.chars().filter(char::is_ascii_digit).collect();
+    let issued = matches!(digits.as_bytes().first(), Some(b'3'..=b'6'))
+        || digits
+            .get(..4)
+            .and_then(|prefix| prefix.parse::<u16>().ok())
+            .is_some_and(|prefix| (2221..=2720).contains(&prefix));
+    issued && luhn_ok(&digits)
 }
 
 /// Luhn checksum over the digits of `s` (13–19 of them), the standard
@@ -237,6 +249,33 @@ mod tests {
             redact("up +3 points, +12 percent"),
             "up +3 points, +12 percent"
         );
+    }
+
+    /// One list of four numbers in ten passes the card checksum by chance,
+    /// and these years do. No card number starts the way a year does.
+    #[test]
+    fn a_list_of_years_is_not_a_card() {
+        assert!(
+            luhn_ok("2023202420252026"),
+            "precondition: the checksum passes"
+        );
+        assert_eq!(
+            redact("revenue in 2023, 2024, 2025, 2026 grew"),
+            "revenue in 2023, 2024, 2025, 2026 grew"
+        );
+        assert!(
+            luhn_ok("1989199019911992"),
+            "precondition: the checksum passes"
+        );
+        assert_eq!(
+            redact("born 1989. 1990. 1991. 1992"),
+            "born 1989. 1990. 1991. 1992"
+        );
+        // A card said the same way still goes: Visa, Mastercard, Amex.
+        assert_eq!(redact("card 4111, 1111, 1111, 1111"), "card [card]");
+        assert_eq!(redact("card 5555, 5555, 5555, 4444"), "card [card]");
+        assert_eq!(redact("card 2223, 0031, 2200, 3222"), "card [card]");
+        assert_eq!(redact("amex 3782, 822463, 10005"), "amex [card]");
     }
 
     #[test]

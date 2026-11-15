@@ -538,6 +538,9 @@ A Deepgram final after a pause can take longer than this median: see
   article text, honest-but-imperfect on dense small fonts (`auricle` can
   come back as `auride` in a file tree).
 - One recording session at a time, by design.
+- **Deepgram needs a direct connection.** Behind a proxy, the overlay, a local
+  Ollama, cloud LLMs, and Groq's or an OpenAI-compatible speech API all work,
+  but Deepgram's streaming connection doesn't go through a proxy.
 - **Dictation can't type into a window running as administrator.** Windows
   drops keystrokes sent to it without telling the sender, so the overlay
   doesn't try: the text is left on the clipboard for you to paste. In hold

@@ -233,8 +233,62 @@ impl Outcome {
 
 type StartReply = oneshot::Sender<std::result::Result<DictationStarted, StartError>>;
 
-/// A loaded local provider, keyed by "provider-id|model".
-type CachedProvider = (String, Arc<dyn SttProvider>);
+/// Where a session's audio goes: its provider, and the egress ledger's word
+/// for the destination.
+struct AudioRoute<'a> {
+    provider_id: &'a str,
+    dest: (&'static str, Option<String>),
+}
+
+/// The last local provider built, and the builds under way. Keys are
+/// "provider-id|model".
+#[derive(Default)]
+struct ProviderCache {
+    /// Loading a whisper model reads 148–500 MB from disk; without this
+    /// every session start paid that again.
+    loaded: Mutex<Option<(String, Arc<dyn SttProvider>)>>,
+    /// One gate a key, held while that provider is built, so two starts never
+    /// load or download the same model side by side. A gate each, because a
+    /// first download given up on runs on for minutes, and a start with
+    /// another provider or model must not wait behind it.
+    building: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl ProviderCache {
+    fn get(&self, key: &str) -> Option<Arc<dyn SttProvider>> {
+        match &*self.loaded.lock().unwrap() {
+            Some((loaded, provider)) if loaded == key => Some(provider.clone()),
+            _ => None,
+        }
+    }
+
+    /// The provider for `key`: the one a build that got here first left, or
+    /// else what `build` makes.
+    async fn get_or_build(
+        &self,
+        key: String,
+        build: impl Future<Output = Result<Arc<dyn SttProvider>>>,
+    ) -> Result<Arc<dyn SttProvider>> {
+        let gate = self
+            .building
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        let _building = gate.lock().await;
+        if let Some(provider) = self.get(&key) {
+            return Ok(provider);
+        }
+        let provider = build.await?;
+        // Only local providers are worth caching (model load); cloud ones are
+        // cheap and re-read their key env on construction.
+        if provider.kind() == SttKind::Local {
+            *self.loaded.lock().unwrap() = Some((key, provider.clone()));
+        }
+        Ok(provider)
+    }
+}
 
 /// What a stop or cancel needs of the latest dictation.
 struct DictationHandle {
@@ -296,13 +350,7 @@ pub struct Engine {
     important_tx: broadcast::Sender<WsEvent>,
     partial_tx: broadcast::Sender<WsEvent>,
     provider_override: Option<Arc<dyn SttProvider>>,
-    /// Last constructed local provider, keyed by "provider-id|model".
-    /// Loading a whisper model reads 148–500 MB from disk; without this
-    /// every session start paid that again.
-    local_provider: Arc<Mutex<Option<CachedProvider>>>,
-    /// Held while a provider is built, so two starts never load or download
-    /// the same model side by side.
-    provider_load: Arc<tokio::sync::Mutex<()>>,
+    providers: Arc<ProviderCache>,
     /// Post-stop auto-titles still running. Shutdown gives them a moment: a
     /// title is generated once, and exiting mid-call loses it for good.
     titles_pending: AtomicUsize,
@@ -347,7 +395,7 @@ impl Engine {
         // declare a still-open session dead (read-only openers like
         // `auricle export` must not).
         store.recover_interrupted()?;
-        store.drop_free_pages();
+        store.scrub_once();
         let (important_tx, _) = broadcast::channel(IMPORTANT_CAPACITY);
         let (partial_tx, _) = broadcast::channel(PARTIAL_CAPACITY);
         let ring = TranscriptRing::new(opts.cfg.copilot.transcript_window_min);
@@ -359,8 +407,7 @@ impl Engine {
             important_tx,
             partial_tx,
             provider_override: opts.provider_override,
-            local_provider: Arc::default(),
-            provider_load: Arc::default(),
+            providers: Arc::default(),
             titles_pending: AtomicUsize::new(0),
             ring,
             ask_history: Arc::default(),
@@ -678,29 +725,17 @@ impl Engine {
             }
         };
 
-        // Egress ledger: record where this session's audio goes, before the
-        // capture that feeds it opens. Local providers (on-device Whisper) are
-        // logged as "local" so the ledger shows the full picture, not just
-        // cloud traffic; audio bound for the cloud doesn't go without its row.
-        let dest = if provider.kind() == SttKind::Local {
-            ("local", None)
-        } else {
-            crate::egress::stt_egress(provider.id(), &provider_cfg)
+        // Where this session's audio goes, for the egress ledger. Local
+        // providers (on-device Whisper) are logged as "local" so the ledger
+        // shows the full picture, not just cloud traffic.
+        let route = AudioRoute {
+            provider_id: provider.id(),
+            dest: if provider.kind() == SttKind::Local {
+                ("local", None)
+            } else {
+                crate::egress::stt_egress(provider.id(), &provider_cfg)
+            },
         };
-        let recorded = crate::egress::record(
-            &self.store,
-            Some(session_id),
-            "audio",
-            dest,
-            provider.id(),
-            None,
-            Some("live capture"),
-        );
-        if let Err(e) = recorded {
-            close_unused_session(mic_session).await;
-            close_unused_session(loop_session).await;
-            return Err(StartError::Internal(e));
-        }
 
         let mic_sel = params
             .mic_device
@@ -717,7 +752,7 @@ impl Engine {
             &params,
             (mic_sel.as_str(), loop_sel.as_str()),
             retain_raw_audio,
-            provider.id(),
+            route,
             &control,
         );
         let OpenCapture {
@@ -913,10 +948,7 @@ impl Engine {
         events_id: &str,
     ) -> std::result::Result<Arc<dyn SttProvider>, StartError> {
         let cache_key = format!("{provider_id}|{}", provider_cfg.stt.whisper_local.model);
-        let cached = match &*self.local_provider.lock().unwrap() {
-            Some((key, p)) if *key == cache_key => Some(p.clone()),
-            _ => None,
-        };
+        let cached = self.providers.get(&cache_key);
         let provider: Arc<dyn SttProvider> = match (&self.provider_override, cached) {
             (Some(p), _) => p.clone(),
             (None, Some(p)) => p,
@@ -955,22 +987,10 @@ impl Engine {
                 // again, often beside a load still running.
                 let load = tokio::spawn({
                     let (id, cfg) = (provider_id.to_string(), provider_cfg.clone());
-                    let (cache, gate) = (self.local_provider.clone(), self.provider_load.clone());
+                    let providers = self.providers.clone();
                     async move {
-                        let _gate = gate.lock().await;
-                        if let Some((key, p)) = &*cache.lock().unwrap() {
-                            if *key == cache_key {
-                                return Ok(p.clone());
-                            }
-                        }
-                        let p = auricle_stt::create_provider(&id, &cfg, &models_dir).await?;
-                        // Only local providers are worth caching (model load);
-                        // cloud ones are cheap and re-read their key env on
-                        // construction.
-                        if p.kind() == SttKind::Local {
-                            *cache.lock().unwrap() = Some((cache_key, p.clone()));
-                        }
-                        Ok(p)
+                        let build = auricle_stt::create_provider(&id, &cfg, &models_dir);
+                        providers.get_or_build(cache_key, build).await
                     }
                 });
                 let created = load.await.unwrap_or_else(|e| {
@@ -1003,7 +1023,7 @@ impl Engine {
         params: &StartParams,
         (mic_sel, loop_sel): (&str, &str),
         retain_raw_audio: bool,
-        provider_id: &str,
+        route: AudioRoute<'_>,
         control: &SessionControl,
     ) -> std::result::Result<OpenCapture, StartError> {
         // Every await of the start is behind us, so this is the last moment a
@@ -1073,8 +1093,24 @@ impl Engine {
             });
         }
 
+        // Egress ledger, once the devices have opened: the commonest failed
+        // start, a microphone that isn't there, then leaves no row for audio
+        // that never moved. Nothing has moved yet, as nothing reads the
+        // streams until the drains exist, so audio bound for the cloud still
+        // can't go without its row: the start ends here if it can't be
+        // written.
+        crate::egress::record(
+            &self.store,
+            Some(session_id),
+            "audio",
+            route.dest,
+            route.provider_id,
+            None,
+            Some("live capture"),
+        )
+        .map_err(StartError::Internal)?;
         self.store
-            .create_session(session_id, &title, unix_secs(), provider_id, &meta)
+            .create_session(session_id, &title, unix_secs(), route.provider_id, &meta)
             .map_err(StartError::Internal)?;
         // Only now: streams parked in the control would outlive a failed start.
         control.handles.lock().unwrap().extend(streams);
@@ -1648,12 +1684,6 @@ fn dropped_record(
     (!record.is_empty()).then_some(serde_json::Value::Object(record))
 }
 
-/// Bound on closing a session that never received audio: nothing is queued,
-/// so only a wedged provider gets near it.
-const CLOSE_UNUSED_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Close a session a failed start opened but never fed; its worker or socket
-/// would otherwise outlive the start.
 /// Resolves once `flag` is set: a stop, for a start still waiting on work.
 async fn raised(flag: &AtomicBool) {
     while !flag.load(Ordering::Relaxed) {
@@ -1661,6 +1691,12 @@ async fn raised(flag: &AtomicBool) {
     }
 }
 
+/// Bound on closing a session that never received audio: nothing is queued,
+/// so only a wedged provider gets near it.
+const CLOSE_UNUSED_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Close a session a failed start opened but never fed; its worker or socket
+/// would otherwise outlive the start.
 async fn close_unused_session(mut session: Box<dyn SttSession>) {
     let _ = tokio::time::timeout(CLOSE_UNUSED_TIMEOUT, session.finish()).await;
 }
@@ -3106,6 +3142,58 @@ mod tests {
         async fn start_session(&self, _cfg: &SessionCfg) -> Result<Box<dyn SttSession>> {
             Ok(silent_session().0)
         }
+    }
+
+    fn quiet() -> Result<Arc<dyn SttProvider>> {
+        Ok(Arc::new(QuietProvider))
+    }
+
+    /// A first model download given up on runs on for minutes. A start with
+    /// another provider, or another model, must not wait behind it.
+    #[tokio::test]
+    async fn a_build_under_way_does_not_hold_up_another_provider() {
+        let cache = Arc::new(ProviderCache::default());
+        let abandoned = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                let never = std::future::pending();
+                cache
+                    .get_or_build("whisper-local|base.en".into(), never)
+                    .await
+            }
+        });
+        tokio::task::yield_now().await; // the download is under way
+
+        let other = cache.get_or_build("deepgram|base.en".into(), async { quiet() });
+        let other = tokio::time::timeout(Duration::from_secs(1), other).await;
+        assert!(other.is_ok(), "waited behind another provider's download");
+        abandoned.abort();
+    }
+
+    #[tokio::test]
+    async fn a_second_start_of_the_same_model_shares_the_first_build() {
+        let cache = Arc::new(ProviderCache::default());
+        let builds = Arc::new(AtomicUsize::new(0));
+        let start = |cache: Arc<ProviderCache>, builds: Arc<AtomicUsize>| async move {
+            let build = async {
+                builds.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                quiet()
+            };
+            cache
+                .get_or_build("whisper-local|base.en".into(), build)
+                .await
+        };
+        let (first, second) = tokio::join!(
+            start(cache.clone(), builds.clone()),
+            start(cache.clone(), builds.clone())
+        );
+        assert!(Arc::ptr_eq(&first.unwrap(), &second.unwrap()));
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            1,
+            "the model was loaded twice"
+        );
     }
 
     fn quiet_engine(name: &str) -> Arc<Engine> {

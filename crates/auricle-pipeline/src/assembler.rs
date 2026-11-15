@@ -287,11 +287,14 @@ fn unspaced_overlap(tail: &str, head: &str) -> Option<usize> {
     if !(tail.chars().any(is_unspaced) && head.chars().any(is_unspaced)) {
         return None;
     }
-    let tail: Vec<char> = tail.chars().filter(|c| c.is_alphanumeric()).collect();
-    // Each letter of the head with the byte it ends at.
+    // Letters, and the tone, vowel and voicing marks these scripts hang on
+    // them: left out, a cut would fall between a letter and its mark.
+    let counts = |c: &char| c.is_alphanumeric() || is_unspaced(*c);
+    let tail: Vec<char> = tail.chars().filter(counts).collect();
+    // Each of the head's with the byte it ends at.
     let head: Vec<(char, usize)> = head
         .char_indices()
-        .filter(|(_, c)| c.is_alphanumeric())
+        .filter(|(_, c)| counts(c))
         .map(|(i, c)| (c, i + c.len_utf8()))
         .collect();
     let same = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
@@ -368,6 +371,20 @@ mod tests {
             t_end_ms: t1,
             text: text.to_string(),
         })
+    }
+
+    /// Thai tone marks and vowel signs, and Japanese voicing marks, are not
+    /// letters, but they belong to the one before: an overlap that ends on a
+    /// marked letter takes the mark with it.
+    #[test]
+    fn an_overlap_takes_the_marks_on_its_last_letter() {
+        assert_eq!(trim_overlap("ผมทำได้", "ได้ครับ"), "ครับ");
+        assert_eq!(trim_overlap("เราไปที่นั่น", "ที่นั่นแล้ว"), "แล้ว");
+        // か + a combining voicing mark, as some sources write が.
+        assert_eq!(
+            trim_overlap("それが\u{304B}\u{3099}", "が\u{304B}\u{3099}問題です"),
+            "問題です"
+        );
     }
 
     #[test]

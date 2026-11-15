@@ -41,7 +41,9 @@ tokio = { version = "1", features = ["time", "macros", "sync", "io-util"] }
 
 [target.'cfg(windows)'.dependencies]
 # Dictation's paste layer and pill: the clipboard and the window that owns
-# it, SendInput, window focus, and reading a target's integrity level.
+# it, SendInput, window focus, and reading a target's integrity level. Also
+# the screen-share switch: SetWindowDisplayAffinity, called directly so its
+# failure is heard.
 windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_System_DataExchange",

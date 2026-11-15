@@ -11,7 +11,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::api::AppState;
 use crate::events::WsEvent;
@@ -49,8 +49,19 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                     // partial arriving after it would leave a row nothing
                     // else clears.
                     if matches!(ev, WsEvent::PartialCleared { .. } | WsEvent::Final { .. }) {
-                        while let Ok(partial) = partials.try_recv() {
-                            if socket.send(Message::text(partial.to_json())).await.is_err() {
+                        loop {
+                            let queued = match partials.try_recv() {
+                                Ok(partial) => partial,
+                                // Behind, which is when this matters most: the
+                                // lane says so once, then hands over what it
+                                // kept, and that still has to go first.
+                                Err(TryRecvError::Lagged(n)) => {
+                                    dropped_partials += n;
+                                    WsEvent::Lag { dropped_partials, dropped_answer_deltas }
+                                }
+                                Err(_) => break,
+                            };
+                            if socket.send(Message::text(queued.to_json())).await.is_err() {
                                 return;
                             }
                         }
@@ -150,13 +161,30 @@ mod tests {
         }
     }
 
-    /// A partial sent after its final makes a new row that nothing clears, so
-    /// what was queued on the partial lane goes out first. Current-thread
-    /// runtime: the burst below is all queued before the socket task runs,
-    /// so its unbiased select is free to reach the final first.
-    #[tokio::test]
-    async fn no_partial_is_sent_after_the_final_that_ends_it() {
-        let root = std::env::temp_dir().join(format!("auricle-ws-order-{}", std::process::id()));
+    /// The dashboard's end of `/ws/live`.
+    struct Client(
+        futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    );
+
+    impl Client {
+        /// The `type` of the next event.
+        async fn next_type(&mut self) -> String {
+            loop {
+                if let Some(Ok(Frame::Text(t))) = self.0.next().await {
+                    let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                    return v["type"].as_str().unwrap().to_string();
+                }
+            }
+        }
+    }
+
+    /// An engine with one socket on it that is hearing both lanes.
+    async fn connected(name: &str) -> (Arc<Engine>, Client) {
+        let root = std::env::temp_dir().join(format!("auricle-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let engine = Engine::new(EngineOptions {
             cfg: auricle_core::Config::default(),
@@ -171,13 +199,7 @@ mod tests {
         let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/live"))
             .await
             .unwrap();
-        let (_, mut rx) = ws.split();
-        let mut next_type = async move || loop {
-            if let Some(Ok(Frame::Text(t))) = rx.next().await {
-                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
-                return v["type"].as_str().unwrap().to_string();
-            }
-        };
+        let mut client = Client(ws.split().1);
 
         // The socket subscribes some time after the handshake: until it
         // hears the lane, what is sent there is lost.
@@ -186,30 +208,58 @@ mod tests {
                 dropped_partials: 0,
                 dropped_answer_deltas: 0,
             });
-            let heard = tokio::time::timeout(Duration::from_millis(50), next_type()).await;
+            let heard = tokio::time::timeout(Duration::from_millis(50), client.next_type()).await;
             if heard.is_ok_and(|t| t == "lag") {
                 break;
             }
         }
         // A second marker may still be on its way.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        while tokio::time::timeout(Duration::from_millis(20), next_type())
+        while tokio::time::timeout(Duration::from_millis(20), client.next_type())
             .await
             .is_ok()
         {}
-
-        publish_burst(&engine);
-        let mut seen = Vec::new();
-        for _ in 0..11 {
-            seen.push(next_type().await);
-        }
-        assert_eq!(seen.last().map(String::as_str), Some("final"), "{seen:?}");
+        (engine, client)
     }
 
-    fn publish_burst(engine: &Arc<Engine>) {
+    /// A partial sent after its final makes a new row that nothing clears, so
+    /// what was queued on the partial lane goes out first. Current-thread
+    /// runtime: a burst is all queued before the socket task runs, so its
+    /// unbiased select is free to reach the final first.
+    #[tokio::test]
+    async fn no_partial_is_sent_after_the_final_that_ends_it() {
+        let (engine, mut client) = connected("ws-order").await;
         for i in 0..10 {
             engine.publish_partial(line(false, &format!("hello wor{i}")));
         }
         engine.publish_important(line(true, "hello world"));
+        let mut seen = Vec::new();
+        for _ in 0..11 {
+            seen.push(client.next_type().await);
+        }
+        assert_eq!(seen.last().map(String::as_str), Some("final"), "{seen:?}");
+    }
+
+    /// The same for a socket that has fallen behind, which is when it
+    /// matters: the lane has dropped its oldest partials, says so first, and
+    /// only then hands over the ones it kept.
+    #[tokio::test]
+    async fn a_socket_that_fell_behind_still_gets_its_partials_before_the_final() {
+        let (engine, mut client) = connected("ws-lagged").await;
+        // Several rounds: which lane the socket reads first is its to pick,
+        // and only reading the final's lane first shows the fault.
+        for round in 0..8 {
+            // More than the lane holds, so the socket lags.
+            for i in 0..40 {
+                engine.publish_partial(line(false, &format!("hello {round} {i}")));
+            }
+            engine.publish_important(line(true, "hello world"));
+            while client.next_type().await != "final" {}
+            let after = tokio::time::timeout(Duration::from_millis(60), client.next_type()).await;
+            assert!(
+                !matches!(after.as_deref(), Ok("partial")),
+                "round {round}: a partial followed its final"
+            );
+        }
     }
 }

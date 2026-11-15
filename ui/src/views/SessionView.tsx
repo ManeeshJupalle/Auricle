@@ -111,6 +111,8 @@ export function SessionView({
   const mapRef = useRef<SessionMapHandle>(null);
   // A jump from another tab, held until the transcript mounts.
   const pendingJump = useRef<{ turn: MapTurn; play: boolean } | null>(null);
+  // The first turn on screen, to come back to after another tab.
+  const readingAt = useRef<number | null>(null);
   const [foundTurn, setFoundTurn] = useState<number | null>(null);
   // Scrolled into the text. At phone width the title and meta give up their room.
   const [reading, setReading] = useState(false);
@@ -216,13 +218,25 @@ export function SessionView({
   }, [detail, mapTurns]);
 
   const showReading = useCallback(
-    (first: number, last: number) => mapRef.current?.showWindow(mapTurns[first], mapTurns[last]),
+    (first: number, last: number) => {
+      readingAt.current = first;
+      mapRef.current?.showWindow(mapTurns[first], mapTurns[last]);
+    },
     [mapTurns],
   );
 
   const jumpTo = (t: MapTurn, play: boolean) => {
     docRef.current?.scrollToTurn(t.index);
     if (play && hasAudio) audioRef.current?.seek(t.startMs);
+  };
+
+  /** Leave the transcript for another tab, keeping the reader's place. */
+  const showTab = (next: 'summary' | 'asks') => {
+    const turn = readingAt.current === null ? undefined : mapTurns[readingAt.current];
+    if (tab === 'transcript' && turn && !pendingJump.current) {
+      pendingJump.current = { turn, play: false };
+    }
+    setTab(next);
   };
 
   const openAt = (t: MapTurn, play: boolean) => {
@@ -512,7 +526,7 @@ export function SessionView({
           </button>
           <button
             className={`tab ${tab === 'summary' ? 'active' : ''}`}
-            onClick={() => setTab('summary')}
+            onClick={() => showTab('summary')}
             disabled={isLive}
             title={isLive ? 'Available after the session stops' : undefined}
           >
@@ -521,7 +535,7 @@ export function SessionView({
           {(asks.length > 0 || moreAsks) && (
             <button
               className={`tab ${tab === 'asks' ? 'active' : ''}`}
-              onClick={() => setTab('asks')}
+              onClick={() => showTab('asks')}
             >
               Asks
             </button>
@@ -591,10 +605,12 @@ export function SessionView({
         </div>
       )}
 
-      {/* Kept mounted behind the other tabs: the player lives here, and
-          leaving the transcript must not stop the audio or lose its place. */}
+      {/* The wrap stays mounted behind the other tabs for the player in it:
+          leaving the transcript must not stop the audio. The transcript itself
+          goes, as its list can't measure rows nobody can see and would come
+          back somewhere else; `showTab` keeps the place for the way back. */}
       <div className="doc-wrap" hidden={tab !== 'transcript'}>
-        {isLive ? (
+        {tab !== 'transcript' ? null : isLive ? (
           <TurnDoc
             ref={docRef}
             turnOrder={liveTurnOrder}

@@ -500,6 +500,28 @@ async fn device_failure_closes_the_stt_sessions() {
     assert_eq!(engine.lifecycle_state(), "idle");
 }
 
+/// The commonest failed start: the microphone it was told to use is gone.
+/// No audio went anywhere, so the ledger must not say that some did.
+#[tokio::test]
+async fn a_start_that_fails_on_its_device_leaves_no_ledger_row() {
+    let (engine, _probe) = engine("fail-device-ledger");
+    let params = StartParams {
+        mic_device: Some("no such device".into()),
+        ..StartParams::default()
+    };
+    engine.start_session(params).await.unwrap_err();
+
+    let rows = engine.store().list_egress(None, 10, 0).unwrap();
+    assert!(rows.is_empty(), "{rows:?}");
+
+    // A start that works still gets its row.
+    let id = engine.start_session(wav_params()).await.unwrap();
+    stop_and_wait(&engine, &id).await;
+    let rows = engine.store().list_egress(None, 10, 0).unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].session_id.as_deref(), Some(id.as_str()));
+}
+
 #[tokio::test]
 async fn persistence_failure_closes_the_stt_sessions() {
     let (engine, probe) = engine("fail-persist");

@@ -27,8 +27,9 @@
                  Compressed="yes"
                  SummaryCodepage="!(loc.TauriCodepage)"/>
 
-        <!-- AURICLE PATCH (the only change to tauri-bundler 2.x's stock
-             template): dual-purpose package defaulting to a per-user,
+        <!-- AURICLE PATCH (one of two changes to tauri-bundler 2.x's stock
+             template; the other is StopInstalledEngine below): dual-purpose
+             package defaulting to a per-user,
              no-elevation install (%LOCALAPPDATA%\Programs). Install
              per-machine instead with:
                msiexec /i <msi> ALLUSERS=1 MSIINSTALLPERUSER=""
@@ -56,9 +57,12 @@
              auricle.exe made an uninstall need a reboot while it kept port
              4820 from a half-removed folder. Only the copy in this install
              folder: an `auricle serve` started from elsewhere is left alone.
+             The folder is read from the working directory (Directory= sets
+             it), never written into the command: a profile named O'Brien
+             would end a quoted path early and the action would do nothing.
              Braces are escaped for MSI's formatted text. -->
         <CustomAction Id="StopInstalledEngine" Directory="INSTALLDIR" Execute="immediate" Impersonate="yes" Return="ignore"
-            ExeCommand="powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Get-Process -Name auricle -ErrorAction SilentlyContinue | Where-Object [\{] $_.Path -and $_.Path.StartsWith('[INSTALLDIR]', 'OrdinalIgnoreCase') [\}] | Stop-Process -Force&quot;" />
+            ExeCommand="powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;$here = $PWD.Path.TrimEnd('\') + '\'; Get-Process -Name auricle -ErrorAction SilentlyContinue | Where-Object [\{] $_.Path -and $_.Path.StartsWith($here, 'OrdinalIgnoreCase') [\}] | Stop-Process -Force&quot;" />
 
         <InstallExecuteSequence>
             <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>

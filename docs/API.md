@@ -401,6 +401,9 @@ Summarize a stored transcript with an LLM. Body (both optional):
 `template` (default `minutes`; see `templates` in `/providers`) and
 `provider` (default `[llm].provider`; one of `ollama`, `groq`,
 `openai-compat`). Transcripts above ~6k estimated tokens are map-reduced.
+Through Ollama the limit is lower: one call carries about 3k estimated
+tokens, template included, to fit the 4,096-token context Ollama gives a
+model unless its server is set up for more (`OLLAMA_CONTEXT_LENGTH`).
 Real captured exchange (Groq, llama-3.3-70b-versatile):
 
 ```
@@ -418,7 +421,9 @@ Summaries are persisted, returned in `GET /sessions/{id}` under
 (<model>)` sections, and rendered in the web UI's session detail view.
 Errors: `404` unknown session (including one deleted during the LLM call),
 `400` empty transcript / unknown template or provider / missing key env, `502`
-when the LLM endpoint itself fails. A summary the model cut off at its output
+when the LLM endpoint itself fails, `500` when the provider is a cloud one and
+its egress ledger row can't be written (nothing is sent). A summary the model
+cut off at its output
 limit still returns, ending with
 `[Truncated: the model reached its output limit before finishing.]`.
 
@@ -464,15 +469,17 @@ start; `mcp_enabled` applies at once, and `retention_days` at the next sweep:
 | `llm_provider` | string | `[llm].provider` — default for summaries and post-stop auto-titles |
 | `redact_pii` | bool | none — when true, transcript text is scrubbed of PII/secrets before it is persisted, shown, or sent to an LLM (read at session start). Text only: a cloud STT provider receives the raw audio first, retained WAVs are not redacted, and a value split across two chunks can't match |
 | `mcp_enabled` | bool | none — when true, serves `/mcp` (read per request; see [POST /mcp](#post-mcp--model-context-protocol)) |
-| `retention_days` | integer | none — delete sessions that ended more than this many days ago; `0` or unset is off |
+| `retention_days` | integer | none — delete sessions that ended more than this many days ago, and retained asks made outside any session that long ago; `0` or unset is off |
 | `retention_clock` | object | none — the sweep's own record of the system clock, written by every sweep and read by nothing else; not for editing |
+| `db_scrubbed` | bool | none — the daemon's own record that it has rewritten the database file once, to remove text that builds before 0.5.0 deleted without zeroing; not for editing |
 | `onboarded` | bool | none — set by the dashboard's first-run setup so it isn't shown again |
 | `ui_theme` | string | none — the dashboard's theme, `dark` or `light`; the engine never reads it |
 
 Unrecognized keys are stored and returned but have no engine effect.
 
 `retention_days` deletes for good, with no trash: each session goes with its
-transcript, summaries, retained asks, and retained audio. The sweep runs at
+transcript, summaries, retained asks, and retained audio, and a retained ask
+that belongs to no session goes once it is that old. The sweep runs at
 daemon start and every 24 hours after, and reads the value each time, so a
 change lands at the next sweep, up to a day later. A value that is negative or
 not a whole number is `400`, and the key is absent from `GET` until first set.
@@ -539,6 +546,12 @@ The egress ledger: one row per time the daemon sent user data to a third
 party — and per time it explicitly stayed local. Metadata only; the audio,
 prompt, and answer themselves are never recorded, only where they went and
 roughly how much. Newest first.
+
+The row is written before the data goes, and a send to a cloud provider whose
+row can't be written is refused: a meeting or dictation doesn't start, and a
+summary, an ask, an auto-title, or a dictation polish isn't sent. Data that
+stays on this machine goes ahead without its row. So the ledger can list a
+send that then failed, but not miss one that happened.
 
 The ledger is the daemon's own. `auricle record` writes nothing to it, even
 with a cloud provider, and REST reads by local processes are not on it either
@@ -691,7 +704,9 @@ Errors before the stream starts are plain JSON: `400` empty question /
 unknown provider, `404` unknown `session_id`, `409` when the chosen LLM
 provider is not ready (e.g. key env var unset) or when the screen
 capture hit a transient desktop state (window minimized/gone — retry),
-`500` for machine-level capture failures. After the stream has started,
+`500` for machine-level capture failures, and `500` when the provider is a
+cloud one and its egress ledger row can't be written (nothing is sent). After
+the stream has started,
 failures arrive as an `ask_error` event on both surfaces:
 
 ```

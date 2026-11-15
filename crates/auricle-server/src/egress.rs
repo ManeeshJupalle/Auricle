@@ -103,9 +103,11 @@ pub(crate) fn record(
 ) -> auricle_core::Result<()> {
     let cloud = dest.0 == "cloud";
     match record_checked(store, session_id, kind, dest, provider, items, detail) {
-        Err(e) if cloud => Err(auricle_core::Error::Config(format!(
+        // A database failure, reported as one: nothing about it is the
+        // user's configuration.
+        Err(e) if cloud => Err(auricle_core::Error::Io(std::io::Error::other(format!(
             "the egress ledger couldn't be written, so nothing was sent: {e}"
-        ))),
+        )))),
         Err(e) => {
             eprintln!("recording egress: {e}");
             Ok(())
