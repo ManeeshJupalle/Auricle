@@ -140,7 +140,10 @@ The release job stops before anything is signed if any of these fail:
   then links `vulkan-1.dll`, so the staging script also ships the Vulkan
   loader the SDK put in System32, after checking it is the SDK's version and
   signed by LunarG, and fails on an engine that doesn't link it. To move to a
-  newer SDK, change the version and hash in `release.yml` together.
+  newer SDK, change the version and hash in `release.yml` together. The engine
+  is built in `D:\t`, not the checkout's `target\`: the Vulkan shader
+  generator is a nested CMake build whose deepest path otherwise runs past
+  Windows' 260-character limit, and MSBuild fails on it.
 
 ## The `release` environment
 
