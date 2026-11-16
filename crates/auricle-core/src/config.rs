@@ -204,7 +204,12 @@ impl Default for GroqLlmConfig {
         GroqLlmConfig {
             api_key_env: "GROQ_API_KEY".to_string(),
             base_url: "https://api.groq.com/openai/v1".to_string(),
-            model: "llama-3.3-70b-versatile".to_string(),
+            // Groq shut down llama-3.3-70b-versatile on 2026-08-16. Qwen 3.8
+            // answers without a thinking pass unless asked for one, so a
+            // copilot answer starts fast and a short reply such as a title
+            // isn't spent on reasoning. Its sibling qwen3.6-27b thinks by
+            // default and puts the thinking in the answer.
+            model: "qwen/qwen3.8-27b".to_string(),
         }
     }
 }
@@ -1015,6 +1020,7 @@ obsidian = true
         assert_eq!(cfg.llm.provider, "ollama");
         assert_eq!(cfg.llm.ollama.base_url, "http://localhost:11434/v1");
         assert_eq!(cfg.llm.groq.api_key_env, "GROQ_API_KEY");
+        assert_eq!(cfg.llm.groq.model, "qwen/qwen3.8-27b");
 
         let cfg = Config::parse("[llm]\nprovider = \"groq\"\n[llm.ollama]\nmodel = \"qwen3:8b\"\n")
             .unwrap();

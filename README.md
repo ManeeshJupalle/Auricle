@@ -37,7 +37,7 @@
   <sub>A finished meeting. Every meeting in the dashboard images and demos below is made up.</sub>
 </p>
 
-> **What's in the download today.** The latest release is v0.5.2: meeting
+> **What's in the download today.** The latest release is v0.5.3: meeting
 > transcripts, summaries, search, and the copilot, plus dictation, the MCP
 > server, line-level search, and retention and backups, in the look these
 > screenshots show. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
@@ -484,7 +484,7 @@ are in [benches/RESULTS.md](benches/RESULTS.md) and the phase reports.
 | capture → partial / final, whisper-local base.en CPU (p50) | 1.9 s / 2.6 s |
 | hotkey → screen text ready (warm, 1080p) | 0.18–0.30 s |
 | hotkey → overlay visible | **0.09–0.12 s** |
-| ask → first answer token, Groq llama-3.3-70b | **0.7 s** |
+| ask → first answer token, Groq qwen3.8-27b (no meeting context) | **0.2 s** |
 | ask → first answer token, local Ollama (qwen2.5:14b, warm) | 10.1 s |
 | ask → first answer token, local Ollama (qwen3:8b, reasoning) | 104 s |
 
@@ -501,7 +501,7 @@ A Deepgram final after a pause can take longer than this median: see
 - **A fully-local copilot is slow on modest CPUs.** The measured
   time-to-first-token on a 2019 laptop is 10.1 s with qwen2.5:14b (prompt
   evaluation dominates) and 104 s with qwen3:8b (reasoning models think
-  before they speak), against 0.7 s for Groq. Local answers are private,
+  before they speak), against 0.2 s for Groq. Local answers are private,
   not fast; the numbers and root causes are in
   [docs/PHASE8_ASSISTANT_REPORT.md](docs/PHASE8_ASSISTANT_REPORT.md).
 - **Live-transcription quality is provider- and hardware-bound.**

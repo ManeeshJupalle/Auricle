@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3 — 2026-11-16
+
+- **Summaries and the copilot work with Groq again.** Groq shut down
+  `llama-3.3-70b-versatile`, the model Auricle used there, on 2026-08-16.
+  Every summary, auto-title, and copilot answer through Groq failed with
+  "model does not exist", and that included everyone who picked **Cloud** in
+  setup. The default is now `qwen/qwen3.8-27b`, which answers without a
+  thinking pass: the copilot's first words arrive in about 0.2 s. To use
+  another Groq model, set `model` under `[llm.groq]` in `auricle.toml`.
+
 ## 0.5.2 — 2026-11-14
 
 Fixes from a review before launch. The first matters most on work laptops.
