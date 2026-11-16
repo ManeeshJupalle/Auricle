@@ -94,12 +94,39 @@ jobs:
       - name: Engine tests
         run: cargo test
 
+      # The engine is built with whisper.cpp's Vulkan backend, so local Whisper
+      # runs on a dedicated GPU when the PC has one. That build needs the
+      # Vulkan SDK (headers, vulkan-1.lib, and glslc for the shaders), pinned
+      # here to the installer it was tested with. Its runtime component also
+      # puts the Vulkan loader in System32, which stage-vc-runtime.ps1 ships.
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          $version = '1.4.363.0'
+          $sha256 = '94A82D378F7A5E3E54C9DB7D2FB7016AF136E14AC0A18DBF0F2F67A36352D141'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe" -OutFile $installer
+          $actual = (Get-FileHash $installer -Algorithm SHA256).Hash
+          if ($actual -ne $sha256) {
+            Write-Output "::error::The Vulkan SDK installer's SHA-256 is $actual, not $sha256."
+            exit 1
+          }
+          $root = "C:\VulkanSDK\$version"
+          $setup = Start-Process $installer -Wait -PassThru -ArgumentList `
+            "--root $root --accept-licenses --default-answer --confirm-command install"
+          if ($setup.ExitCode -ne 0 -or -not (Test-Path "$root\Lib\vulkan-1.lib") -or -not (Test-Path "$root\Bin\glslc.exe")) {
+            Write-Output "::error::The Vulkan SDK did not install (exit code $($setup.ExitCode))."
+            exit 1
+          }
+          "VULKAN_SDK=$root" | Out-File -Append $env:GITHUB_ENV
+          "$root\Bin" | Out-File -Append $env:GITHUB_PATH
+
       # 2. Engine binary (embeds the dashboard) staged as the overlay's sidecar.
       #    Tauri resolves externalBin `binaries/auricle` to the target-triple name.
       - name: Build engine and stage the sidecar
         shell: pwsh
         run: |
-          cargo build --release -p auricle-cli
+          cargo build --release -p auricle-cli --features vulkan
           New-Item -ItemType Directory -Force overlay/src-tauri/binaries | Out-Null
           Copy-Item target/release/auricle.exe `
             overlay/src-tauri/binaries/auricle-x86_64-pc-windows-msvc.exe -Force
@@ -110,6 +137,7 @@ jobs:
       # variable, so the cache reads OFF either way. GGML_AVX2 does tell them
       # apart. It is ON for the portable set, and OFF on a native build or on
       # one with no SIMD at all, which would run far too slowly to ship.
+      # GGML_VULKAN confirms the GPU backend made it into the build.
       - name: Check ggml was not built for the runner's CPU
         shell: pwsh
         run: |
@@ -118,7 +146,7 @@ jobs:
             Write-Output '::error::No whisper-rs-sys CMakeCache.txt found, so the ggml flags cannot be checked.'
             exit 1
           }
-          $wanted = [ordered]@{ GGML_NATIVE = 'OFF'; GGML_AVX2 = 'ON' }
+          $wanted = [ordered]@{ GGML_NATIVE = 'OFF'; GGML_AVX2 = 'ON'; GGML_VULKAN = 'ON' }
           $failed = $false
           foreach ($cache in $caches) {
             foreach ($flag in $wanted.Keys) {
@@ -137,7 +165,8 @@ jobs:
       # The engine needs the Visual C++ runtime DLLs, and Windows doesn't come
       # with them. This copies the ones tauri.release.conf.json puts beside
       # auricle.exe, and fails if the engine imports one that file doesn't list.
-      - name: Stage the Visual C++ runtime for the installer
+      # It also stages the Vulkan loader, and fails if the engine doesn't link it.
+      - name: Stage the Visual C++ runtime and Vulkan loader for the installer
         shell: pwsh
         run: ./overlay/src-tauri/stage-vc-runtime.ps1
 

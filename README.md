@@ -37,7 +37,7 @@
   <sub>A finished meeting. Every meeting in the dashboard images and demos below is made up.</sub>
 </p>
 
-> **What's in the download today.** The latest release is v0.5.3: meeting
+> **What's in the download today.** The latest release is v0.5.4: meeting
 > transcripts, summaries, search, and the copilot, plus dictation, the MCP
 > server, line-level search, and retention and backups, in the look these
 > screenshots show. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
@@ -45,6 +45,7 @@
 ## Why Auricle
 
 - **Private by default.** Speech is transcribed on your machine by whisper.cpp,
+  on your graphics card when you have a dedicated one,
   and summaries come from a local model through [Ollama](https://ollama.com)
   (installed separately). Cloud providers are opt-in, and every time the daemon
   sends your data to one, its egress ledger records it.
@@ -473,7 +474,7 @@ Full API reference with real captured examples: [docs/API.md](docs/API.md).
 
 ## Performance
 
-Measured on an i7-9750H (a 2019 6-core laptop). Methodology and budget misses
+Measured on an i7-9750H (a 2019 6-core laptop with a GTX 1660 Ti). Methodology and budget misses
 are in [benches/RESULTS.md](benches/RESULTS.md) and the phase reports.
 
 | metric | measured |
@@ -482,6 +483,7 @@ are in [benches/RESULTS.md](benches/RESULTS.md) and the phase reports.
 | capture → final, deepgram (p50) | **0.54 s** |
 | capture → partial / final, groq-whisper batch (p50) | 0.25 s / 0.27 s (p95 5.8 s) |
 | capture → partial / final, whisper-local base.en CPU (p50) | 1.9 s / 2.6 s |
+| capture → partial / final, whisper-local base.en GTX 1660 Ti GPU (p50) | **0.18 s / 0.14 s** |
 | hotkey → screen text ready (warm, 1080p) | 0.18–0.30 s |
 | hotkey → overlay visible | **0.09–0.12 s** |
 | ask → first answer token, Groq qwen3.8-27b (no meeting context) | **0.2 s** |
@@ -507,7 +509,12 @@ A Deepgram final after a pause can take longer than this median: see
 - **Live-transcription quality is provider- and hardware-bound.**
   whisper-local `small.en` cannot keep up with continuous speech on
   2019-class laptop CPUs; `base.en` or a cloud provider are the realistic
-  choices there.
+  choices there. Local Whisper runs on a dedicated graphics card by itself
+  when the PC has one with a Vulkan driver (NVIDIA, AMD, or Intel Arc), and
+  that is over ten times faster. Integrated graphics aren't used: they share
+  the CPU's memory, and none has been measured against the CPU yet. To keep
+  it on the CPU, set `use_gpu = false` under `[stt.whisper-local]` in
+  `auricle.toml`.
 - **`base.en`, the default local model, is English-only, and so is
   `small.en`.** Both ignore the language setting, and a session that asks them
   for another language warns you. For other languages, pick the `base` or

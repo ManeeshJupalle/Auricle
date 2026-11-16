@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
@@ -6,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use auricle_core::{AudioChunk, ChannelId, ChunkKind, Error, Result, Segment, SttEvent};
 use tokio::sync::mpsc;
+use whisper_rs::whisper_rs_sys as sys;
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperTokenId,
 };
@@ -42,7 +44,8 @@ impl WhisperLocalProvider {
         Self::load_with(path, false)
     }
 
-    /// [`Self::load`], on the GPU if `use_gpu` and the build has a backend.
+    /// [`Self::load`], on a dedicated GPU if `use_gpu` and the build has a
+    /// GPU backend that finds one; on the CPU otherwise.
     pub fn load_with(path: &Path, use_gpu: bool) -> Result<Self> {
         // Silence whisper.cpp/ggml stderr chatter (no log backend features =>
         // the hooks discard output). Without this, model load dumps ~40 lines
@@ -50,10 +53,13 @@ impl WhisperLocalProvider {
         static HOOKS: OnceLock<()> = OnceLock::new();
         HOOKS.get_or_init(whisper_rs::install_logging_hooks);
 
-        if use_gpu && !cfg!(feature = "vulkan") {
-            eprintln!("warning: use_gpu is set, but this build has no GPU backend; using the CPU");
+        let devices = if use_gpu { ggml_devices() } else { Vec::new() };
+        let gpu = dedicated_gpu(&devices);
+        match gpu {
+            Some((_, name)) => eprintln!("whisper: running on the GPU ({name})"),
+            None => eprintln!("whisper: running on the CPU"),
         }
-        let ctx = WhisperContext::new_with_params(path, context_params(use_gpu))
+        let ctx = WhisperContext::new_with_params(path, context_params(gpu.map(|(i, _)| i)))
             .map_err(|e| Error::Stt(format!("loading model {}: {e}", path.display())))?;
         let n_threads = std::thread::available_parallelism()
             .map(|n| (n.get() / 2).clamp(2, 8))
@@ -65,13 +71,53 @@ impl WhisperLocalProvider {
     }
 }
 
-/// Set explicitly: a GPU-enabled whisper-rs defaults to the GPU, and the
-/// feature alone must never move anyone off the CPU.
-fn context_params(use_gpu: bool) -> WhisperContextParameters<'static> {
+/// Set explicitly: a GPU-enabled whisper-rs defaults to the GPU, and only a
+/// device [`dedicated_gpu`] picked may move anyone off the CPU.
+fn context_params(gpu: Option<i32>) -> WhisperContextParameters<'static> {
     let mut params = WhisperContextParameters::default();
-    params.use_gpu(use_gpu);
+    params.use_gpu(gpu.is_some());
+    if let Some(device) = gpu {
+        params.gpu_device(device);
+    }
     params
 }
+
+/// Every device ggml can run on, with its description. A build without a GPU
+/// backend lists only the CPU. With the Vulkan backend, a PC with no Vulkan
+/// driver lists only the CPU too: ggml catches the failed setup.
+fn ggml_devices() -> Vec<(sys::ggml_backend_dev_type, String)> {
+    // SAFETY: ggml builds its device list once, on first use, and keeps it
+    // for the life of the process. Every index below the count is a valid
+    // device, and each description is a NUL-terminated string ggml owns.
+    unsafe {
+        (0..sys::ggml_backend_dev_count())
+            .map(|i| {
+                let device = sys::ggml_backend_dev_get(i);
+                let name = CStr::from_ptr(sys::ggml_backend_dev_description(device));
+                (
+                    sys::ggml_backend_dev_type(device),
+                    name.to_string_lossy().into_owned(),
+                )
+            })
+            .collect()
+    }
+}
+
+/// The first dedicated GPU, as whisper.cpp's `gpu_device` number (it counts
+/// dedicated and integrated GPUs together, in ggml's order, and skips the
+/// CPU), with its name. Integrated graphics are never picked: they share the
+/// CPU's memory, and none has been measured against the CPU yet.
+fn dedicated_gpu(devices: &[(sys::ggml_backend_dev_type, String)]) -> Option<(i32, &str)> {
+    devices
+        .iter()
+        .filter(|(kind, _)| *kind == GPU || *kind == IGPU)
+        .enumerate()
+        .find(|(_, (kind, _))| *kind == GPU)
+        .map(|(i, (_, name))| (i as i32, name.as_str()))
+}
+
+const GPU: sys::ggml_backend_dev_type = sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU;
+const IGPU: sys::ggml_backend_dev_type = sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU;
 
 #[async_trait]
 impl SttProvider for WhisperLocalProvider {
@@ -384,9 +430,38 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn the_gpu_is_used_only_when_asked_for() {
-        assert!(!context_params(false).use_gpu);
-        assert!(context_params(true).use_gpu);
+    fn the_gpu_is_used_only_when_one_was_picked() {
+        assert!(!context_params(None).use_gpu);
+        let picked = context_params(Some(1));
+        assert!(picked.use_gpu);
+        assert_eq!(picked.gpu_device, 1);
+    }
+
+    const CPU: sys::ggml_backend_dev_type = sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_CPU;
+
+    fn devices(types: &[sys::ggml_backend_dev_type]) -> Vec<(sys::ggml_backend_dev_type, String)> {
+        types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (*t, format!("dev{i}")))
+            .collect()
+    }
+
+    #[test]
+    fn a_dedicated_gpu_wins_over_integrated_graphics() {
+        // whisper.cpp numbers dedicated and integrated GPUs together, in the
+        // order ggml lists them, and skips the CPU: the card here is its 1.
+        let list = devices(&[CPU, IGPU, GPU]);
+        assert_eq!(dedicated_gpu(&list), Some((1, "dev2")));
+        let list = devices(&[GPU, IGPU, CPU]);
+        assert_eq!(dedicated_gpu(&list), Some((0, "dev0")));
+    }
+
+    #[test]
+    fn integrated_graphics_alone_stay_on_the_cpu() {
+        assert_eq!(dedicated_gpu(&devices(&[CPU, IGPU])), None);
+        assert_eq!(dedicated_gpu(&devices(&[CPU])), None);
+        assert_eq!(dedicated_gpu(&devices(&[])), None);
     }
 
     #[test]

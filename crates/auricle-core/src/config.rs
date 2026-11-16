@@ -79,8 +79,9 @@ impl Default for SttConfig {
 #[serde(default)]
 pub struct WhisperLocalConfig {
     pub model: String,
-    /// Run inference on the GPU. Needs a build with the `vulkan` feature;
-    /// any other build warns and stays on the CPU.
+    /// Run inference on a dedicated GPU when the build has the `vulkan`
+    /// feature and finds one; integrated graphics and every other build stay
+    /// on the CPU. `false` keeps it on the CPU regardless.
     pub use_gpu: bool,
 }
 
@@ -93,7 +94,7 @@ impl Default for WhisperLocalConfig {
             // want small.en's accuracy for offline-ish use opt in via
             // config or the Settings view.
             model: "base.en".to_string(),
-            use_gpu: false,
+            use_gpu: true,
         }
     }
 }
@@ -602,10 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn the_gpu_is_opt_in() {
-        assert!(!Config::parse("").unwrap().stt.whisper_local.use_gpu);
-        let cfg = Config::parse("[stt.whisper-local]\nuse_gpu = true\n").unwrap();
-        assert!(cfg.stt.whisper_local.use_gpu);
+    fn a_gpu_is_used_unless_turned_off() {
+        assert!(Config::parse("").unwrap().stt.whisper_local.use_gpu);
+        let cfg = Config::parse("[stt.whisper-local]\nuse_gpu = false\n").unwrap();
+        assert!(!cfg.stt.whisper_local.use_gpu);
     }
 
     #[test]

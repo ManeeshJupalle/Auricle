@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.4 — 2026-11-16
+
+- **Local Whisper runs on your graphics card.** On a PC with a dedicated GPU
+  and a Vulkan driver (NVIDIA, AMD, or Intel Arc), meeting transcription and
+  dictation now run on the card, with no setting to turn on. On a 2019 laptop
+  with a GTX 1660 Ti, the first words of a line arrive in about 0.18 s, against
+  2.3 s on its CPU, and the text is the same. Integrated graphics aren't used,
+  as they share the CPU's memory and none has been measured against it yet,
+  and a PC with no Vulkan driver runs on the CPU as before. The engine log
+  says which it picked (`whisper: running on the GPU (…)`). To keep it on the
+  CPU, set `use_gpu = false` under `[stt.whisper-local]` in `auricle.toml`.
+- The installer is larger: the GPU code adds about 55 MB to the engine, and
+  the installer ships the Vulkan loader (`vulkan-1.dll`), so the engine starts
+  on a PC whose graphics driver didn't install one.
+
 ## 0.5.3 — 2026-11-16
 
 - **Summaries and the copilot work with Groq again.** Groq shut down

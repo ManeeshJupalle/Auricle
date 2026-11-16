@@ -4,7 +4,8 @@
       "redist/vcruntime140.dll": "vcruntime140.dll",
       "redist/vcruntime140_1.dll": "vcruntime140_1.dll",
       "redist/msvcp140.dll": "msvcp140.dll",
-      "redist/msvcp140_1.dll": "msvcp140_1.dll"
+      "redist/msvcp140_1.dll": "msvcp140_1.dll",
+      "redist/vulkan-1.dll": "vulkan-1.dll"
     }
   }
 }

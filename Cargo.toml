@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ManeeshJupalle/Auricle"
@@ -22,13 +22,13 @@ repository = "https://github.com/ManeeshJupalle/Auricle"
 readme = "README.md"
 
 [workspace.dependencies]
-auricle-core = { path = "crates/auricle-core", version = "0.5.3" }
-auricle-capture = { path = "crates/auricle-capture", version = "0.5.3" }
-auricle-pipeline = { path = "crates/auricle-pipeline", version = "0.5.3" }
-auricle-stt = { path = "crates/auricle-stt", version = "0.5.3" }
-auricle-llm = { path = "crates/auricle-llm", version = "0.5.3" }
-auricle-vision = { path = "crates/auricle-vision", version = "0.5.3" }
-auricle-server = { path = "crates/auricle-server", version = "0.5.3" }
+auricle-core = { path = "crates/auricle-core", version = "0.5.4" }
+auricle-capture = { path = "crates/auricle-capture", version = "0.5.4" }
+auricle-pipeline = { path = "crates/auricle-pipeline", version = "0.5.4" }
+auricle-stt = { path = "crates/auricle-stt", version = "0.5.4" }
+auricle-llm = { path = "crates/auricle-llm", version = "0.5.4" }
+auricle-vision = { path = "crates/auricle-vision", version = "0.5.4" }
+auricle-server = { path = "crates/auricle-server", version = "0.5.4" }
 # Screen capture (Windows.Graphics.Capture) + OCR (Windows.Media.Ocr) for
 # auricle-vision. Feature list is the probe-verified minimum; note
 # Security_Authorization_AppCapabilityAccess is required for

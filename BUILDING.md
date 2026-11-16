@@ -70,8 +70,9 @@ anywhere with no Node.
 
 - `auricle-stt/cloud` (default on): deepgram + groq-whisper +
   openai-compat providers. Disable for a local-only build.
-- `vulkan` (off by default; on `auricle-cli` and `auricle-stt`): whisper
-  inference on the GPU, through whisper.cpp's Vulkan backend.
+- `vulkan` (off by default; on `auricle-cli` and `auricle-stt`; release
+  builds turn it on): whisper inference on the GPU, through whisper.cpp's
+  Vulkan backend.
 
   ```
   cargo build --release -p auricle-cli --features vulkan
@@ -80,21 +81,27 @@ anywhere with no Node.
   Build time needs the [Vulkan SDK](https://vulkan.lunarg.com/): `VULKAN_SDK`
   must be set (the SDK installer does this; `whisper-rs-sys` panics without
   it and links `vulkan-1` from `%VULKAN_SDK%\Lib`), and CMake must find the
-  SDK's `glslc` to compile the shaders. Run time needs a GPU with a Vulkan
-  driver.
+  SDK's `glslc` to compile the shaders. Keep the target directory's path
+  short (`D:\Auricle\target` is fine): under a long one, such as a folder in
+  `%TEMP%`, CMake's compiler check runs past Windows' 260-character path limit
+  and fails with "No CMAKE_C_COMPILER could be found". The shaders make the
+  engine about 55 MB larger.
 
-  The feature only makes the GPU available. Inference stays on the CPU until
-  `auricle.toml` says otherwise; on a build without the feature this setting
-  warns and stays on the CPU:
+  Such a build runs Whisper on the first dedicated GPU ggml finds, and says
+  which on stderr (`whisper: running on the GPU (…)`). Integrated graphics
+  aren't used: they share the CPU's memory, and none has been measured against
+  the CPU yet. With no dedicated GPU or no Vulkan driver, it runs on the CPU.
+  To keep a GPU build on the CPU:
 
   ```toml
   [stt.whisper-local]
-  use_gpu = true
+  use_gpu = false
   ```
 
-  **This path has never been compiled or run.** The wiring is in place and
-  default builds are unaffected, but expect the first Vulkan build to need
-  fixes, and measure it before trusting it in a meeting.
+  The engine links `vulkan-1.dll`, the Vulkan loader. Graphics drivers
+  install it, and the MSI ships a copy so the engine starts on a PC without
+  one. On an i7-9750H with a GTX 1660 Ti, `base.en` gives its first words in
+  about 0.18 s on the GPU against 2.3 s on the CPU, with the same text.
 
 ## Overlay (the copilot shell, `overlay/`)
 
@@ -104,10 +111,10 @@ Tauri v2 app in its own cargo workspace; needs the WebView2 runtime
 ```
 set GGML_NATIVE=OFF                                      # PowerShell: $env:GGML_NATIVE = 'OFF'
 cargo clean --release -p whisper-rs-sys                  # see below
-cargo build --release                                    # engine first (the MSI bundles it)
+cargo build --release -p auricle-cli --features vulkan   # engine first (the MSI bundles it); needs the Vulkan SDK
 mkdir overlay\src-tauri\binaries                         # gitignored, so absent on a fresh clone
 copy target\release\auricle.exe overlay\src-tauri\binaries\auricle-x86_64-pc-windows-msvc.exe
-powershell -ExecutionPolicy Bypass -File overlay\src-tauri\stage-vc-runtime.ps1   # C++ runtime DLLs for the MSI
+powershell -ExecutionPolicy Bypass -File overlay\src-tauri\stage-vc-runtime.ps1   # C++ runtime and Vulkan loader for the MSI
 cd overlay && npm ci && npx tauri build --config src-tauri/tauri.release.conf.json
                                                          # MSI in overlay\src-tauri\target\release\bundle\msi\
 ```
@@ -115,7 +122,10 @@ cd overlay && npm ci && npx tauri build --config src-tauri/tauri.release.conf.js
 The engine needs four Visual C++ runtime DLLs that Windows doesn't come with.
 The script copies them out of Visual Studio and `tauri.release.conf.json` adds
 them to the MSI, beside the engine. A plain `npx tauri build` still works, but
-its MSI only runs where something else has installed that runtime.
+its MSI only runs where something else has installed that runtime. The script
+also copies the Vulkan loader the SDK installed in System32, after checking
+that it is the SDK's version and signed by LunarG, and refuses an engine built
+without `--features vulkan`.
 
 An MSI is for other machines, so its engine must not be built for this one.
 ggml has no runtime CPU dispatch and `GGML_NATIVE` defaults on, so without

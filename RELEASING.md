@@ -134,6 +134,13 @@ The release job stops before anything is signed if any of these fail:
   `tauri.release.conf.json` (passed to `tauri build` as `--config`) puts them
   beside `auricle.exe` in the MSI. The script reads the engine's imports and
   fails if one is a runtime DLL that file doesn't list.
+- **GPU build.** The job installs the Vulkan SDK (a pinned version, checked
+  against its SHA-256), builds the engine with `--features vulkan`, and
+  requires `GGML_VULKAN` to be `ON` in the same `CMakeCache.txt`. The engine
+  then links `vulkan-1.dll`, so the staging script also ships the Vulkan
+  loader the SDK put in System32, after checking it is the SDK's version and
+  signed by LunarG, and fails on an engine that doesn't link it. To move to a
+  newer SDK, change the version and hash in `release.yml` together.
 
 ## The `release` environment
 

@@ -1,5 +1,5 @@
 # Copies the Visual C++ runtime DLLs the installer ships into redist/, from
-# the Visual Studio that built the engine.
+# the Visual Studio that built the engine, and the Vulkan loader (see the end).
 #
 # The engine links whisper.cpp and ONNX Runtime, which use the dynamic C++
 # runtime, so auricle.exe will not start without these DLLs, and Windows does
@@ -48,10 +48,37 @@ if ($unlisted.Count -gt 0) {
     throw "The engine imports $($unlisted -join ', '), which tauri.release.conf.json does not ship."
 }
 
+$runtime = @($listed | Where-Object { $_ -ne 'vulkan-1.dll' })
 $redist = Join-Path $PSScriptRoot 'redist'
 New-Item -ItemType Directory -Force $redist | Out-Null
-foreach ($name in $listed) {
+foreach ($name in $runtime) {
     Copy-Item (Join-Path $crt.FullName $name) $redist -Force
 }
-Write-Output "Staged $($listed -join ', ') from $($crt.FullName)"
+Write-Output "Staged $($runtime -join ', ') from $($crt.FullName)"
 Write-Output "The engine imports: $($needed -join ', ')"
+
+# The Vulkan loader. A release engine is built with whisper.cpp's Vulkan
+# backend and links vulkan-1.dll, which comes with graphics drivers, not with
+# Windows. Shipped beside the engine, it lets a PC with no Vulkan driver start
+# the engine anyway: ggml finds no GPU there, and Whisper runs on the CPU.
+# The copy is the one the Vulkan SDK installer put in System32 (its runtime
+# component), and it must be that SDK's version, signed by LunarG.
+if ($dependents -notcontains 'vulkan-1.dll') {
+    throw 'The engine does not link vulkan-1.dll: build it with `--features vulkan`, as release.yml does.'
+}
+if ($listed -notcontains 'vulkan-1.dll') {
+    throw 'The engine imports vulkan-1.dll, which tauri.release.conf.json does not ship.'
+}
+if (-not $env:VULKAN_SDK) { throw 'VULKAN_SDK is not set, so the loader to ship cannot be checked.' }
+$sdkVersion = Split-Path $env:VULKAN_SDK -Leaf
+$loader = Join-Path $env:SystemRoot 'System32\vulkan-1.dll'
+$loaderVersion = (Get-Item $loader).VersionInfo.FileVersion
+if ($loaderVersion -ne $sdkVersion) {
+    throw "$loader is version $loaderVersion, not the Vulkan SDK's $sdkVersion."
+}
+$signature = Get-AuthenticodeSignature $loader
+if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '^CN="LunarG, Inc\."') {
+    throw "$loader is not signed by LunarG ($($signature.Status))."
+}
+Copy-Item $loader $redist -Force
+Write-Output "Staged vulkan-1.dll $loaderVersion from $loader"

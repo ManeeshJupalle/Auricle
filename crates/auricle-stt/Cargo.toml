@@ -13,14 +13,16 @@ default = ["cloud"]
 # hound is needed to WAV-encode chunks for the batch upload endpoints.
 cloud = ["dep:tokio-tungstenite", "dep:futures-util", "dep:serde_json", "dep:hound"]
 # GPU inference via whisper.cpp's Vulkan backend. Needs the Vulkan SDK at build
-# time (see BUILDING.md); `[stt.whisper-local] use_gpu` turns it on at run time.
+# time (see BUILDING.md). A dedicated GPU is then used on its own; setting
+# `[stt.whisper-local] use_gpu = false` keeps inference on the CPU.
 vulkan = ["whisper-rs/vulkan"]
 
 [dependencies]
 auricle-core = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
-whisper-rs = { workspace = true }
+# raw-api only re-exports the ggml bindings, to pick the GPU by device type.
+whisper-rs = { workspace = true, features = ["raw-api"] }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
