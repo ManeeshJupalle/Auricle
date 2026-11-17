@@ -129,6 +129,8 @@ export interface LlmProviderInfo {
   ready: boolean;
   detail: string;
   default: boolean;
+  /** Ollama only, while it has the model loaded: the share in GPU memory. */
+  gpu_percent?: number | null;
 }
 
 export interface TemplateInfo {

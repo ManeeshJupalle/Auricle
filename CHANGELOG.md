@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.5 — 2026-11-16
+
+- **Ollama summaries of long meetings are over three times faster.** Each
+  portion of a long meeting was asked for a detailed summary, and a local
+  model spent most of the time writing it: one portion ran to 3,856 tokens,
+  nearly 3,000 words. Through Ollama, each portion is now asked for at most a
+  dozen short bullets before they're merged. An hour's meeting with
+  `llama3.1` on a 2019 laptop with a GTX 1660 Ti took 265 s, against 892 s
+  before, and the summary still names who owns what, the dates, and the
+  numbers. Groq and
+  OpenAI-compatible summaries are unchanged. A larger context window, the
+  other way to make fewer calls, was measured and dropped: each change of
+  context size reloads the model, about 7 s, and on a 6 GB card it moves more
+  of the model to the CPU, so one 16k call wrote 2.2 tokens a second and
+  left the names and dates out.
+- **Settings says where Ollama runs your model.** While summaries are set to
+  Ollama and it has the model loaded, Settings shows how much of it is on the
+  graphics card, and when part or all of it is on the CPU, that a smaller
+  model or a graphics card would speed it up. `GET /api/v1/providers` reports
+  it as `gpu_percent`.
+
 ## 0.5.4 — 2026-11-16
 
 - **Local Whisper runs on your graphics card.** On a PC with a dedicated GPU

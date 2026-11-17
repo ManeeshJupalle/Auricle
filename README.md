@@ -37,7 +37,7 @@
   <sub>A finished meeting. Every meeting in the dashboard images and demos below is made up.</sub>
 </p>
 
-> **What's in the download today.** The latest release is v0.5.4: meeting
+> **What's in the download today.** The latest release is v0.5.5: meeting
 > transcripts, summaries, search, and the copilot, plus dictation, the MCP
 > server, line-level search, and retention and backups, in the look these
 > screenshots show. The [changelog](CHANGELOG.md) lists everything above 0.4.0.
@@ -92,6 +92,11 @@ One click writes minutes, action items, a standup, or 1:1 notes, with a local
 without recompiling. Long meetings are summarized a portion at a time, in
 portions small enough for Ollama's default 4,096-token context; set
 `OLLAMA_CONTEXT_LENGTH` on the Ollama server to give a larger model more room.
+Through Ollama each portion is boiled down to a dozen short bullets before
+they're merged, so an hour's meeting takes about four and a half minutes with
+`llama3.1` on a 2019 laptop, where it took fifteen. Settings says how much of
+the model Ollama has on your graphics card while it's loaded, as the share on
+the CPU is what makes it slow.
 
 ### A copilot for the meeting you're in
 

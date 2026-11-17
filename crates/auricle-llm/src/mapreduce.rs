@@ -29,12 +29,29 @@ const OLLAMA_MIN_TOKENS: usize = 500;
 /// lines is mostly these.
 const OLLAMA_LINE_TOKENS: usize = 4;
 
+/// What a portion's summary is asked to keep.
+const DETAILED_PORTION: &str = "You summarize one portion of a longer meeting transcript. \
+     Produce a faithful, detailed summary of THIS PORTION ONLY, keeping \
+     speaker attributions (You/Them), numbers, names, decisions, and \
+     action items. Do not speculate about the rest of the meeting.";
+/// The same for a local model, where the time goes to writing: asked for the
+/// detailed summary, llama3.1 on a laptop wrote up to 3,856 tokens for one
+/// portion. Asked for this, about 220, and an hour's meeting took 244 s
+/// where it had taken 892, with the names, dates and numbers still in it.
+const SHORT_PORTION: &str = "You summarize one portion of a longer meeting transcript. \
+     Summarize THIS PORTION ONLY as at most 12 short bullets, keeping \
+     speaker attributions (You/Them), numbers, names, dates, decisions, and \
+     action items. Merge repeated points. Do not speculate about the rest \
+     of the meeting.";
+
 /// How much one call may carry, in estimated tokens: whole, per map portion.
 struct Budget {
     threshold: usize,
     chunk: usize,
     /// Added for each line of what is measured.
     per_line: usize,
+    /// The system prompt of each portion's call.
+    portion_prompt: &'static str,
 }
 
 impl Budget {
@@ -52,12 +69,14 @@ fn budget_for(provider: &dyn LlmProvider, template: &str) -> Budget {
             threshold,
             chunk: threshold.min(OLLAMA_CHUNK_TOKENS),
             per_line: OLLAMA_LINE_TOKENS,
+            portion_prompt: SHORT_PORTION,
         }
     } else {
         Budget {
             threshold: MAP_REDUCE_TOKEN_THRESHOLD,
             chunk: CHUNK_TOKENS,
             per_line: 0,
+            portion_prompt: DETAILED_PORTION,
         }
     }
 }
@@ -135,10 +154,7 @@ pub async fn summarize(
 
     let chunks = chunk_lines(transcript, budget.chunk, |text| budget.measure(text));
     let total = chunks.len();
-    let map_system = "You summarize one portion of a longer meeting transcript. \
-         Produce a faithful, detailed summary of THIS PORTION ONLY, keeping \
-         speaker attributions (You/Them), numbers, names, decisions, and \
-         action items. Do not speculate about the rest of the meeting.";
+    let map_system = budget.portion_prompt;
     let mut partials = Vec::with_capacity(total);
     let mut failure = None;
     for (i, chunk) in chunks.iter().enumerate() {
@@ -326,6 +342,41 @@ mod tests {
             largest <= 3_000,
             "a call of {largest} tokens leaves no room"
         );
+    }
+
+    /// The system prompt of every portion call `summarize` makes.
+    async fn portion_prompts(provider: impl LlmProvider) -> Vec<String> {
+        // About 6,500 tokens: portions for Ollama and for anyone else.
+        let text = vec!["x".repeat(399); 65].join("\n");
+        summarize(&provider, "make minutes", &text).await.unwrap();
+        std::mem::take(&mut *SEEN.lock().unwrap())
+            .into_iter()
+            .filter(|system| is_map(system))
+            .collect()
+    }
+
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    fn record(system: &str, _: &str) -> Result<String> {
+        SEEN.lock().unwrap().push(system.to_string());
+        Ok("short summary".to_string())
+    }
+
+    #[tokio::test]
+    async fn ollama_is_asked_for_short_bullets_per_portion() {
+        // On a local model the time goes to writing. Asked for a detailed
+        // summary, llama3.1 wrote up to 3,856 tokens for one portion; asked
+        // for at most 12 bullets, about 220, and an hour's meeting took 244 s
+        // where it had taken 892.
+        let ollama = portion_prompts(Ollama(record)).await;
+        assert!(ollama.len() > 1, "{ollama:?}");
+        assert!(ollama
+            .iter()
+            .all(|s| s.contains("at most 12 short bullets")));
+
+        let other = portion_prompts(Fake(record)).await;
+        assert!(other.len() > 1, "{other:?}");
+        assert!(other.iter().all(|s| s.contains("detailed summary")));
     }
 
     /// The largest call `summarize` makes to Ollama, system prompt and all,

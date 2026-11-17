@@ -65,6 +65,9 @@ pub struct LlmProviderStatus {
     pub model: String,
     pub ready: bool,
     pub detail: String,
+    /// How much of the model Ollama holds in GPU memory, in percent, while
+    /// it has the model loaded. `None` for every other provider.
+    pub gpu_percent: Option<u8>,
 }
 
 pub fn llm_provider_ids() -> &'static [&'static str] {
@@ -117,10 +120,44 @@ fn ollama_has_model(listed: &[String], model: &str) -> bool {
     })
 }
 
-/// Whether Ollama is up and has the configured model. It has no key to look
-/// for, so asking it is the only way to know. Takes up to
-/// [`OLLAMA_CHECK_TIMEOUT`]. An answer that can't be read counts as ready:
-/// this must not hide a setup that works.
+/// How much of `model` Ollama holds in GPU memory, in percent, from
+/// `GET /api/ps` on its own API root (the base URL without `/v1`). The shape
+/// is a captured response, `fixtures/llm/ollama_ps.json`. `None` when the
+/// model isn't loaded, as Ollama unloads one after a few idle minutes, or
+/// when nothing readable comes back.
+async fn ollama_gpu_percent(base_url: &str, model: &str) -> Option<u8> {
+    #[derive(serde::Deserialize)]
+    struct Running {
+        models: Vec<Loaded>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Loaded {
+        name: String,
+        size: u64,
+        size_vram: u64,
+    }
+    let root = base_url.strip_suffix("/v1").unwrap_or(base_url);
+    let client = chat::client_builder(base_url).build().ok()?;
+    let running: Running = client
+        .get(format!("{root}/api/ps"))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let loaded = running
+        .models
+        .into_iter()
+        .find(|m| ollama_has_model(std::slice::from_ref(&m.name), model))?;
+    (loaded.size > 0).then(|| (loaded.size_vram.min(loaded.size) * 100 / loaded.size) as u8)
+}
+
+/// Whether Ollama is up and has the configured model, and how much of it is
+/// on the GPU when it's loaded. It has no key to look for, so asking it is
+/// the only way to know. Takes up to twice [`OLLAMA_CHECK_TIMEOUT`]. An
+/// answer that can't be read counts as ready: this must not hide a setup
+/// that works.
 pub async fn ollama_status(cfg: &Config) -> LlmProviderStatus {
     let base_url = cfg.llm.ollama.base_url.trim_end_matches('/');
     let model = &cfg.llm.ollama.model;
@@ -136,11 +173,20 @@ pub async fn ollama_status(cfg: &Config) -> LlmProviderStatus {
             (true, format!("local endpoint {base_url}"))
         }
     };
+    let gpu_percent = if ready {
+        tokio::time::timeout(OLLAMA_CHECK_TIMEOUT, ollama_gpu_percent(base_url, model))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     LlmProviderStatus {
         id: "ollama",
         model: model.clone(),
         ready,
         detail,
+        gpu_percent,
     }
 }
 
@@ -165,18 +211,21 @@ pub fn llm_provider_statuses(cfg: &Config) -> Vec<LlmProviderStatus> {
             model: cfg.llm.ollama.model.clone(),
             ready: true,
             detail: format!("local endpoint {}", cfg.llm.ollama.base_url),
+            gpu_percent: None,
         },
         LlmProviderStatus {
             id: "groq",
             model: cfg.llm.groq.model.clone(),
             ready: groq.0,
             detail: groq.1,
+            gpu_percent: None,
         },
         LlmProviderStatus {
             id: "openai-compat",
             model: cfg.llm.openai_compat.model.clone(),
             ready: openai.0,
             detail: openai.1,
+            gpu_percent: None,
         },
     ]
 }

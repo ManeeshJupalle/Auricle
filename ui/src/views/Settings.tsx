@@ -4,7 +4,7 @@ import { SecretField } from '../components/SecretField';
 import { canPick, firstUseNote } from '../components/Sidebar';
 import { useAuricle } from '../store';
 import { applyTheme, currentTheme, type Theme } from '../theme';
-import { providerName } from '../words';
+import { ollamaPlace, providerName } from '../words';
 import type {
   DeviceInfo,
   LlmProviderInfo,
@@ -70,6 +70,10 @@ export function Settings() {
   const llmReady = (id: string) => llm.find((p) => p.id === id)?.ready ?? false;
   // What to install, when summaries are set to Ollama and it isn't there.
   const ollamaMissing = llm.find((p) => p.id === 'ollama' && p.default && !p.ready)?.detail;
+  // Where it runs the model, while summaries are set to Ollama and it has
+  // the model loaded.
+  const ollama = llm.find((p) => p.id === 'ollama' && p.default && p.ready);
+  const ollamaRunsOn = ollama ? ollamaPlace(ollama.model, ollama.gpu_percent) : null;
   const keySlots = [
     { id: 'deepgram', label: 'Deepgram', used: 'live transcription', ready: sttReady('deepgram') },
     {
@@ -298,6 +302,7 @@ export function Settings() {
           {saved === 'ollama_model' && <span className="saved">Saved</span>}
         </label>
         {ollamaMissing && <p className="note">{ollamaMissing}.</p>}
+        {ollamaRunsOn && <p className="note">{ollamaRunsOn}</p>}
         <label className="toggle">
           <input
             type="checkbox"

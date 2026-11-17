@@ -112,3 +112,77 @@ async fn a_summary_says_which_model_to_pull_when_it_is_missing() {
     assert!(err.contains("ollama pull llama3.1"), "{err}");
     assert!(!err.contains("HTTP 404"), "{err}");
 }
+
+/// A local Ollama that lists `models` and answers `GET /api/ps` with `ps`.
+async fn listing_and_running(models: &[&str], ps: serde_json::Value) -> MockServer {
+    let server = listing(models).await;
+    Mock::given(method("GET"))
+        .and(path("/api/ps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ps))
+        .mount(&server)
+        .await;
+    server
+}
+
+/// `GET /api/ps` from Ollama 0.40.16 with llama3.1 loaded at its default 4k
+/// context on a 6 GB GTX 1660 Ti, `expires_at` moved to UTC.
+fn captured_ps() -> serde_json::Value {
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/llm/ollama_ps.json"),
+    )
+    .unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+#[tokio::test]
+async fn says_how_much_of_a_loaded_model_is_on_the_gpu() {
+    // 4,242,989,383 of 5,634,334,390 bytes: 75%.
+    let server = listing_and_running(&["llama3.1:latest"], captured_ps()).await;
+    let status = ollama_status(&config_for(&server.uri(), "llama3.1")).await;
+    assert!(status.ready, "{}", status.detail);
+    assert_eq!(status.gpu_percent, Some(75));
+}
+
+#[tokio::test]
+async fn a_model_with_nothing_on_the_gpu_is_on_the_cpu() {
+    let mut ps = captured_ps();
+    ps["models"][0]["size_vram"] = 0.into();
+    let server = listing_and_running(&["llama3.1:latest"], ps).await;
+    let status = ollama_status(&config_for(&server.uri(), "llama3.1")).await;
+    assert_eq!(status.gpu_percent, Some(0));
+}
+
+#[tokio::test]
+async fn nothing_is_said_of_a_model_that_is_not_loaded() {
+    // Ollama unloads a model after a few idle minutes, and another may be
+    // the one in memory.
+    let server = listing_and_running(&["llama3.1:latest"], captured_ps()).await;
+    let status = ollama_status(&config_for(&server.uri(), "qwen3:8b")).await;
+    assert_eq!(status.gpu_percent, None);
+
+    let server = listing_and_running(&["llama3.1:latest"], serde_json::json!({"models": []})).await;
+    let status = ollama_status(&config_for(&server.uri(), "llama3.1")).await;
+    assert_eq!(status.gpu_percent, None);
+
+    // An Ollama without /api/ps is still ready.
+    let server = listing(&["llama3.1:latest"]).await;
+    let status = ollama_status(&config_for(&server.uri(), "llama3.1")).await;
+    assert!(status.ready, "{}", status.detail);
+    assert_eq!(status.gpu_percent, None);
+}
+
+#[tokio::test]
+async fn the_api_root_is_the_base_url_without_its_v1() {
+    let server = listing_and_running(&["llama3.1:latest"], captured_ps()).await;
+    // Configured the usual way, `/v1` and all; the model list lives under it.
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"object": "list", "data": [{"id": "llama3.1:latest"}]}),
+        ))
+        .mount(&server)
+        .await;
+    let base = format!("{}/v1", server.uri());
+    let status = ollama_status(&config_for(&base, "llama3.1")).await;
+    assert_eq!(status.gpu_percent, Some(75));
+}

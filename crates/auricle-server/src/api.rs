@@ -680,6 +680,7 @@ async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
                 "ready": s.ready,
                 "detail": s.detail,
                 "default": s.id == cfg.llm.provider,
+                "gpu_percent": s.gpu_percent,
             })
         })
         .collect();

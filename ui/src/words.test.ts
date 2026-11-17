@@ -9,6 +9,7 @@ import {
   downloadLine,
   providerName,
   providerPlace,
+  ollamaPlace,
   providerWhere,
   templateName,
   withoutRepeatedTitle,
@@ -180,6 +181,25 @@ describe('pickLabel', () => {
     expect(pickLabel(provider({ ready: false }))).toBe('Whisper on this machine, downloads first');
     expect(pickLabel(provider({ id: 'openai-compat', kind: 'cloud-batch', ready: false }))).toBe(
       'OpenAI-compatible in the cloud, not ready',
+    );
+  });
+});
+
+describe('ollamaPlace', () => {
+  it('says nothing while the model is not loaded', () => {
+    expect(ollamaPlace('llama3.1', null)).toBeNull();
+    expect(ollamaPlace('llama3.1', undefined)).toBeNull();
+  });
+
+  it('says where the model runs, with a hint when the CPU has part of it', () => {
+    expect(ollamaPlace('llama3.1', 100)).toBe('Ollama is running llama3.1 on your graphics card.');
+    expect(ollamaPlace('llama3.1', 75)).toBe(
+      'Ollama is running llama3.1 75% on your graphics card and the rest on the CPU, which ' +
+        'slows summaries and answers. A smaller model may fit on the card.',
+    );
+    expect(ollamaPlace('llama3.1', 0)).toBe(
+      'Ollama is running llama3.1 on the CPU only, so summaries and answers are slow. A ' +
+        'graphics card, or a smaller model, would speed them up.',
     );
   });
 });

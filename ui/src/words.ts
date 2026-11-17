@@ -74,3 +74,20 @@ export function agoWord(unixSecs: number, now = new Date()): string {
   if (days === 1) return 'yesterday';
   return `${days} days ago`;
 }
+
+/** Where Ollama runs the model, from the share it holds in GPU memory, or
+ *  nothing while it has the model unloaded. */
+export function ollamaPlace(model: string, gpuPercent: number | null | undefined): string | null {
+  if (gpuPercent == null) return null;
+  if (gpuPercent >= 100) return `Ollama is running ${model} on your graphics card.`;
+  if (gpuPercent <= 0) {
+    return (
+      `Ollama is running ${model} on the CPU only, so summaries and answers are slow. A ` +
+      'graphics card, or a smaller model, would speed them up.'
+    );
+  }
+  return (
+    `Ollama is running ${model} ${gpuPercent}% on your graphics card and the rest on the CPU, ` +
+    'which slows summaries and answers. A smaller model may fit on the card.'
+  );
+}

@@ -404,6 +404,9 @@ Summarize a stored transcript with an LLM. Body (both optional):
 Through Ollama the limit is lower: one call carries about 3k estimated
 tokens, template included, to fit the 4,096-token context Ollama gives a
 model unless its server is set up for more (`OLLAMA_CONTEXT_LENGTH`).
+Each Ollama portion is asked for at most 12 short bullets, where other
+providers are asked for a detailed summary: on a local model the time goes to
+writing, and the detailed request ran to thousands of tokens per portion.
 Real captured exchange (Groq, llama-3.3-70b-versatile):
 
 ```
@@ -443,7 +446,10 @@ Groq/openai-compat gate on key presence; Ollama has no key, so while it is the
 LLM in use, as `[llm].provider`, the `llm_provider` setting, or
 `[copilot].provider`, the daemon asks it for its models, and `ready` is false
 with a `detail` saying what to do when it doesn't answer within 0.8 s or
-doesn't list the configured model; otherwise it is listed as ready unasked) and
+doesn't list the configured model; otherwise it is listed as ready unasked;
+when it does answer and has the model loaded, `gpu_percent` is how much of the
+model it holds in GPU memory, from its `GET /api/ps`, 0 meaning all on the CPU,
+and `null` for an unloaded model and every other provider) and
 `templates` (built-ins `minutes`, `action-items`,
 `standup`, `1on1`, plus any `*.md` the user drops into
 `%LOCALAPPDATA%\auricle\templates` — same-named files override built-ins).
